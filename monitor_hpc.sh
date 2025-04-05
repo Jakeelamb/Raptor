@@ -1,65 +1,182 @@
 #!/bin/bash
-# Usage: ./monitor_hpc.sh <job-id>
 
-if [ $# -ne 1 ]; then
-    echo "Usage: ./monitor_hpc.sh <job-id>"
+# monitor_hpc.sh - Tool for monitoring Raptor jobs on HPC systems
+# Usage: ./monitor_hpc.sh [job_id]
+
+BLUE='\033[0;34m'
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+print_help() {
+    echo -e "${BLUE}Usage:${NC} ./monitor_hpc.sh [job_id]"
+    echo ""
+    echo "Monitor Raptor jobs running on HPC systems."
+    echo ""
+    echo -e "${BLUE}Options:${NC}"
+    echo "  -h, --help    Show this help message and exit"
+    echo "  -v, --verbose Show more detailed information"
+    echo "  -f, --follow  Continuously monitor job (like 'tail -f')"
+    echo ""
+    echo -e "${BLUE}Examples:${NC}"
+    echo "  ./monitor_hpc.sh 1234          # Monitor SLURM job 1234"
+    echo "  ./monitor_hpc.sh 1234.compute  # Monitor PBS job 1234.compute"
+    echo "  ./monitor_hpc.sh -f 1234       # Continuously monitor job 1234"
+}
+
+detect_scheduler() {
+    if command -v squeue &> /dev/null; then
+        echo "slurm"
+    elif command -v qstat &> /dev/null; then
+        if qstat -help 2>&1 | grep -q PBS; then
+            echo "pbs"
+        else
+            echo "sge"
+        fi
+    else
+        echo "unknown"
+    fi
+}
+
+monitor_slurm_job() {
+    local job_id=$1
+    local follow=$2
+    
+    echo -e "${BLUE}SLURM Job Information:${NC}"
+    scontrol show job "$job_id"
+    
+    echo -e "\n${BLUE}Resource Usage:${NC}"
+    sstat --format=AveCPU,AveRSS,AveVMSize,MaxRSS,MaxVMSize -j "$job_id"
+    
+    echo -e "\n${BLUE}Job Output:${NC}"
+    if [ "$follow" = true ]; then
+        tail -f "slurm-${job_id}.out"
+    else
+        tail -n 20 "slurm-${job_id}.out"
+    fi
+}
+
+monitor_pbs_job() {
+    local job_id=$1
+    local follow=$2
+    
+    echo -e "${BLUE}PBS Job Information:${NC}"
+    qstat -f "$job_id"
+    
+    # Try to find output file
+    local output_file=$(qstat -f "$job_id" | grep -oP "Output_Path = \K.*")
+    
+    if [ -n "$output_file" ] && [ -f "$output_file" ]; then
+        echo -e "\n${BLUE}Job Output:${NC}"
+        if [ "$follow" = true ]; then
+            tail -f "$output_file"
+        else
+            tail -n 20 "$output_file"
+        fi
+    else
+        echo -e "\n${YELLOW}Cannot locate output file${NC}"
+    fi
+}
+
+monitor_sge_job() {
+    local job_id=$1
+    local follow=$2
+    
+    echo -e "${BLUE}SGE Job Information:${NC}"
+    qstat -j "$job_id"
+    
+    # Try to find output file based on job ID
+    local output_file=$(find . -name "*o${job_id}" -type f | head -n 1)
+    
+    if [ -n "$output_file" ] && [ -f "$output_file" ]; then
+        echo -e "\n${BLUE}Job Output:${NC}"
+        if [ "$follow" = true ]; then
+            tail -f "$output_file"
+        else
+            tail -n 20 "$output_file"
+        fi
+    else
+        echo -e "\n${YELLOW}Cannot locate output file${NC}"
+    fi
+}
+
+# Parse arguments
+verbose=false
+follow=false
+job_id=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -h|--help)
+            print_help
+            exit 0
+            ;;
+        -v|--verbose)
+            verbose=true
+            shift
+            ;;
+        -f|--follow)
+            follow=true
+            shift
+            ;;
+        *)
+            job_id=$1
+            shift
+            ;;
+    esac
+done
+
+# Check if job ID was provided
+if [ -z "$job_id" ]; then
+    echo -e "${RED}Error: No job ID provided${NC}"
+    print_help
     exit 1
 fi
 
-JOB_ID=$1
-INTERVAL=10  # seconds between checks
-LOG_FILE="raptor_monitor_${JOB_ID}.log"
+# Detect which scheduler is being used
+scheduler=$(detect_scheduler)
 
-echo "Starting monitoring for Raptor job $JOB_ID"
-echo "Results will be logged to $LOG_FILE"
-echo "Press Ctrl+C to stop monitoring"
+echo -e "${GREEN}Monitoring job ${job_id} on ${scheduler} system${NC}"
 
-# Header for log file
-echo "Timestamp,CPU%,Memory(GB),GPU%,GPUMem(GB),DiskIO(MB/s)" > $LOG_FILE
+# Monitor job based on scheduler type
+case $scheduler in
+    slurm)
+        monitor_slurm_job "$job_id" "$follow"
+        ;;
+    pbs)
+        monitor_pbs_job "$job_id" "$follow"
+        ;;
+    sge)
+        monitor_sge_job "$job_id" "$follow"
+        ;;
+    *)
+        echo -e "${RED}Error: Could not detect HPC scheduler. Please make sure you're on a SLURM, PBS, or SGE system.${NC}"
+        exit 1
+        ;;
+esac
 
-# Monitor continuously
-while true; do
-    # Check if job is still running
-    squeue -j $JOB_ID &>/dev/null
-    if [ $? -ne 0 ]; then
-        echo "Job $JOB_ID is no longer running. Monitoring stopped."
-        break
-    fi
-    
-    # Get timestamp
-    TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
-    
-    # Get CPU and memory usage using sstat
-    STATS=$(sstat --format=AveCPU,AveRSS -j $JOB_ID.batch -n)
-    CPU=$(echo $STATS | awk '{print $1}')
-    MEM=$(echo $STATS | awk '{print $2}' | sed 's/K//' | awk '{printf "%.2f", $1/1024/1024}')
-    
-    # Get GPU usage if available
-    if command -v nvidia-smi &>/dev/null; then
-        NODE=$(squeue -j $JOB_ID -h -o %N)
-        if [ ! -z "$NODE" ]; then
-            GPU_STATS=$(ssh $NODE "nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader,nounits")
-            GPU_UTIL=$(echo $GPU_STATS | awk -F, '{print $1}')
-            GPU_MEM=$(echo $GPU_STATS | awk -F, '{print $2}' | awk '{printf "%.2f", $1/1024}')
-        else
-            GPU_UTIL="N/A"
-            GPU_MEM="N/A"
-        fi
-    else
-        GPU_UTIL="N/A"
-        GPU_MEM="N/A"
-    fi
-    
-    # Get disk I/O
-    DISK_IO=$(ssh $NODE "iostat -m | grep -A 1 avg-cpu | tail -1" | awk '{print $6}')
-    
-    # Log to file
-    echo "$TIMESTAMP,$CPU,$MEM,$GPU_UTIL,$GPU_MEM,$DISK_IO" >> $LOG_FILE
-    
-    # Display current stats
-    echo -e "Time: $TIMESTAMP | CPU: $CPU% | Memory: ${MEM}GB | GPU: $GPU_UTIL% | GPU Mem: ${GPU_MEM}GB | Disk: ${DISK_IO}MB/s"
-    
-    sleep $INTERVAL
-done
+# If not following, check job status
+if [ "$follow" = false ]; then
+    case $scheduler in
+        slurm)
+            status=$(squeue -h -j "$job_id" -o "%T" 2>/dev/null)
+            if [ -z "$status" ]; then
+                echo -e "\n${YELLOW}Job $job_id is not in the queue. It may have completed or failed.${NC}"
+                echo "Check sacct -j $job_id for more information."
+            else
+                echo -e "\n${GREEN}Job $job_id status: $status${NC}"
+            fi
+            ;;
+        pbs|sge)
+            status=$(qstat -j "$job_id" 2>&1)
+            if [[ "$status" == *"not found"* ]]; then
+                echo -e "\n${YELLOW}Job $job_id is not in the queue. It may have completed or failed.${NC}"
+            else
+                echo -e "\n${GREEN}Job $job_id is still running${NC}"
+            fi
+            ;;
+    esac
+fi
 
-echo "Monitoring complete. Results saved to $LOG_FILE" 
+exit 0 

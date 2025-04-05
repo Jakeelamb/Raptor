@@ -10,6 +10,12 @@
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 
+# HPC Environment setup - uncomment and modify for your HPC system
+# module purge
+# module load gcc/latest
+# module load cuda/latest
+# module load openmpi/latest
+
 # Print job info
 echo "Starting Raptor Pipeline on HPC"
 echo "Job ID: $SLURM_JOB_ID"
@@ -27,6 +33,7 @@ MIN_CONFIDENCE=0.9
 MIN_PATH_LEN=50
 RAPTOR_BIN="$PWD/target/release/raptor"
 OUTPUT_DIR="raptor_output_${SLURM_JOB_ID}"
+STREAMING_MODE=true  # Enable for extremely large datasets
 
 # Input files - replace with your actual paths
 INPUT_R1="$1"  # First argument is Read 1
@@ -39,9 +46,22 @@ if [ ! -f "$INPUT_R1" ] || [ ! -f "$INPUT_R2" ]; then
     exit 1
 fi
 
+# Get the file sizes in GB
+R1_SIZE=$(du -BG "$INPUT_R1" | cut -f1 | tr -d 'G')
+R2_SIZE=$(du -BG "$INPUT_R2" | cut -f1 | tr -d 'G')
+TOTAL_SIZE=$((R1_SIZE + R2_SIZE))
+
 echo "Input files:"
-echo "  R1: $INPUT_R1"
-echo "  R2: $INPUT_R2"
+echo "  R1: $INPUT_R1 (${R1_SIZE}GB)"
+echo "  R2: $INPUT_R2 (${R2_SIZE}GB)"
+echo "  Total size: ${TOTAL_SIZE}GB"
+
+# Adjust parameters based on input size
+if [ $TOTAL_SIZE -gt 100 ]; then
+    echo "Large dataset detected (>100GB). Enabling extreme memory optimization."
+    STREAMING_MODE=true
+    echo "Consider using distributed mode for datasets of this size."
+fi
 
 # Create output directory
 mkdir -p $OUTPUT_DIR
@@ -55,14 +75,24 @@ echo "Parameters:"
 echo "  K-mer size: $K_SIZE"
 echo "  Coverage target: $COVERAGE_TARGET"
 echo "  Threads: $THREADS"
+echo "  Streaming mode: $STREAMING_MODE"
 
-$RAPTOR_BIN normalize \
+NORMALIZE_CMD="$RAPTOR_BIN normalize \
     -i $INPUT_R1 \
     -I $INPUT_R2 \
     -o $OUTPUT_DIR/normalized \
     --gpu \
     --threads $THREADS \
-    --coverage-target $COVERAGE_TARGET
+    --coverage-target $COVERAGE_TARGET"
+
+# Add streaming if enabled
+if [ "$STREAMING_MODE" = true ]; then
+    NORMALIZE_CMD="$NORMALIZE_CMD --streaming"
+fi
+
+# Execute normalization
+echo "Executing: $NORMALIZE_CMD"
+eval $NORMALIZE_CMD
 
 echo "Normalization complete."
 echo "Output files:"
@@ -76,8 +106,9 @@ echo "============================================================"
 echo "Parameters:"
 echo "  Min contig length: $MIN_CONTIG_LEN"
 echo "  Threads: $THREADS"
+echo "  Streaming mode: $STREAMING_MODE"
 
-$RAPTOR_BIN assemble \
+ASSEMBLE_CMD="$RAPTOR_BIN assemble \
     -i $OUTPUT_DIR/normalized_1.fq.gz \
     -o $OUTPUT_DIR/assembly \
     --min-len $MIN_CONTIG_LEN \
@@ -85,7 +116,16 @@ $RAPTOR_BIN assemble \
     --gfa \
     --export-metadata \
     --json-metadata $OUTPUT_DIR/assembly_meta.json \
-    --polish
+    --polish"
+
+# Add streaming if enabled
+if [ "$STREAMING_MODE" = true ]; then
+    ASSEMBLE_CMD="$ASSEMBLE_CMD --streaming"
+fi
+
+# Execute assembly
+echo "Executing: $ASSEMBLE_CMD"
+eval $ASSEMBLE_CMD
 
 echo "Assembly complete."
 echo "Output files:"
@@ -101,8 +141,9 @@ echo "Parameters:"
 echo "  Min confidence: $MIN_CONFIDENCE"
 echo "  Min path length: $MIN_PATH_LEN"
 echo "  Threads: $THREADS"
+echo "  Streaming mode: $STREAMING_MODE"
 
-$RAPTOR_BIN assemble \
+ISOFORM_CMD="$RAPTOR_BIN assemble \
     -i $OUTPUT_DIR/normalized_1.fq.gz \
     -o $OUTPUT_DIR/transcripts \
     --threads $THREADS \
@@ -116,7 +157,16 @@ $RAPTOR_BIN assemble \
     --min-path-len $MIN_PATH_LEN \
     --export-metadata \
     --json-metadata $OUTPUT_DIR/transcripts_meta.json \
-    --counts-matrix
+    --counts-matrix"
+
+# Add streaming if enabled
+if [ "$STREAMING_MODE" = true ]; then
+    ISOFORM_CMD="$ISOFORM_CMD --streaming"
+fi
+
+# Execute isoform assembly
+echo "Executing: $ISOFORM_CMD"
+eval $ISOFORM_CMD
 
 echo "Isoform assembly complete."
 echo "Output files:"

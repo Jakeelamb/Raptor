@@ -8,36 +8,58 @@ license = "MIT"
 repository = "https://github.com/Jakeelamb/Raptor.git"
 default-run = "raptor"
 
+# Define features
+[features]
+default = ["mpi-support"]
+mpi-support = ["mpi"]
+gpu = ["ocl"]
+
 [dependencies]
-ahash = "0.8.11"
-clap = { version = "4.5.35", features = ["derive"] }
-crossbeam = "0.8.4"
-env_logger = "0.10.1"
-fasthash = "0.4.0"
-flate2 = "1.1.1"
+bio = "1.6.0"
 gfa = "0.10.1"
-log = "0.4.27"
-mpi = "0.8.0"
-# Temporarily disabled until needed
-# nats = "0.24.0"
-num_cpus = "1.16.0"
-ocl = "0.19.7"
-petgraph = "0.7.1"
-plotters = "0.3.5"
+log = "0.4.19"
 rayon = "1.10.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-smartcore = "0.3.2"
-statrs = "0.15.0"
-tempfile = "3.5"
-tracing = "0.1.41"
-wide = "0.7.32"
-rand = "0.8.5"
-tracing-subscriber = "0.3.19"
+clap = { version = "4.5.0", features = ["derive"] }
+env_logger = "0.10.2"
+petgraph = { version = "0.7.1", features = ["graphmap" ]}
+flate2 = "1.0.28"
+ahash = "0.8.6"
+fasthash = "0.4.0"
+crossbeam = "0.8.4"
 ndarray = "0.15.6"
 ndarray-stats = "0.5.1"
-bio = "1.3.1"
+plotters = "0.3.5"
+tracing = "0.1.40"
+tracing-subscriber = "0.3.17"
+tempfile = "3.10.1"
+serde = { version = "1.0.207", features = ["derive"] }
+serde_json = "1.0.105"
+rand = "0.8.5"
+smartcore = "0.3.2"
+statrs = "0.15.0"
+wide = "0.7.15"
+num_cpus = "1.16.0"
 
 # Replaced with our own implementations
 # linfa = "0.6.1"
 # linfa-reduction = "0.6.1"
+
+# Optional dependencies
+mpi = { version = "0.8.0", optional = true }
+ocl = { version = "0.19.6", optional = true }
+
+[[bin]]
+name = "raptor"
+path = "src/main.rs"
+
+[[bin]]
+name = "normalize_paired_reads"
+path = "src/bin/normalize_paired_reads.rs"
+
+[[bin]]
+name = "count_gpu"
+path = "src/bin/count_gpu.rs"
+
+[[bin]]
+name = "assemble"
+path = "src/bin/assemble.rs"

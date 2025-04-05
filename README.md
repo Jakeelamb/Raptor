@@ -19,6 +19,7 @@ Raptor is a modern RNA-Seq assembler built for performance and biological accura
 - 💾 **Streaming input and low-RAM support**
 - 🧬 **Isoform filtering, polishing, quantification**
 - 📈 **PCA, heatmaps, TPM matrices, and GTF export**
+- 🖥️ **HPC support with MPI for distributed assembly**
 
 ---
 
@@ -31,8 +32,19 @@ git clone https://github.com/Jakeelamb/Raptor.git
 cd raptor
 cargo build --release
 
-# Optional: compile with CUDA:
+# Optional: compile with GPU support:
 cargo build --release --features "gpu"
+
+# Optional: compile with MPI support:
+cargo build --release --features "mpi-support"
+
+# Optional: compile with both GPU and MPI support:
+cargo build --release --features "gpu mpi-support"
+
+# HPC environments with module system:
+./compile_hpc.sh         # Default with MPI
+./compile_hpc.sh --gpu   # With GPU support
+./compile_hpc.sh --no-mpi # Without MPI
 ```
 
 ## 🚀 Quick Start
@@ -79,6 +91,20 @@ raptor stats --input my_assembly_isoform.counts.matrix --pca pca.png --heatmap h
 ✅ GFA2 + BandageNG annotations  
 ✅ JSON/TSV metadata export  
 ✅ Differential isoform comparison via GTF  
+✅ Optional MPI support for distributed processing  
+✅ Optional GPU acceleration for k-mer counting  
+✅ HPC-ready with job monitoring tools  
+
+## 🖥️ HPC Support
+
+Raptor includes scripts specifically designed for high-performance computing environments:
+
+- `compile_hpc.sh` - Easy compilation with module detection
+- `raptor_hpc.sh` - Job submission script for SLURM/PBS/SGE
+- `monitor_hpc.sh` - Job monitoring tool for resource usage
+- `test_features.sh` - Validate builds with different features
+
+For detailed HPC setup instructions, see [HPC_INSTRUCTIONS.md](./HPC_INSTRUCTIONS.md).
 
 ## 📚 Citations & References
 

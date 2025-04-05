@@ -28,75 +28,100 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Normalize { input1, input2, output, gpu, threads, streaming } => {
-            info!("Starting normalization: input1 = {}, paired = {}, output = {}, gpu = {}, streaming = {}", 
-                  input1, input2.is_some(), output, gpu, streaming);
-
-    ThreadPoolBuilder::new()
-                .num_threads(threads)
-        .build_global()
-        .expect("Failed to build thread pool");
-
-            if let Some(input2_path) = input2 {
-                pipeline::normalize::normalize_paired(&input1, &input2_path, &output, gpu, streaming);
-            } else {
-                pipeline::normalize::normalize_single(&input1, &output, gpu, streaming);
-            }
-        }
+        Commands::Normalize { 
+            input1, 
+            input2, 
+            output, 
+            gpu, 
+            threads, 
+            streaming, 
+            coverage_target, 
+            max_reads 
+        } => {
+            // Run the normalization pipeline
+            println!("Running normalization pipeline");
+            let start = std::time::Instant::now();
+            pipeline::normalize::normalize_paired_reads(
+                input1, 
+                input2, 
+                output, 
+                coverage_target,
+                max_reads,
+                *gpu, 
+                *threads, 
+                *streaming
+            )?;
+            println!("Normalization completed in {:.2}s", start.elapsed().as_secs_f32());
+            Ok(())
+        },
 
         Commands::Assemble { 
             input, 
             output, 
             min_len, 
+            min_coverage, 
+            min_confidence, 
             threads, 
+            k_size, 
+            num_buckets, 
             gfa, 
-            adaptive_k,
-            rle,
-            distributed,
-            buckets,
-            gfa2,
-            collapse_repeats,
-            min_repeat_len,
-            polish,
-            polish_window,
-            streaming,
-            export_metadata,
-            json_metadata,
-            tsv_metadata,
+            streaming, 
+            polish, 
+            distributed, 
             isoforms, 
-            gtf, 
+            json_metadata,
+            export_metadata,
+            alignment,
+            debug,
+            export_graph, 
+            adaptive_k,
+            use_rle,
+            gtf,
             gff3,
-            max_path_depth, 
-            min_confidence,
             compute_tpm,
-            polish_isoforms,
-            samples,
-            min_tpm,
-            polish_reads,
+            min_kmers,
+            min_abundance,
+            min_pairs,
+            output_gfa,
             counts_matrix,
+            min_path_len,
+            dev_mode
         } => {
-            info!("Starting assembly: input = {}, output = {}, min_len = {}, threads = {}", 
-                  input, output, min_len, threads);
-                  
-            ThreadPoolBuilder::new()
-                .num_threads(threads)
-                .build_global()
-                .expect("Failed to build thread pool");
-
-            if distributed {
-                // Some options are not supported in distributed mode yet
-                pipeline::assemble::distributed_assembly(&input, &output, min_len, gfa, adaptive_k, rle, buckets, threads);
-            } else {
-                pipeline::assemble::assemble_reads(
-                    &input, &output, min_len, gfa, gfa2, adaptive_k, rle, 
-                    collapse_repeats, min_repeat_len, polish, polish_window,
-                    streaming, export_metadata, json_metadata, tsv_metadata, 
-                    isoforms, gtf, gff3, max_path_depth, min_confidence, 
-                    compute_tpm, polish_isoforms, samples, min_tpm, polish_reads,
-                    counts_matrix
-                );
-            }
-        }
+            // Run the assembly pipeline
+            println!("Running assembly pipeline");
+            let start = std::time::Instant::now();
+            pipeline::assemble::assemble_reads(
+                input, 
+                output, 
+                *min_len, 
+                *min_coverage, 
+                *min_confidence,
+                *threads, 
+                *k_size, 
+                *num_buckets, 
+                *gfa, 
+                *streaming, 
+                *polish, 
+                *distributed, 
+                *isoforms, 
+                json_metadata,
+                *export_metadata,
+                alignment,
+                *debug,
+                export_graph,
+                *adaptive_k,
+                *use_rle,
+                gtf,
+                gff3,
+                *compute_tpm,
+                *min_kmers,
+                *min_abundance,
+                *min_pairs,
+                *min_path_len
+            )?;
+            println!("Assembly completed in {:.2}s", start.elapsed().as_secs_f32());
+            Ok(())
+        },
         
         Commands::Stats { input, format, graph } => {
             info!("Calculating assembly statistics for: {}", input);

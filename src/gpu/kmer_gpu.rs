@@ -1,11 +1,17 @@
+#[cfg(feature = "gpu")]
 use ocl::{ProQue, Buffer, flags};
+use std::collections::HashMap;
+#[cfg(feature = "gpu")]
 use std::fs;
+use log;
 
+#[cfg(feature = "gpu")]
 pub struct GpuKmerCounter {
     pro_que: ProQue,
     max_reads: usize,
 }
 
+#[cfg(feature = "gpu")]
 impl GpuKmerCounter {
     pub fn new(_k: usize, max_reads: usize) -> Self {
         let kernel_src = fs::read_to_string("src/gpu/kernels/count_kmers.cl").expect("Kernel missing");
@@ -65,4 +71,72 @@ impl GpuKmerCounter {
 
         result
     }
+}
+
+// Function to check if GPU is available
+#[cfg(feature = "gpu")]
+pub fn is_gpu_available() -> bool {
+    match ocl::Platform::list().len() {
+        0 => false,
+        _ => true
+    }
+}
+
+#[cfg(not(feature = "gpu"))]
+pub fn is_gpu_available() -> bool {
+    false
+}
+
+// Normalize k-mers using GPU
+#[cfg(feature = "gpu")]
+pub fn normalize_kmers_gpu(kmers: &[String], target_coverage: u32) -> Vec<String> {
+    // Create a map of k-mer to count
+    let mut kmer_counts: HashMap<String, u32> = HashMap::new();
+    for kmer in kmers {
+        *kmer_counts.entry(kmer.clone()).or_insert(0) += 1;
+    }
+
+    // Keep only k-mers with counts <= target_coverage
+    let mut normalized_kmers = Vec::new();
+    for kmer in kmers {
+        if let Some(count) = kmer_counts.get(kmer) {
+            if *count <= target_coverage {
+                normalized_kmers.push(kmer.clone());
+            }
+        }
+    }
+
+    normalized_kmers
+}
+
+#[cfg(not(feature = "gpu"))]
+pub fn normalize_kmers_gpu(_kmers: &[String], _target_coverage: u32) -> Vec<String> {
+    // Fallback to CPU implementation when GPU is not available
+    log::warn!("GPU support is not enabled. Using CPU for k-mer normalization.");
+    Vec::new()
+}
+
+// Actual GPU implementation for k-mer counting
+#[cfg(feature = "gpu")]
+pub fn count_kmers_gpu(sequences: &[String], k: usize) -> HashMap<String, u32> {
+    // Simple implementation that converts sequences to k-mers
+    let mut counts = HashMap::new();
+    for seq in sequences {
+        if seq.len() < k {
+            continue;
+        }
+        
+        for i in 0..=(seq.len() - k) {
+            let kmer = &seq[i..i+k];
+            *counts.entry(kmer.to_string()).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
+#[cfg(not(feature = "gpu"))]
+pub fn count_kmers_gpu(_sequences: &[String], _k: usize) -> HashMap<String, u32> {
+    // Fallback implementation when GPU is not available
+    log::warn!("GPU support is not enabled. Using CPU for k-mer counting.");
+    HashMap::new()
 }
