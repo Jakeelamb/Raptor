@@ -54,7 +54,7 @@ fn t_test(a: &[f64], b: &[f64]) -> f64 {
     let t = (mean_a - mean_b).abs()
         / ((var_a / a.len() as f64) + (var_b / b.len() as f64)).sqrt();
 
-    let dof = a.len().min(b.len()) as f64 - 1.0;
+    let _dof = a.len().min(b.len()) as f64 - 1.0;
     // Simple approximation of p-value
     // In a real implementation, use statrs crate with Student's T distribution
     1.0 / (1.0 + t * t)

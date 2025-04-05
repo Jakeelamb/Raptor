@@ -6,12 +6,14 @@
 INPUT_FASTQ="sample_large.fastq"
 OUTPUT_PREFIX="assembled"
 MIN_CONFIDENCE=0.25
-THREADS=$(nproc)
+# Limit threads to reduce memory usage (instead of using all cores)
+THREADS=4
 
 # Check if input file exists
 if [ ! -f "$INPUT_FASTQ" ]; then
     echo "Error: Input file $INPUT_FASTQ not found"
     echo "Generating sample data..."
+    RUSTFLAGS="-C target-cpu=native" RAYON_NUM_THREADS=$THREADS \
     cargo run --bin generate_sample
     
     if [ ! -f "$INPUT_FASTQ" ]; then
@@ -42,7 +44,7 @@ echo "Raptor RNA-Seq Assembly with Isoform Detection"
 echo "======================================================"
 echo "Input: $INPUT_FASTQ"
 echo "Output: ${OUTPUT_PREFIX}_*.fasta"
-echo "Threads: $THREADS"
+echo "Threads: $THREADS (limited to reduce memory usage)"
 echo "Min confidence: $MIN_CONFIDENCE"
 echo "======================================================"
 
@@ -55,31 +57,32 @@ fi
 echo "======================================================"
 # Run with isoform detection disabled (basic mode)
 echo "Running Raptor in basic mode (without isoform detection):"
+RUSTFLAGS="-C target-cpu=native" RAYON_NUM_THREADS=$THREADS \
 target/release/raptor assemble \
     -i "$INPUT_FASTQ" \
     -o "${OUTPUT_PREFIX}_basic" \
-    --threads "$THREADS"
+    --threads "$THREADS" \
+    --streaming
 
 echo "======================================================"
 # Run with isoform detection enabled
 echo "Running Raptor with isoform detection:"
+RUSTFLAGS="-C target-cpu=native" RAYON_NUM_THREADS=$THREADS \
 target/release/raptor assemble \
     -i "$INPUT_FASTQ" \
     -o "$OUTPUT_PREFIX" \
     --isoforms \
     --threads "$THREADS" \
     --min-confidence "$MIN_CONFIDENCE" \
-    --gfa --gfa2 --gtf "${OUTPUT_PREFIX}.gtf" --gff3 "${OUTPUT_PREFIX}.gff3" \
+    --streaming \
+    --gfa --gtf "${OUTPUT_PREFIX}.gtf" --gff3 "${OUTPUT_PREFIX}.gff3" \
     --json-metadata "${OUTPUT_PREFIX}_meta.json" --tsv-metadata "${OUTPUT_PREFIX}_meta.tsv"
 
 # If needed, compile with custom features
 if [ "$NEED_CUSTOM_COMPILE" = "true" ]; then
     echo "Compiling Raptor..."
-    cargo build --release --features "gpu,avx2"
+    cargo build --release --features "gpu"
 fi
-
-# Run the Raptor with isoform detection
-echo "Running Raptor..."
 
 # Check if running succeeded
 if [ $? -eq 0 ]; then

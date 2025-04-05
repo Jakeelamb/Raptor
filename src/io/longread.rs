@@ -56,7 +56,7 @@ pub fn integrate_long_reads_for_polishing(
     contig: &str, 
     short_reads: &[String], 
     long_reads: &[FastqRecord],
-    window_size: usize
+    _window_size: usize
 ) -> String {
     use crate::graph::polish::polish_contig_string;
     

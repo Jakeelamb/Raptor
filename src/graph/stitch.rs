@@ -1,7 +1,7 @@
 use crate::accel::simd::{match_kmers_with_overlap, edit_distance_bp};
 use petgraph::graph::DiGraph;
 use petgraph::visit::EdgeRef;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct Path {

@@ -1,5 +1,5 @@
 use petgraph::graphmap::DiGraphMap;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use crate::graph::assembler::Contig;
 
 /// Type definition for IsoformGraph - a directed graph where:

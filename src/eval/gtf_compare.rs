@@ -183,13 +183,13 @@ pub fn compare_gtf_advanced(
     for (chrom, intervals) in &pred_intervals {
         if let Some(true_tree) = true_intervals.get(chrom) {
             // For each predicted exon
-            for interval in intervals.intervals() {
-                let pred_start = interval.start;
-                let pred_end = interval.end;
+            for entry in intervals.find(0..usize::MAX) {
+                let pred_start = entry.interval().start;
+                let pred_end = entry.interval().end;
                 let pred_len = pred_end - pred_start;
 
                 // Find overlapping true exons
-                let overlaps = true_tree.find(pred_start..pred_end);
+                let overlaps: Vec<_> = true_tree.find(pred_start..pred_end).collect();
                 if overlaps.is_empty() {
                     fp += 1; // No overlapping exon found
                 } else {
@@ -197,39 +197,39 @@ pub fn compare_gtf_advanced(
                     
                     // Calculate overlap percentage for evaluation
                     for overlap in overlaps {
-                        if let Some(range) = overlap.range() {
-                            let overlap_start = range.start.max(pred_start);
-                            let overlap_end = range.end.min(pred_end);
-                            let overlap_len = overlap_end - overlap_start;
-                            let overlap_percent = overlap_len as f64 / pred_len as f64;
-                            
-                            overlap_sum += overlap_percent;
-                            overlap_count += 1;
-                        }
+                        let range = overlap.interval();
+                        let overlap_start = range.start.max(pred_start);
+                        let overlap_end = range.end.min(pred_end);
+                        let overlap_len = overlap_end - overlap_start;
+                        let overlap_percent = overlap_len as f64 / pred_len as f64;
+                        
+                        overlap_sum += overlap_percent;
+                        overlap_count += 1;
                     }
                 }
             }
         } else {
             // All exons in a chromosome not in reference are FP
-            fp += intervals.intervals().count();
+            // Count the number of entries in the interval tree
+            fp += intervals.find(0..usize::MAX).count();
         }
     }
 
     // Compute false negatives (true exons not overlapped by any predicted exon)
     for (chrom, intervals) in &true_intervals {
         if let Some(pred_tree) = pred_intervals.get(chrom) {
-            for interval in intervals.intervals() {
-                let true_start = interval.start;
-                let true_end = interval.end;
+            for entry in intervals.find(0..usize::MAX) {
+                let true_start = entry.interval().start;
+                let true_end = entry.interval().end;
                 
-                let overlaps = pred_tree.find(true_start..true_end);
+                let overlaps: Vec<_> = pred_tree.find(true_start..true_end).collect();
                 if overlaps.is_empty() {
                     fn_ += 1; // No predicted exon overlapping this true exon
                 }
             }
         } else {
             // All exons in a chromosome not in predictions are FN
-            fn_ += intervals.intervals().count();
+            fn_ += intervals.find(0..usize::MAX).count();
         }
     }
 

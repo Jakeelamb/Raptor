@@ -1,7 +1,7 @@
 use crate::graph::assembler::Contig;
 use crate::graph::isoform_traverse::TranscriptPath;
 use crate::kmer::rle;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use petgraph::graphmap::DiGraphMap;
 
 /// Represents a transcript assembled from a path of contigs
@@ -71,7 +71,7 @@ pub fn detect_splicing(path: &[usize], graph: &DiGraphMap<usize, f32>) -> String
     
     // Check for exon skipping by looking for edges that skip nodes in the path
     for window in path.windows(3) {
-        if let [a, b, c] = *window {
+        if let [a, _b, c] = *window {
             if graph.contains_edge(a, c) {
                 events.push("skipping");
             }
@@ -81,7 +81,6 @@ pub fn detect_splicing(path: &[usize], graph: &DiGraphMap<usize, f32>) -> String
     // Check for alternative 5' splice sites
     for i in 0..path.len().saturating_sub(1) {
         let current = path[i];
-        let mut alt_next = false;
         
         // Check if multiple outgoing edges from current node
         let out_neighbors: Vec<_> = graph.neighbors_directed(current, petgraph::Direction::Outgoing).collect();

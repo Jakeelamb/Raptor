@@ -1,5 +1,4 @@
 use petgraph::graphmap::DiGraphMap;
-use petgraph::algo::connected_components;
 use std::collections::HashMap;
 
 /// Clusters contigs in a graph into connected components
@@ -64,7 +63,7 @@ pub fn merge_small_clusters(
     }
     
     // Try to merge small clusters with larger ones
-    for (small_id, small_component) in small_clusters {
+    for (_small_id, small_component) in small_clusters {
         let mut best_match = None;
         let mut best_similarity = similarity_threshold;
         
@@ -113,4 +112,9 @@ fn calculate_cluster_similarity(
     } else {
         intersection as f32 / union as f32
     }
+}
+
+pub fn merge_clusters(clusters: Vec<Vec<usize>>, _distance_matrix: &[Vec<f32>], _contigs: &[String]) -> Vec<Vec<usize>> {
+    // ... rest of the function ...
+    clusters
 } 

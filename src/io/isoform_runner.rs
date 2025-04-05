@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Instant;
 use log::{info, warn};
 
-use crate::graph::isoform_graph::{IsoformGraph, build_isoform_graph, find_start_nodes, find_end_nodes};
+use crate::graph::isoform_graph::{build_isoform_graph, find_start_nodes, find_end_nodes};
 use crate::graph::isoform_traverse::{find_directed_paths, filter_paths_by_confidence};
 use crate::graph::transcript::{assemble_transcripts, calculate_transcript_stats};
 use crate::graph::isoform_filter::{filter_similar_transcripts, merge_transcripts};
@@ -96,7 +96,11 @@ pub fn run_isoform_reconstruction(
     // Filter paths by confidence
     info!("Filtering paths by confidence (min: {})", min_confidence);
     let min_confidence_f32 = min_confidence as f32;
-    let filtered_paths = filter_paths_by_confidence(&paths, min_confidence_f32);
+    let min_path_len = 50; // Minimum path length for standard filtering
+    let high_conf_threshold = Some(0.9); // Higher threshold for shorter paths
+    info!("Using minimum path length {} with high confidence threshold {:.2}", 
+          min_path_len, high_conf_threshold.unwrap_or(1.0));
+    let filtered_paths = filter_paths_by_confidence(&paths, min_confidence_f32, min_path_len, high_conf_threshold);
     info!("Retained {} transcript paths after filtering", filtered_paths.len());
     
     // Assemble transcripts

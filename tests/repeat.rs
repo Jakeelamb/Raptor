@@ -4,9 +4,9 @@ use raptor::graph::assembler::Contig;
 #[test]
 fn test_repeat_collapse() {
     let contigs = vec![
-        Contig { sequence: "ATATATAT".into(), kmer_path: vec![] },
-        Contig { sequence: "ATATATAT".into(), kmer_path: vec![] },
-        Contig { sequence: "CGTACGTA".into(), kmer_path: vec![] },
+        Contig { id: 0, sequence: "ATATATAT".into(), kmer_path: vec![] },
+        Contig { id: 1, sequence: "ATATATAT".into(), kmer_path: vec![] },
+        Contig { id: 2, sequence: "CGTACGTA".into(), kmer_path: vec![] },
     ];
 
     // Test with a minimum repeat length of 3
@@ -22,9 +22,9 @@ fn test_repeat_collapse() {
 #[test]
 fn test_repeat_collapse_with_different_thresholds() {
     let contigs = vec![
-        Contig { sequence: "AAAACCCGGTT".into(), kmer_path: vec![] },
-        Contig { sequence: "AAACCCCTTT".into(), kmer_path: vec![] },
-        Contig { sequence: "GGGGGCCCCC".into(), kmer_path: vec![] },
+        Contig { id: 0, sequence: "AAAACCCGGTT".into(), kmer_path: vec![] },
+        Contig { id: 1, sequence: "AAACCCCTTT".into(), kmer_path: vec![] },
+        Contig { id: 2, sequence: "GGGGGCCCCC".into(), kmer_path: vec![] },
     ];
     
     // With high threshold, no collapsing should occur

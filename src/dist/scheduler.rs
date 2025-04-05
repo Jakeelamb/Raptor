@@ -1,8 +1,6 @@
-use std::process::{Command, Child};
+use std::process::Command;
 use std::path::Path;
 use rayon::prelude::*;
-use std::collections::HashMap;
-use std::time::Duration;
 use tracing::info;
 
 /// Configuration for distributed job scheduling
@@ -49,7 +47,7 @@ pub fn run_parallel_assembly(
                 .to_string_lossy();
                 
             let output_file = format!("{}/{}.fasta", output_dir, file_stem);
-            let output_gfa = format!("{}/{}.gfa", output_dir, file_stem);
+            let _output_gfa = format!("{}/{}.gfa", output_dir, file_stem);
             
             // Run the assembly for this partition
             let status = Command::new("cargo")

@@ -1,4 +1,4 @@
-use crate::graph::navigation::{PathMetadata, reconstruct_paths};
+use crate::graph::navigation::PathMetadata;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};

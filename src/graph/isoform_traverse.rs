@@ -155,12 +155,27 @@ fn calculate_path_confidence(graph: &IsoformGraph, path: &[usize]) -> f32 {
 }
 
 /// Filter paths by minimum confidence threshold
+/// With enhanced support for short but high-confidence paths
 pub fn filter_paths_by_confidence(
     paths: &[TranscriptPath],
-    min_confidence: f32
+    min_confidence: f32,
+    min_path_len: usize,
+    min_confidence_high: Option<f32>
 ) -> Vec<TranscriptPath> {
     paths.iter()
-        .filter(|path| path.confidence >= min_confidence)
+        .filter(|path| {
+            // Keep path if it meets the minimum length requirement AND confidence threshold
+            let meets_standard_criteria = path.nodes.len() >= min_path_len && path.confidence >= min_confidence;
+            
+            // Special case: shorter paths can be kept if they have VERY high confidence
+            let meets_high_confidence_criteria = if let Some(high_conf) = min_confidence_high {
+                path.nodes.len() < min_path_len && path.confidence >= high_conf
+            } else {
+                false
+            };
+            
+            meets_standard_criteria || meets_high_confidence_criteria
+        })
         .cloned()
         .collect()
 }

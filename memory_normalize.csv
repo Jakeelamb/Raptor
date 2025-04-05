@@ -1,0 +1,10 @@
+timestamp,process,rss_mb,vsz_mb,cpu_percent
+2025-04-05 12:25:18,cargo build --release --bin normalize_paired_reads,,,100
+2025-04-05 12:25:20,target/release/normalize_paired_reads Cxt-r2-38_R1_001.fastq.gz Cxt-r2-38_R2_001.fastq.gz low_mem_output/normalized 15 3 1 --streaming,,,99.4
+2025-04-05 12:25:22,target/release/normalize_paired_reads Cxt-r2-38_R1_001.fastq.gz Cxt-r2-38_R2_001.fastq.gz low_mem_output/normalized 15 3 1 --streaming,,,99.2
+2025-04-05 12:25:24,target/release/normalize_paired_reads Cxt-r2-38_R1_001.fastq.gz Cxt-r2-38_R2_001.fastq.gz low_mem_output/normalized 15 3 1 --streaming,,,99.1
+2025-04-05 12:25:26,target/release/normalize_paired_reads Cxt-r2-38_R1_001.fastq.gz Cxt-r2-38_R2_001.fastq.gz low_mem_output/normalized 15 3 1 --streaming,,,98.8
+2025-04-05 12:25:28,target/release/normalize_paired_reads Cxt-r2-38_R1_001.fastq.gz Cxt-r2-38_R2_001.fastq.gz low_mem_output/normalized 15 3 1 --streaming,,,98.6
+2025-04-05 12:25:30,target/release/normalize_paired_reads Cxt-r2-38_R1_001.fastq.gz Cxt-r2-38_R2_001.fastq.gz low_mem_output/normalized 15 3 1 --streaming,,,98.7
+2025-04-05 12:25:32,target/release/normalize_paired_reads Cxt-r2-38_R1_001.fastq.gz Cxt-r2-38_R2_001.fastq.gz low_mem_output/normalized 15 3 1 --streaming,,,98.8
+2025-04-05 12:25:34,target/release/normalize_paired_reads Cxt-r2-38_R1_001.fastq.gz Cxt-r2-38_R2_001.fastq.gz low_mem_output/normalized 15 3 1 --streaming,,,98.6

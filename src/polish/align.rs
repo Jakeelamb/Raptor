@@ -1,6 +1,6 @@
 use crate::io::fastq::FastqRecord;
 
-pub fn polish_sequence(seq: &str, reads: &[FastqRecord], k: usize) -> String {
+pub fn polish_sequence(seq: &str, reads: &[FastqRecord], _k: usize) -> String {
     let mut counts = vec![[0u32; 4]; seq.len()];
     for read in reads {
         if let Some(pos) = seq.find(&read.sequence) {

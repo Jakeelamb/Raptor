@@ -9,7 +9,7 @@ pub fn plot_heatmap(matrix: &Array2<f64>, output: &str) -> Result<(), Box<dyn st
     let max_val = matrix.iter().cloned().fold(f64::MIN, f64::max);
     let min_val = matrix.iter().cloned().fold(f64::MAX, f64::min);
 
-    let chart = ChartBuilder::on(&root)
+    let mut chart = ChartBuilder::on(&root)
         .caption("TPM Heatmap", ("sans-serif", 30))
         .build_cartesian_2d(0..matrix.ncols(), 0..matrix.nrows())?;
 
@@ -43,14 +43,13 @@ pub fn plot_heatmap_with_labels(
 
     let drawing_area = root.margin(40, 40, 60, 120);
     
-    let chart = ChartBuilder::on(&drawing_area)
+    let mut chart = ChartBuilder::on(&drawing_area)
         .caption("TPM Heatmap", ("sans-serif", 30))
         .x_label_area_size(40)
         .y_label_area_size(60)
         .build_cartesian_2d(0..matrix.ncols(), 0..matrix.nrows())?;
 
-    let mut chart = chart
-        .configure_mesh()
+    chart.configure_mesh()
         .disable_mesh()
         .x_labels(matrix.ncols())
         .y_labels(matrix.nrows())

@@ -34,6 +34,14 @@ pub enum Commands {
         /// Enable streaming mode for large datasets
         #[arg(long)]
         streaming: bool,
+
+        /// Target coverage threshold for normalization
+        #[arg(long, default_value_t = 500)]
+        coverage_target: usize,
+
+        /// Maximum number of reads to process (for subsampling)
+        #[arg(long, default_value_t = 5_000_000)]
+        max_reads: usize,
     },
 
     /// Assemble normalized reads into contigs
@@ -47,7 +55,7 @@ pub enum Commands {
         output: String,
 
         /// Minimum contig length
-        #[arg(long, default_value_t = 150)]
+        #[arg(long, default_value_t = 50)]
         min_len: usize,
 
         /// Number of threads
@@ -131,8 +139,16 @@ pub enum Commands {
         max_path_depth: usize,
         
         /// Minimum confidence for keeping isoform paths
-        #[arg(long, default_value_t = 0.25)]
+        #[arg(long, default_value_t = 0.9)]
         min_confidence: f64,
+        
+        /// Minimum path length for isoform traversal (shorter paths can be kept if highly confident)
+        #[arg(long, default_value_t = 50)]
+        min_path_len: usize,
+        
+        /// Enable development mode (bypasses filters and outputs debug information)
+        #[arg(long)]
+        dev_mode: bool,
         
         /// Compute TPM expression values for transcripts
         #[arg(long)]

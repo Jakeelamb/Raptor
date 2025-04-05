@@ -106,8 +106,10 @@ fn median(values: &mut [u16]) -> u16 {
     values.sort_unstable();
     let mid = values.len() / 2;
     if values.len() % 2 == 0 {
-        ((values[mid - 1] + values[mid]) / 2)
+        // Even number of elements, take average of middle two
+        (values[mid - 1] + values[mid]) / 2
     } else {
+        // Odd number of elements, take middle one
         values[mid]
     }
 }

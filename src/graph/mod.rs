@@ -14,3 +14,4 @@ pub mod isoform_filter;
 pub mod isoform_parallel;
 pub mod stats;
 pub mod partition;
+pub mod edge_weight;

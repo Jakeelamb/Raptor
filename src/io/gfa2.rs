@@ -96,7 +96,7 @@ impl Gfa2Writer {
             let segs = nav.join(" ");
             
             // Calculate the total path length including overlaps
-            let total_length: usize = path.segments.iter()
+            let _total_length: usize = path.segments.iter()
                 .zip(path.overlaps.iter().chain(std::iter::once(&0)))
                 .map(|(_, overlap)| *overlap)
                 .sum();

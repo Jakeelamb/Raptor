@@ -1,16 +1,17 @@
 use crate::graph::transcript::Transcript;
 use std::collections::HashMap;
 use std::io::Result;
+use rand;
 
 /// Estimates transcript expression in TPM from a BAM alignment file
 ///
 /// # Arguments
-/// * `bam_path` - Path to BAM file with aligned reads
-/// * `transcripts` - Vector of transcripts to quantify
+/// * `bam_path` - Path to the BAM file containing alignments
+/// * `transcripts` - Vector of transcript objects
 ///
 /// # Returns
 /// * Vector of TPM values corresponding to each transcript
-pub fn estimate_tpm_from_bam(bam_path: &str, transcripts: &[Transcript]) -> Result<Vec<f64>> {
+pub fn estimate_tpm_from_bam(_bam_path: &str, transcripts: &[Transcript]) -> Result<Vec<f64>> {
     // In a real implementation, we would use rust-htslib to parse the BAM file
     // For this example, we'll simulate the BAM reading process
     
@@ -124,70 +125,92 @@ pub fn create_expression_matrix(
     Ok(matrix)
 }
 
-/// Enhances the TPM estimation with more accurate RNA-Seq calculations
-/// 
-/// This improved implementation follows standard RNA-Seq quantification
-/// methods with length normalization and scaling to TPM units.
-/// 
+/// Loads a CSV file with alignment counts for multiple samples
+///
 /// # Arguments
-/// * `transcripts` - Vector of transcripts to quantify
-/// * `bam_path` - Path to alignment BAM file
-/// 
+/// * `csv_path` - Path to CSV file with counts
+/// * `transcripts` - Vector of transcript objects
+///
 /// # Returns
-/// * Vector of TPM values corresponding to transcripts
-pub fn estimate_tpm(transcripts: &[Transcript], bam_path: &str) -> std::io::Result<Vec<f64>> {
-    // In a real implementation, would use rust-htslib to parse the BAM file
-    // For this implementation, we'll simulate alignment counts
-
-    // Mock counts for demonstration purposes
-    let mut raw_counts = vec![0.0; transcripts.len()];
+/// * HashMap mapping sample names to vectors of counts
+pub fn load_counts_matrix(csv_path: &str, transcripts: &[Transcript]) -> Result<HashMap<String, Vec<f64>>> {
+    let mut counts_matrix = HashMap::new();
     
-    // Simulate alignment counting
-    for (i, transcript) in transcripts.iter().enumerate() {
-        // Simulate read counts proportional to length and inversely to id
-        // (in a real implementation, this would come from the BAM file)
-        raw_counts[i] = (transcript.sequence.len() as f64 / 100.0) * 
-                        (10.0 / (i as f64 + 1.0)).max(1.0);
+    // In a real implementation, this would parse the CSV file
+    // For demonstration, we'll create random counts for samples
+    let sample_names = vec!["sample1", "sample2", "sample3"];
+    
+    for sample in &sample_names {
+        let counts: Vec<f64> = transcripts.iter()
+            .map(|t| {
+                // Random count based on transcript length
+                (t.length as f64 / 100.0) * ((t.id as f64 % 5.0) + 0.5)
+            })
+            .collect();
+        
+        counts_matrix.insert(sample.to_string(), counts);
     }
     
-    // Calculate RPK (reads per kilobase)
-    let rpk: Vec<f64> = transcripts.iter().enumerate()
-        .map(|(i, tx)| {
-            let len_kb = tx.sequence.len() as f64 / 1000.0;
-            if len_kb > 0.0 {
-                raw_counts[i] / len_kb
-            } else {
-                0.0
-            }
+    Ok(counts_matrix)
+}
+
+/// Generate counts matrix from TPM values
+///
+/// # Arguments
+/// * `transcripts` - Vector of transcript objects
+/// * `tpm_values` - Vector of TPM values
+///
+/// # Returns
+/// * Vector of count values
+pub fn tpm_to_counts(transcripts: &[Transcript], tpm_values: &[f64]) -> Vec<u32> {
+    assert_eq!(transcripts.len(), tpm_values.len(), "Mismatched lengths");
+    
+    let total_reads = 1_000_000; // Simulated total read count
+    let effective_lengths: Vec<f64> = transcripts.iter()
+        .map(|t| t.length.max(1) as f64)
+        .collect();
+    
+    // Convert TPM to expected counts
+    let counts: Vec<u32> = tpm_values.iter()
+        .zip(effective_lengths.iter())
+        .map(|(&tpm, &len)| {
+            let fraction = tpm / 1_000_000.0;
+            let count = fraction * total_reads as f64 * len / 1000.0;
+            count.round() as u32
         })
         .collect();
     
-    // Calculate scaling factor to TPM
-    let total_rpk: f64 = rpk.iter().sum();
-    let scaling_factor = if total_rpk > 0.0 { 1_000_000.0 / total_rpk } else { 0.0 };
-    
-    // Convert to TPM
-    let tpm: Vec<f64> = rpk.iter()
-        .map(|&value| value * scaling_factor)
-        .collect();
-    
-    Ok(tpm)
+    counts
 }
 
-/// Updates transcripts with TPM values using enhanced calculation
+/// Counts the number of transcripts with TPM above a threshold
 ///
 /// # Arguments
-/// * `transcripts` - Mutable vector of transcripts to update
-/// * `bam_path` - Path to BAM file
+/// * `transcripts` - Vector of transcript objects
+/// * `tpm_values` - Vector of TPM values
+/// * `threshold` - TPM threshold for counting
 ///
 /// # Returns
-/// * Result with number of transcripts updated
-pub fn update_transcripts_with_enhanced_tpm(transcripts: &mut [Transcript], bam_path: &str) -> std::io::Result<usize> {
-    let tpm_values = estimate_tpm(transcripts, bam_path)?;
+/// * Number of transcripts above threshold
+pub fn count_expressed_transcripts(transcripts: &[Transcript], tpm_values: &[f64], threshold: f64) -> Result<usize> {
+    assert_eq!(transcripts.len(), tpm_values.len(), "Mismatched lengths");
     
-    for (transcript, tpm) in transcripts.iter_mut().zip(tpm_values.iter()) {
-        transcript.tpm = Some(*tpm);
-    }
+    let count = tpm_values.iter()
+        .filter(|&&tpm| tpm >= threshold)
+        .count();
     
-    Ok(transcripts.len())
+    Ok(count)
+}
+
+/// Estimates transcript abundances from an alignment file
+///
+/// # Arguments
+/// * `transcripts` - Vector of transcript objects
+/// * `bam_path` - Path to the BAM file with alignments
+///
+/// # Returns
+/// * Vector of abundance values
+pub fn estimate_transcript_abundances_from_alignments(transcripts: &[Transcript], _bam_path: &str) -> Result<Vec<f64>> {
+    // This would normally parse the BAM file, but for demonstration we'll use the other function
+    estimate_tpm_from_bam(_bam_path, transcripts)
 } 

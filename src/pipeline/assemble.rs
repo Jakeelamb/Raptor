@@ -18,10 +18,10 @@ pub fn assemble_reads(
     input_path: &str, 
     output_path: &str, 
     min_len: usize, 
-    output_gfa: bool, 
-    output_gfa2: bool,
-    adaptive_k: bool, 
-    use_rle: bool,
+    _output_gfa: bool, 
+    _output_gfa2: bool,
+    _adaptive_k: bool, 
+    _use_rle: bool,
     collapse_repeats: bool,
     min_repeat_len: usize,
     polish: bool,
@@ -43,8 +43,8 @@ pub fn assemble_reads(
     counts_matrix: bool,
 ) { 
     assemble_reads_old(
-        input_path, output_path, min_len, output_gfa, output_gfa2, 
-        adaptive_k, use_rle, collapse_repeats, min_repeat_len, 
+        input_path, output_path, min_len, _output_gfa, _output_gfa2, 
+        _adaptive_k, _use_rle, collapse_repeats, min_repeat_len, 
         polish, polish_window, streaming, export_metadata, 
         json_metadata, tsv_metadata, isoforms, gtf_path, gff3_path, 
         max_path_depth, min_confidence, compute_tpm, polish_isoforms,
@@ -56,10 +56,10 @@ pub fn assemble_reads_old(
     input_path: &str, 
     output_path: &str, 
     min_len: usize, 
-    output_gfa: bool, 
-    output_gfa2: bool,
-    adaptive_k: bool, 
-    use_rle: bool,
+    _output_gfa: bool, 
+    _output_gfa2: bool,
+    _adaptive_k: bool, 
+    _use_rle: bool,
     collapse_repeats: bool,
     min_repeat_len: usize,
     polish: bool,
@@ -102,13 +102,13 @@ pub fn assemble_reads_old(
             if i < 10000 { // Sample only the first 10,000 sequences
                 temp_sequences.push(record.sequence.clone());
             }
-            if i >= 10000 && !adaptive_k {
+            if i >= 10000 && !_adaptive_k {
                 break; // Only need samples for k determination if not using full dataset
             }
         }
         
         // Determine k-mer size
-        if adaptive_k {
+        if _adaptive_k {
             let hist = kmer_coverage_histogram(&temp_sequences, max_k);
             k = select_best_k(&hist);
             info!("Using adaptive k-mer: {}", k);
@@ -152,7 +152,7 @@ pub fn assemble_reads_old(
             .collect();
         
         // Determine k-mer size
-        if adaptive_k {
+        if _adaptive_k {
             let hist = kmer_coverage_histogram(&sequences, max_k);
             k = select_best_k(&hist);
             info!("Using adaptive k-mer: {}", k);
@@ -206,7 +206,7 @@ pub fn assemble_reads_old(
         writer.write_contig(contig, i + 1).expect("Failed to write contig");
         
         // Write RLE version if requested
-        if use_rle {
+        if _use_rle {
             writer.write_rle_contig(contig, i + 1).expect("Failed to write RLE contig");
         }
     }
@@ -248,7 +248,7 @@ pub fn assemble_reads_old(
     }
     
     // If GFA or GFA2 output is requested, find overlaps between contigs
-    if (output_gfa || output_gfa2 || isoforms) && !contigs.is_empty() {
+    if (_output_gfa || _output_gfa2 || isoforms) && !contigs.is_empty() {
         // Extract raw sequences for overlap finding
         let contig_seqs: Vec<String> = contigs.iter().map(|c| c.sequence.clone()).collect();
         
@@ -467,14 +467,14 @@ pub fn assemble_reads_old(
             );
         }
         // Output GFA if requested
-        if output_gfa {
+        if _output_gfa {
             let gfa_path = get_output_filename(output_path, "gfa");
             info!("Writing GFA to: {}", gfa_path);
             
             // Write GFA output
             let mut gfa_writer = GfaWriter::new(&gfa_path);
             
-            if use_rle {
+            if _use_rle {
                 gfa_writer.write_rle_segments(&contigs).expect("Failed to write RLE GFA segments");
             } else {
                 gfa_writer.write_segments(&contigs).expect("Failed to write GFA segments");
@@ -488,7 +488,7 @@ pub fn assemble_reads_old(
         }
         
         // Output GFA2 if requested
-        if output_gfa2 {
+        if _output_gfa2 {
             let gfa2_path = get_output_filename(output_path, "gfa2");
             info!("Writing GFA2 to: {}", gfa2_path);
             
