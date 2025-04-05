@@ -1,0 +1,5 @@
+query_idx,target_idx,overlap_size,shift,mismatches
+0,0,28,1,0
+0,1,23,0,0
+1,0,20,1,0
+1,1,20,0,0

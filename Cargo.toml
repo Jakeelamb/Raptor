@@ -1,0 +1,36 @@
+[package]
+name = "repomix"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance Rust-based RNA-seq assembler with isoform detection and quantification"
+authors = ["Your Name <your.email@example.com>"]
+license = "MIT"
+repository = "https://github.com/yourusername/repomix"
+default-run = "repomix"
+
+[dependencies]
+ahash = "0.8.11"
+clap = { version = "4.5.35", features = ["derive"] }
+crossbeam = "0.8.4"
+env_logger = "0.10.1"
+fasthash = "0.4.0"
+flate2 = "1.1.1"
+gfa = "0.10.1"
+log = "0.4.27"
+mpi = "0.8.0"
+# Temporarily disabled until needed
+# nats = "0.24.0"
+num_cpus = "1.16.0"
+ocl = "0.19.7"
+petgraph = "0.7.1"
+plotters = "0.3.5"
+rayon = "1.10.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+smartcore = "0.3.2"
+statrs = "0.15.0"
+tempfile = "3.5"
+tracing = "0.1.41"
+wide = "0.7.32"
+rand = "0.8.5"
+tracing-subscriber = "0.3.19"
