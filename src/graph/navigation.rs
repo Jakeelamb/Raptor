@@ -1,7 +1,7 @@
 use crate::graph::stitch::Path;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader};
 
 /// Traverse GFA path nodes for export or visualization
 pub fn traverse_path(path: &Path, include_edges: bool) -> Vec<String> {
@@ -20,24 +20,39 @@ pub fn traverse_path(path: &Path, include_edges: bool) -> Vec<String> {
 /// Traverse GFA `P` lines into segment ID chains
 pub fn parse_gfa_paths(lines: &[String]) -> HashMap<String, Vec<(String, char)>> {
     let mut paths = HashMap::new();
-
+    
     for line in lines {
-        if line.starts_with("P") {
-            let fields: Vec<&str> = line.split('\t').collect();
-            if fields.len() >= 3 {
-                let id = fields[1].to_string();
-                let segments = fields[2]
-                    .split(',')
-                    .filter_map(|s| {
-                        let (seg, dir) = s.split_at(s.len() - 1);
-                        Some((seg.to_string(), dir.chars().next()?))
-                    })
-                    .collect::<Vec<_>>();
-                paths.insert(id, segments);
-            }
+        if !line.starts_with('P') {
+            continue;
         }
+        
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() < 3 {
+            continue;
+        }
+        
+        let path_name = parts[1].to_string();
+        let segment_str = parts[2];
+        
+        // Parse segment string (e.g., "1+,2-,3+")
+        let mut segments = Vec::new();
+        for seg in segment_str.split(',') {
+            if seg.is_empty() {
+                continue;
+            }
+            
+            let orientation = seg.chars().last().unwrap_or('+');
+            if orientation != '+' && orientation != '-' {
+                continue;
+            }
+            
+            let segment_id = seg[..seg.len()-1].to_string();
+            segments.push((segment_id, orientation));
+        }
+        
+        paths.insert(path_name, segments);
     }
-
+    
     paths
 }
 
@@ -50,16 +65,19 @@ pub fn load_and_parse_gfa_paths(path: &str) -> Result<HashMap<String, Vec<(Strin
 }
 
 /// Load segment sequences from a TSV file (segment_id\tsequence)
-pub fn load_segment_sequences(path: &str) -> Result<HashMap<String, String>, std::io::Error> {
+pub fn load_segment_sequences(path: &str) -> io::Result<HashMap<String, String>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let mut segments = HashMap::new();
     
     for line in reader.lines() {
         let line = line?;
-        let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() >= 2 {
-            segments.insert(fields[0].to_string(), fields[1].to_string());
+        let parts: Vec<&str> = line.split('\t').collect();
+        
+        if parts.len() >= 2 {
+            let segment_id = parts[0].to_string();
+            let sequence = parts[1].to_string();
+            segments.insert(segment_id, sequence);
         }
     }
     
@@ -92,19 +110,49 @@ pub fn revcomp(seq: &str) -> String {
 
 /// Traverse and reconstruct full paths using segment sequences
 pub fn reconstruct_paths(
-    path_map: &HashMap<String, Vec<(String, char)>>,
-    segment_map: &HashMap<String, String>,
+    paths: &HashMap<String, Vec<(String, char)>>,
+    segment_map: &HashMap<String, String>
 ) -> HashMap<String, String> {
-    let mut isoforms = HashMap::new();
-    for (id, path) in path_map {
-        let mut seq = String::new();
-        for (seg, dir) in path {
-            let part = get_oriented_sequence(seg, *dir, segment_map);
-            seq.push_str(&part);
+    let mut reconstructed = HashMap::new();
+    
+    for (path_id, segments) in paths {
+        let mut sequence = String::new();
+        
+        for segment in segments {
+            let (segment_id, orientation) = segment;
+            if let Some(seg_seq) = segment_map.get(segment_id) {
+                if *orientation == '+' {
+                    sequence.push_str(seg_seq);
+                } else {
+                    // Reverse complement for negative orientation
+                    sequence.push_str(&reverse_complement(seg_seq));
+                }
+            }
         }
-        isoforms.insert(id.clone(), seq);
+        
+        reconstructed.insert(path_id.clone(), sequence);
     }
-    isoforms
+    
+    reconstructed
+}
+
+/// Generate reverse complement of a DNA sequence
+fn reverse_complement(sequence: &str) -> String {
+    let mut result = String::with_capacity(sequence.len());
+    
+    for c in sequence.chars().rev() {
+        let complement = match c {
+            'A' | 'a' => 'T',
+            'T' | 't' => 'A',
+            'G' | 'g' => 'C',
+            'C' | 'c' => 'G',
+            'N' | 'n' => 'N',
+            _ => c,  // Preserve non-standard characters
+        };
+        result.push(complement);
+    }
+    
+    result
 }
 
 /// Extract path information from GFA for visualization tools like Bandage/ODGI

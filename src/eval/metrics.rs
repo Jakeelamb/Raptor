@@ -1,25 +1,32 @@
-use crate::graph::transcript::Transcript;
-
 pub struct TranscriptStats {
     pub total: usize,
     pub avg_length: f64,
     pub n50: usize,
 }
 
-pub fn evaluate(transcripts: &[Transcript]) -> TranscriptStats {
-    let mut lengths: Vec<usize> = transcripts.iter().map(|t| t.sequence.len()).collect();
-    lengths.sort_unstable();
-    let total_len: usize = lengths.iter().sum();
-    let avg = total_len as f64 / lengths.len() as f64;
+pub fn evaluate_lengths(lengths: &[usize]) -> TranscriptStats {
+    if lengths.is_empty() {
+        return TranscriptStats {
+            total: 0,
+            avg_length: 0.0,
+            n50: 0,
+        };
+    }
+    
+    let mut sorted_lengths = lengths.to_vec();
+    sorted_lengths.sort_unstable();
+    
+    let total_len: usize = sorted_lengths.iter().sum();
+    let avg = total_len as f64 / sorted_lengths.len() as f64;
 
     let mut acc = 0;
-    let n50 = lengths.iter().rev().find(|&&l| {
+    let n50 = sorted_lengths.iter().rev().find(|&&l| {
         acc += l;
         acc >= total_len / 2
     }).copied().unwrap_or(0);
 
     TranscriptStats {
-        total: lengths.len(),
+        total: sorted_lengths.len(),
         avg_length: avg,
         n50,
     }

@@ -73,10 +73,12 @@ mod tests {
     fn test_generate_metadata() {
         let contigs = vec![
             Contig {
+                id: 0,
                 sequence: "AAAACCCCCGGGGTTTT".to_string(),
                 kmer_path: vec!["AAAAC".to_string()],
             },
             Contig {
+                id: 1,
                 sequence: "ATATATAT".to_string(),
                 kmer_path: vec!["ATATA".to_string()],
             },
@@ -104,5 +106,21 @@ mod tests {
         // Second contig
         assert_eq!(metadata[1].id, 2);
         assert_eq!(metadata[1].length, 8);
+    }
+
+    // Create and return mock contigs for testing
+    fn create_test_contigs() -> Vec<Contig> {
+        vec![
+            Contig {
+                id: 0,
+                sequence: "ATCGATCGATCG".to_string(),
+                kmer_path: vec!["ATC".to_string(), "TCG".to_string()],
+            },
+            Contig {
+                id: 1,
+                sequence: "GCTAGCTAGCT".to_string(),
+                kmer_path: vec!["GCT".to_string(), "CTA".to_string()],
+            },
+        ]
     }
 } 

@@ -6,13 +6,14 @@ use crate::kmer::kmer::canonical_kmer;
 use crate::kmer::variable_k::{optimal_k, kmer_coverage_histogram, select_best_k};
 use crate::graph::assembler::greedy_assembly;
 use crate::graph::overlap::find_overlaps;
-use crate::graph::stitch::{OverlapGraphBuilder, Path};
+use crate::graph::stitch::OverlapGraphBuilder;
 use crate::dist::scheduler::{DistributedConfig, run_distributed_assembly};
 use std::collections::HashMap;
 use std::path::Path as FilePath;
 use tracing::{info, warn};
 use std::fs;
 use std::io::Write;
+use crate::eval::metrics::evaluate_lengths;
 
 pub fn assemble_reads(
     input_path: &str, 
@@ -274,10 +275,26 @@ pub fn assemble_reads_old(
             let bam_path_value = None; // No BAM file for quantification
             let long_reads_value = None; // No long reads for polishing
             
+            // Convert kmer_counts to the expected HashMap<usize, usize> type
+            let kmer_counts_converted: HashMap<usize, usize> = kmer_counts
+                .iter()
+                .filter_map(|(k, v)| {
+                    if let Ok(id) = k.parse::<usize>() {
+                        Some((id, *v as usize))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            
+            // Create a function pointer with the expected signature
+            let get_output_filename_fn: fn(&str, Option<&str>) -> String = 
+                |base: &str, _ext: Option<&str>| get_output_filename(base, "");
+            
             let mut transcripts = crate::pipeline::isoform_processor::process_isoforms(
                 &contigs,
                 &links,
-                &kmer_counts,
+                &kmer_counts_converted,
                 output_path,
                 gtf_path.as_deref(),
                 max_path_depth,
@@ -286,8 +303,11 @@ pub fn assemble_reads_old(
                 strand_aware_value,
                 bam_path_value,
                 long_reads_value,
-                get_output_filename
-            );
+                get_output_filename_fn
+            ).unwrap_or_else(|e| {
+                warn!("Error processing isoforms: {}", e);
+                Vec::new()
+            });
             
             info!("Generated {} transcript isoforms", transcripts.len());
             
@@ -459,8 +479,10 @@ pub fn assemble_reads_old(
             }
             
             // Display transcript evaluation metrics
-            use crate::eval::metrics::evaluate;
-            let stats = evaluate(&transcripts);
+            let transcript_lengths: Vec<usize> = transcripts.iter()
+                .map(|t| t.sequence.len())
+                .collect();
+            let stats = evaluate_lengths(&transcript_lengths);
             info!(
                 "Transcript statistics: {} transcripts, Avg length: {:.1} bp, N50: {} bp",
                 stats.total, stats.avg_length, stats.n50

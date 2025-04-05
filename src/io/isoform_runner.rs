@@ -77,7 +77,12 @@ pub fn run_isoform_reconstruction(
     
     // Build isoform graph
     info!("Building isoform graph");
-    let graph = build_isoform_graph(&contigs, &overlaps, &expression_data);
+    let mut contig_map = HashMap::new();
+    for contig in &contigs {
+        contig_map.insert(contig.id, contig.sequence.clone());
+    }
+    let overlaps_vec = overlaps.to_vec();
+    let graph = build_isoform_graph(&contig_map, &overlaps_vec, &expression_data);
     let node_count = graph.node_count();
     let edge_count = graph.edge_count();
     info!("Built graph with {} nodes and {} edges", node_count, edge_count);

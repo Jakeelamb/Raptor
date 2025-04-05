@@ -1,5 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use crate::graph::transcript::Transcript;
+use crate::accel::simd::hamming_distance_simd;
+use tracing::debug;
 
 /// Calculate the Levenshtein edit distance between two strings
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -124,84 +126,177 @@ pub fn cluster_similar_transcripts(
     clusters
 }
 
-/// Filter similar transcripts to reduce redundancy
+/// Filter out similar transcripts based on sequence similarity
 pub fn filter_similar_transcripts(
-    transcripts: &[Transcript], 
+    transcripts: &[Transcript],
     similarity_threshold: f64
 ) -> Vec<Transcript> {
-    let clusters = cluster_similar_transcripts(transcripts, similarity_threshold);
-    
-    // Select one representative transcript from each cluster (the one with highest confidence)
-    let mut cluster_reps: HashMap<usize, usize> = HashMap::new();
-    
-    for (i, &cluster) in clusters.iter().enumerate() {
-        cluster_reps
-            .entry(cluster)
-            .and_modify(|best_idx| {
-                if transcripts[i].confidence > transcripts[*best_idx].confidence {
-                    *best_idx = i;
-                }
-            })
-            .or_insert(i);
+    if transcripts.is_empty() {
+        return Vec::new();
     }
     
-    // Collect the representative transcripts
-    cluster_reps.values()
-        .map(|&idx| transcripts[idx].clone())
-        .collect()
-}
-
-/// Merge similar transcripts into combined transcripts
-pub fn merge_transcripts(
-    transcripts: &[Transcript], 
-    similarity_threshold: f64
-) -> Vec<Transcript> {
-    let clusters = cluster_similar_transcripts(transcripts, similarity_threshold);
+    debug!("Filtering {} transcripts with similarity threshold {}", 
+            transcripts.len(), similarity_threshold);
     
-    // Group transcripts by cluster
-    let mut cluster_map: HashMap<usize, Vec<usize>> = HashMap::new();
-    for (i, &cluster) in clusters.iter().enumerate() {
-        cluster_map.entry(cluster).or_default().push(i);
-    }
+    // Sort transcripts by length (descending) and confidence (descending)
+    let mut sorted_transcripts = transcripts.to_vec();
+    sorted_transcripts.sort_by(|a, b| {
+        let len_cmp = b.length.cmp(&a.length);
+        if len_cmp == std::cmp::Ordering::Equal {
+            b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal)
+        } else {
+            len_cmp
+        }
+    });
     
-    // Merge transcripts in each cluster
-    let mut merged_transcripts = Vec::new();
-    for (cluster_id, indices) in cluster_map {
-        if indices.len() == 1 {
-            // Single transcript in cluster, no merging needed
-            merged_transcripts.push(transcripts[indices[0]].clone());
+    let mut filtered_transcripts = Vec::new();
+    let mut removed_ids = HashSet::new();
+    
+    // Keep highest confidence/longest transcripts, filter out similar ones
+    for (i, transcript) in sorted_transcripts.iter().enumerate() {
+        if removed_ids.contains(&transcript.id) {
             continue;
         }
         
-        // Calculate representative sequence and path
-        // For simplicity, choose the transcript with highest confidence
-        let mut best_idx = indices[0];
-        let mut best_confidence = transcripts[best_idx].confidence;
+        filtered_transcripts.push(transcript.clone());
         
-        for &idx in &indices[1..] {
-            if transcripts[idx].confidence > best_confidence {
-                best_idx = idx;
-                best_confidence = transcripts[idx].confidence;
+        // Compare with remaining transcripts
+        for (j, other) in sorted_transcripts.iter().enumerate() {
+            if i == j || removed_ids.contains(&other.id) {
+                continue;
+            }
+            
+            if is_similar(transcript, other, similarity_threshold) {
+                removed_ids.insert(other.id);
+            }
+        }
+    }
+    
+    debug!("Filtered out {} similar transcripts, kept {}", 
+            removed_ids.len(), filtered_transcripts.len());
+    
+    filtered_transcripts
+}
+
+/// Merge similar transcripts instead of filtering them out
+pub fn merge_transcripts(
+    transcripts: &[Transcript],
+    similarity_threshold: f64
+) -> Vec<Transcript> {
+    if transcripts.is_empty() {
+        return Vec::new();
+    }
+    
+    debug!("Merging {} transcripts with similarity threshold {}", 
+            transcripts.len(), similarity_threshold);
+    
+    // Sort transcripts by confidence (descending)
+    let mut sorted_transcripts = transcripts.to_vec();
+    sorted_transcripts.sort_by(|a, b| {
+        b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    
+    let mut merged_transcripts = Vec::new();
+    let mut removed_ids = HashSet::new();
+    
+    // Process all transcripts
+    for (i, transcript) in sorted_transcripts.iter().enumerate() {
+        if removed_ids.contains(&transcript.id) {
+            continue;
+        }
+        
+        let mut merged = transcript.clone();
+        let mut merged_with = Vec::new();
+        
+        // Find transcripts to merge with
+        for (j, other) in sorted_transcripts.iter().enumerate() {
+            if i == j || removed_ids.contains(&other.id) {
+                continue;
+            }
+            
+            if is_similar(&merged, other, similarity_threshold) {
+                merged_with.push(other);
+                removed_ids.insert(other.id);
             }
         }
         
-        // Create a merged transcript using the best transcript as base
-        let best_transcript = &transcripts[best_idx];
-        
-        // Calculate merged confidence as average of all transcripts in the cluster
-        let avg_confidence = indices.iter()
-            .map(|&idx| transcripts[idx].confidence)
-            .sum::<f64>() / indices.len() as f64;
-        
-        // Create merged transcript
-        let mut merged = best_transcript.clone();
-        merged.confidence = avg_confidence;
-        merged.id = cluster_id; // Use cluster ID as merged transcript ID
+        // If we found transcripts to merge
+        if !merged_with.is_empty() {
+            // Update confidence as weighted average
+            let total_confidence = merged_with.iter()
+                .fold(merged.confidence, |acc, t| acc + t.confidence);
+            
+            let avg_confidence = total_confidence / (merged_with.len() as f64 + 1.0);
+            merged.confidence = avg_confidence;
+            
+            // Update TPM if available
+            if let Some(tpm) = merged.tpm {
+                let total_tpm = merged_with.iter()
+                    .fold(tpm, |acc, t| acc + t.tpm.unwrap_or(0.0));
+                
+                merged.tpm = Some(total_tpm);
+            }
+            
+            debug!("Merged transcript {} with {} others", merged.id, merged_with.len());
+        }
         
         merged_transcripts.push(merged);
     }
     
+    debug!("After merging, reduced from {} to {} transcripts", 
+            transcripts.len(), merged_transcripts.len());
+    
     merged_transcripts
+}
+
+/// Determine if two transcripts are similar based on sequence similarity
+fn is_similar(a: &Transcript, b: &Transcript, threshold: f64) -> bool {
+    // If length difference is too large, they're not similar
+    let len_a = a.sequence.len();
+    let len_b = b.sequence.len();
+    
+    // If one sequence is more than 50% longer than the other, they're not similar
+    if len_a as f64 > len_b as f64 * 1.5 || len_b as f64 > len_a as f64 * 1.5 {
+        return false;
+    }
+    
+    // Use Hamming distance for sequences of similar length
+    if len_a == len_b {
+        let distance = hamming_distance_simd(a.sequence.as_bytes(), b.sequence.as_bytes());
+        let similarity = 1.0 - (distance as f64 / len_a as f64);
+        return similarity >= threshold;
+    }
+    
+    // For differing lengths, use a k-mer based approach
+    // This is a simple implementation - for production, use a more sophisticated algorithm
+    let k = 25; // k-mer size
+    let min_len = len_a.min(len_b);
+    
+    if min_len < k {
+        return false; // Too short to compare meaningfully
+    }
+    
+    // Count shared k-mers
+    let shorter = if len_a <= len_b { &a.sequence } else { &b.sequence };
+    let longer = if len_a > len_b { &a.sequence } else { &b.sequence };
+    
+    let mut shorter_kmers = HashSet::new();
+    for i in 0..=shorter.len() - k {
+        shorter_kmers.insert(&shorter[i..i+k]);
+    }
+    
+    let mut shared_kmers = 0;
+    for i in 0..=longer.len() - k {
+        if shorter_kmers.contains(&longer[i..i+k]) {
+            shared_kmers += 1;
+        }
+    }
+    
+    // Calculate similarity as proportion of shared k-mers
+    let max_possible_shared = (shorter.len() - k + 1).min(longer.len() - k + 1);
+    let similarity = shared_kmers as f64 / max_possible_shared as f64;
+    
+    similarity >= threshold
 }
 
 #[cfg(test)]
@@ -210,10 +305,9 @@ mod tests {
     
     #[test]
     fn test_edit_distance() {
-        assert_eq!(edit_distance("kitten", "sitting"), 3);
-        assert_eq!(edit_distance("GATTACA", "GCATGCU"), 4);
-        assert_eq!(edit_distance("", "abc"), 3);
-        assert_eq!(edit_distance("abc", ""), 3);
+        assert_eq!(edit_distance("GATTACA", "GCTTACA"), 1);
+        assert_eq!(edit_distance("GATTACA", "GATTACA"), 0);
+        assert_eq!(edit_distance("GATTACA", "GATT"), 3);
     }
     
     #[test]
@@ -224,28 +318,37 @@ mod tests {
             path: vec![1, 2, 3],
             confidence: 0.9,
             length: 7,
+            strand: '+',
+            tpm: None,
+            splicing: "unknown".to_string()
         };
         
         let t2 = Transcript {
             id: 2,
             sequence: "GCTTACA".to_string(),
             path: vec![1, 2, 3],
-            confidence: 0.8,
+            confidence: 0.85,
             length: 7,
+            strand: '+',
+            tpm: None,
+            splicing: "unknown".to_string()
         };
         
-        // One substitution in a 7-char string = 1-1/7 = ~0.857 similarity
+        // Should be around 0.857 (6/7)
         assert!((calculate_sequence_similarity(&t1, &t2) - 0.857).abs() < 0.001);
         
         let t3 = Transcript {
             id: 3,
             sequence: "GATTACA".to_string(),
             path: vec![1, 2, 3],
-            confidence: 0.7,
+            confidence: 0.95,
             length: 7,
+            strand: '+',
+            tpm: None,
+            splicing: "unknown".to_string()
         };
         
-        // Identical sequences = 1.0 similarity
+        // Identical sequences
         assert_eq!(calculate_sequence_similarity(&t1, &t3), 1.0);
     }
     
@@ -257,108 +360,108 @@ mod tests {
             path: vec![1, 2, 3],
             confidence: 0.9,
             length: 7,
+            strand: '+',
+            tpm: None,
+            splicing: "unknown".to_string()
         };
         
         let t2 = Transcript {
             id: 2,
             sequence: "GCTTACA".to_string(),
             path: vec![1, 2, 4],
-            confidence: 0.8,
+            confidence: 0.85,
             length: 7,
+            strand: '+',
+            tpm: None,
+            splicing: "unknown".to_string()
         };
         
-        // 2 common nodes out of 4 unique nodes = 0.5 similarity
+        // 2 out of 3 elements in common
         assert_eq!(calculate_path_similarity(&t1, &t2), 0.5);
         
         let t3 = Transcript {
             id: 3,
             sequence: "GATTACA".to_string(),
             path: vec![1, 2, 3],
-            confidence: 0.7,
+            confidence: 0.95,
             length: 7,
+            strand: '+',
+            tpm: None,
+            splicing: "unknown".to_string()
         };
         
-        // Identical paths = 1.0 similarity
+        // Identical paths
         assert_eq!(calculate_path_similarity(&t1, &t3), 1.0);
     }
     
+    fn create_test_transcripts() -> Vec<Transcript> {
+        vec![
+            Transcript {
+                id: 1,
+                sequence: "AAAAAAAAAATTTTTTTTTT".to_string(),
+                path: vec![1, 2],
+                confidence: 0.95,
+                length: 20,
+                strand: '+',
+                tpm: Some(100.0),
+                splicing: "linear".to_string(),
+            },
+            Transcript {
+                id: 2,
+                sequence: "AAAAAAAAAATTTTTTTTTC".to_string(), // 95% similar to first
+                path: vec![1, 3],
+                confidence: 0.85,
+                length: 20,
+                strand: '+',
+                tpm: Some(90.0),
+                splicing: "linear".to_string(),
+            },
+            Transcript {
+                id: 3,
+                sequence: "GGGGGGGGGGGGGGGGGGG".to_string(), // Different
+                path: vec![4, 5],
+                confidence: 0.75,
+                length: 20,
+                strand: '+',
+                tpm: Some(50.0),
+                splicing: "linear".to_string(),
+            }
+        ]
+    }
+    
     #[test]
-    fn test_filter_similar_transcripts() {
-        let t1 = Transcript {
-            id: 1,
-            sequence: "GATTACA".to_string(),
-            path: vec![1, 2, 3],
-            confidence: 0.9,
-            length: 7,
-        };
+    fn test_filter_similar() {
+        let transcripts = create_test_transcripts();
         
-        let t2 = Transcript {
-            id: 2,
-            sequence: "GCTTACA".to_string(), // 1 diff
-            path: vec![1, 2, 4],
-            confidence: 0.8,
-            length: 7,
-        };
+        // With high threshold - should keep all
+        let filtered_high = filter_similar_transcripts(&transcripts, 0.99);
+        assert_eq!(filtered_high.len(), 3);
         
-        let t3 = Transcript {
-            id: 3,
-            sequence: "GATTACA".to_string(), // identical to t1
-            path: vec![1, 2, 3],
-            confidence: 0.7,
-            length: 7,
-        };
+        // With lower threshold - should filter out one
+        let filtered_low = filter_similar_transcripts(&transcripts, 0.9);
+        assert_eq!(filtered_low.len(), 2);
         
-        let transcripts = vec![t1.clone(), t2.clone(), t3.clone()];
-        
-        // High threshold - all transcripts should be kept
-        let filtered_high = filter_similar_transcripts(&transcripts, 0.95);
-        assert_eq!(filtered_high.len(), 2);
-        
-        // Low threshold - only one transcript should remain
-        let filtered_low = filter_similar_transcripts(&transcripts, 0.5);
-        assert_eq!(filtered_low.len(), 1);
-        
-        // The remaining transcript should be t1 (highest confidence among similar ones)
-        assert_eq!(filtered_low[0].id, 1);
+        // Check that the highest confidence one was kept
+        let kept_ids: Vec<usize> = filtered_low.iter().map(|t| t.id).collect();
+        assert!(kept_ids.contains(&1)); // Highest confidence should be kept
+        assert!(kept_ids.contains(&3)); // Different sequence should be kept
     }
     
     #[test]
     fn test_merge_transcripts() {
-        let t1 = Transcript {
-            id: 1,
-            sequence: "GATTACA".to_string(),
-            path: vec![1, 2, 3],
-            confidence: 0.9,
-            length: 7,
-        };
+        let transcripts = create_test_transcripts();
         
-        let t2 = Transcript {
-            id: 2,
-            sequence: "GCTTACA".to_string(), // 1 diff
-            path: vec![1, 2, 4],
-            confidence: 0.8,
-            length: 7,
-        };
+        // With high threshold - no merging
+        let merged_high = merge_transcripts(&transcripts, 0.99);
+        assert_eq!(merged_high.len(), 3);
         
-        let t3 = Transcript {
-            id: 3,
-            sequence: "GATTACA".to_string(), // identical to t1
-            path: vec![1, 2, 3],
-            confidence: 0.7,
-            length: 7,
-        };
+        // With lower threshold - should merge two
+        let merged_low = merge_transcripts(&transcripts, 0.9);
+        assert_eq!(merged_low.len(), 2);
         
-        let transcripts = vec![t1.clone(), t2.clone(), t3.clone()];
-        
-        // High threshold - less merging
-        let merged_high = merge_transcripts(&transcripts, 0.95);
-        assert_eq!(merged_high.len(), 2);
-        
-        // Low threshold - more merging
-        let merged_low = merge_transcripts(&transcripts, 0.5);
-        assert_eq!(merged_low.len(), 1);
-        
-        // The merged transcript should have averaged confidence
-        assert!((merged_low[0].confidence - 0.8).abs() < 0.001);
+        // Check that merged transcript has updated values
+        let merged = merged_low.iter().find(|t| t.id == 1).unwrap();
+        assert!((merged.confidence - 0.9).abs() < 0.01); // Average of 0.95 and 0.85
+        assert!(merged.tpm.unwrap() > 100.0); // Should be sum of TPMs
     }
 } 

@@ -1,6 +1,5 @@
 use crate::io::fasta::open_fasta;
-use std::fs::File;
-use std::io::{BufReader, BufRead};
+use std::io::BufRead;
 use serde::{Serialize};
 
 #[derive(Serialize)]

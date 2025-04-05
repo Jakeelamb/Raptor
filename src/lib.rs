@@ -1,4 +1,3 @@
-pub mod cli_main;
 pub mod io;
 pub mod kmer;
 pub mod graph;

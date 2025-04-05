@@ -11,3 +11,4 @@ pub mod export;
 pub mod metadata;
 pub mod transcript_io;
 pub mod isoform_runner;
+pub mod gfa_utils;

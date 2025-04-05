@@ -1,5 +1,5 @@
 use crate::io::fastq::{open_fastq, read_fastq_records, read_paired_fastq_records, FastqWriter,
-                             stream_fastq_records, stream_paired_fastq_records, FastqRecord};
+                             stream_fastq_records, stream_paired_fastq_records};
 use crate::kmer::cms::CountMinSketch;
 use crate::kmer::normalize::{should_keep_read, should_keep_read_pair};
 use crate::kmer::kmer::canonical_kmer;

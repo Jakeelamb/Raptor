@@ -1,7 +1,5 @@
 #[cfg(feature = "gpu")]
 use raptor::gpu::kmer_gpu::GpuKmerCounter;
-use std::path::Path;
-use std::time::Instant;
 
 fn main() {
     let input_path_str = "sample_large.fastq";

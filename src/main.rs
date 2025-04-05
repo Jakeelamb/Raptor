@@ -18,6 +18,8 @@ use tracing::info;
 use tracing_subscriber::FmtSubscriber;
 use rayon::ThreadPoolBuilder;
 use cli_main::{Cli, Commands};
+use std::collections::HashMap;
+use ndarray::Array2;
 
 fn main() {
     let subscriber = FmtSubscriber::builder()
@@ -44,13 +46,13 @@ fn main() {
             
             if let Some(input2_path) = input2 {
                 // For paired-end reads
-                if let Err(e) = pipeline::normalize::normalize_paired(&input1, &input2_path, &output, gpu, streaming, coverage_target, max_reads) {
+                if let Err(e) = pipeline::normalize::normalize_paired(&input1, &input2_path, &output, gpu, streaming) {
                     eprintln!("Error during normalization: {}", e);
                     return;
                 }
             } else {
                 // For single-end reads
-                if let Err(e) = pipeline::normalize::normalize_single(&input1, &output, gpu, streaming, coverage_target, max_reads) {
+                if let Err(e) = pipeline::normalize::normalize_single(&input1, &output, gpu, streaming) {
                     eprintln!("Error during normalization: {}", e);
                     return;
                 }
@@ -122,8 +124,7 @@ fn main() {
                 samples, 
                 min_tpm, 
                 polish_reads, 
-                counts_matrix, 
-                min_path_len
+                counts_matrix
             ) {
                 eprintln!("Error during assembly: {}", e);
                 return;
@@ -229,7 +230,6 @@ fn main() {
             let samples: Vec<&str> = header.split('\t').skip(1).collect();
             
             // Create a map to store TPM values for each sample
-            use std::collections::HashMap;
             let mut sample_tpms: HashMap<String, Vec<f64>> = HashMap::new();
             
             // Initialize empty vectors for each sample
@@ -404,117 +404,32 @@ fn main() {
         Commands::GtfCompare { truth, predicted, output } => {
             info!("Comparing GTF files");
             
-            fn load_gtf_ranges(path: &str) -> std::io::Result<std::collections::HashSet<(String, String, usize, usize)>> {
-                use std::io::{BufRead, BufReader};
-                use std::fs::File;
-                
-                let mut ranges = std::collections::HashSet::new();
-                let file = File::open(path)?;
-                let reader = BufReader::new(file);
-                
-                for line in reader.lines() {
-                    let line = line?;
-                    if line.starts_with('#') {
-                        continue;
-                    }
+            // Compare GTF files
+            match eval::compare_gtf(&truth, &predicted) {
+                Ok((tp, fp, fn_)) => {
+                    let (precision, recall, f1) = eval::calculate_metrics(tp, fp, fn_);
                     
-                    let fields: Vec<&str> = line.split('\t').collect();
-                    if fields.len() < 9 {
-                        continue;
-                    }
+                    let results = format!(
+                        "Exon-level metrics:\n\
+                        True positives: {}\n\
+                        False positives: {}\n\
+                        False negatives: {}\n\
+                        Precision: {:.4}\n\
+                        Recall: {:.4}\n\
+                        F1 score: {:.4}",
+                        tp, fp, fn_, precision, recall, f1
+                    );
                     
-                    let chrom = fields[0].to_string();
-                    let feature_type = fields[2].to_string();
+                    println!("{}", results);
                     
-                    if feature_type != "exon" {
-                        continue;
-                    }
-                    
-                    let start: usize = fields[3].parse().unwrap_or(0);
-                    let end: usize = fields[4].parse().unwrap_or(0);
-                    
-                    let mut transcript_id = String::new();
-                    let attr_fields: Vec<&str> = fields[8].split(';').collect();
-                    for attr in attr_fields {
-                        if attr.trim().starts_with("transcript_id") {
-                            let parts: Vec<&str> = attr.split('"').collect();
-                            if parts.len() > 1 {
-                                transcript_id = parts[1].to_string();
-                            }
-                            break;
+                    if let Some(output_path) = output {
+                        if let Err(e) = std::fs::write(&output_path, results) {
+                            eprintln!("Error writing output file: {}", e);
                         }
                     }
-                    
-                    if !transcript_id.is_empty() {
-                        ranges.insert((chrom, transcript_id, start, end));
-                    }
                 }
-                
-                Ok(ranges)
-            }
-            
-            fn calculate_metrics(tp: usize, fp: usize, fn_: usize) -> (f64, f64, f64) {
-                let precision = if tp + fp > 0 { tp as f64 / (tp + fp) as f64 } else { 0.0 };
-                let recall = if tp + fn_ > 0 { tp as f64 / (tp + fn_) as f64 } else { 0.0 };
-                let f1 = if precision + recall > 0.0 { 
-                    2.0 * precision * recall / (precision + recall) 
-                } else { 
-                    0.0 
-                };
-                
-                (precision, recall, f1)
-            }
-            
-            // Load truth and predicted GTF files
-            let truth_ranges = match load_gtf_ranges(&truth) {
-                Ok(r) => r,
                 Err(e) => {
-                    eprintln!("Error loading truth GTF: {}", e);
-                    return;
-                }
-            };
-            
-            let pred_ranges = match load_gtf_ranges(&predicted) {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("Error loading predicted GTF: {}", e);
-                    return;
-                }
-            };
-            
-            // Calculate true positives, false positives, and false negatives
-            let true_positives = pred_ranges.intersection(&truth_ranges).count();
-            let false_positives = pred_ranges.difference(&truth_ranges).count();
-            let false_negatives = truth_ranges.difference(&pred_ranges).count();
-            
-            // Calculate precision, recall, and F1 score
-            let (precision, recall, f1) = calculate_metrics(
-                true_positives,
-                false_positives,
-                false_negatives
-            );
-            
-            let results = format!(
-                "Exon-level metrics:\n\
-                True positives: {}\n\
-                False positives: {}\n\
-                False negatives: {}\n\
-                Precision: {:.4}\n\
-                Recall: {:.4}\n\
-                F1 score: {:.4}",
-                true_positives,
-                false_positives,
-                false_negatives,
-                precision,
-                recall,
-                f1
-            );
-            
-            println!("{}", results);
-            
-            if let Some(output_path) = output {
-                if let Err(e) = std::fs::write(&output_path, results) {
-                    eprintln!("Error writing output file: {}", e);
+                    eprintln!("Error comparing GTF files: {}", e);
                 }
             }
         }
@@ -590,15 +505,36 @@ fn main() {
                 return;
             }
             
+            // Convert to ndarray format for our visualization functions
+            let rows = data.len();
+            let cols = if rows > 0 { data[0].len() } else { 0 };
+            let mut matrix_data = Array2::zeros((rows, cols));
+            
+            for i in 0..rows {
+                for j in 0..cols {
+                    matrix_data[[i, j]] = data[i][j];
+                }
+            }
+            
             if let Some(heatmap_path) = heatmap {
-                match visualize::plot::plot_heatmap_with_labels(&data, &transcript_ids, &sample_names, &heatmap_path) {
+                match visualize::plot::plot_heatmap_with_labels(&matrix_data, &transcript_ids, &sample_names, &heatmap_path) {
                     Ok(()) => info!("Heatmap saved to {}", heatmap_path),
                     Err(e) => eprintln!("Error creating heatmap: {}", e),
                 }
             }
             
             if let Some(pca_path) = pca {
-                match visualize::pca::plot_pca(&data, &sample_names, &pca_path, components) {
+                // Convert to HashMap format for our PCA function
+                let mut sample_data = HashMap::new();
+                for (j, sample) in sample_names.iter().enumerate() {
+                    let mut values = Vec::new();
+                    for i in 0..rows {
+                        values.push(matrix_data[[i, j]]);
+                    }
+                    sample_data.insert(sample.clone(), values);
+                }
+                
+                match visualize::pca::plot_pca(&sample_data, &pca_path) {
                     Ok(()) => info!("PCA plot saved to {}", pca_path),
                     Err(e) => eprintln!("Error creating PCA plot: {}", e),
                 }

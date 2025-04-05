@@ -1,109 +1,94 @@
 use rayon::prelude::*;
 use crate::graph::isoform_graph::IsoformGraph;
-use crate::graph::isoform_traverse::TranscriptPath;
-use crate::graph::transcript::{Transcript, stitch_isoform};
-use crate::graph::assembler::Contig;
-use std::collections::HashSet;
-use petgraph::visit::EdgeRef;
+use crate::graph::isoform_traverse::{find_directed_paths, TranscriptPath};
+use crate::graph::transcript::Transcript;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-/// Process start nodes in parallel to find all possible transcript paths
+/// Process paths in parallel using multiple threads
 pub fn parallel_path_discovery(
     graph: &IsoformGraph,
     start_nodes: &[usize],
+    end_nodes: &[usize],
     max_depth: usize
 ) -> Vec<TranscriptPath> {
-    start_nodes.par_iter()
-        .flat_map(|&start| {
-            // For each start node, find all possible paths
-            let mut paths = Vec::new();
-            let mut stack = Vec::new();
-            let initial_path = vec![start];
-            stack.push((initial_path, HashSet::new()));
-            
-            while let Some((current_path, mut visited)) = stack.pop() {
-                let current_node = *current_path.last().unwrap();
-                visited.insert(current_node);
-                
-                // We've reached max depth, add the path
-                if current_path.len() >= max_depth {
-                    // Calculate confidence as average of edge weights
-                    let confidence = calculate_path_confidence(graph, &current_path);
-                    paths.push(TranscriptPath {
-                        nodes: current_path,
-                        confidence,
-                    });
-                    continue;
-                }
-                
-                // Try all neighbors
-                let mut has_neighbors = false;
-                for edge in graph.edges(current_node) {
-                    let neighbor = edge.target();
-                    
-                    // Skip if we've already visited this node (avoid cycles)
-                    if visited.contains(&neighbor) {
-                        continue;
-                    }
-                    
-                    has_neighbors = true;
-                    
-                    // Create new path with this neighbor
-                    let mut new_path = current_path.clone();
-                    new_path.push(neighbor);
-                    
-                    // Push to stack to continue DFS
-                    stack.push((new_path, visited.clone()));
-                }
-                
-                // If this is a leaf node (no outgoing edges), add the path
-                if !has_neighbors && !current_path.is_empty() {
-                    let confidence = calculate_path_confidence(graph, &current_path);
-                    paths.push(TranscriptPath {
-                        nodes: current_path,
-                        confidence,
-                    });
-                }
-            }
-            
-            paths
+    // Define chunk size based on number of start nodes
+    let chunk_size = (start_nodes.len() / rayon::current_num_threads()).max(1);
+    
+    // Split start nodes into chunks for parallel processing
+    let chunks: Vec<Vec<usize>> = start_nodes.chunks(chunk_size)
+        .map(|chunk| chunk.to_vec())
+        .collect();
+    
+    // Process each chunk in parallel
+    let results: Vec<Vec<TranscriptPath>> = chunks.par_iter()
+        .map(|chunk| {
+            find_directed_paths(graph, chunk, end_nodes, max_depth)
         })
-        .collect()
+        .collect();
+    
+    // Flatten results
+    results.into_iter().flatten().collect()
 }
 
 /// Process transcript assembly in parallel
 pub fn parallel_transcript_assembly(
     paths: &[TranscriptPath],
-    contigs: &[Contig],
-    links: &[(usize, usize, usize)],
-    batch_size: usize
+    contigs: &HashMap<usize, String>,
+    min_confidence: f32
 ) -> Vec<Transcript> {
-    // Process paths in parallel using batches for better performance
-    let transcripts: Vec<_> = paths.par_chunks(batch_size.max(1))
-        .flat_map(|chunk| {
-            chunk.iter().enumerate().map(|(i, path)| {
-                let sequence = stitch_isoform(contigs, &path.nodes, links);
-                Transcript {
-                    id: i + 1, // 1-based IDs for transcripts
-                    sequence: sequence.clone(),
-                    path: path.nodes.clone(),
-                    confidence: path.confidence as f64,
-                    length: sequence.len(),
-                    strand: '+', // Default to forward strand
-                    tpm: None,   // No expression value yet
-                    splicing: "unknown".to_string(), // Unknown splicing events
-                }
-            }).collect::<Vec<_>>()
-        })
+    // Filter paths by confidence
+    let filtered_paths: Vec<&TranscriptPath> = paths.iter()
+        .filter(|path| path.confidence >= min_confidence)
         .collect();
     
-    // Fix transcript IDs
-    transcripts.into_iter()
+    // Convert to Arc for thread-safe sharing
+    let contigs_arc = Arc::new(contigs.clone());
+    
+    // Process in parallel
+    filtered_paths.par_iter()
         .enumerate()
-        .map(|(i, mut t)| {
-            t.id = i;
-            t
+        .map(|(idx, path)| {
+            let contigs = Arc::clone(&contigs_arc);
+            assemble_single_transcript(idx, path, &contigs)
         })
         .collect()
+}
+
+/// Assemble a single transcript from a path
+fn assemble_single_transcript(
+    id: usize,
+    path: &TranscriptPath,
+    contigs: &HashMap<usize, String>
+) -> Transcript {
+    let mut sequence = String::new();
+    
+    // Stitch together contigs along the path
+    for (i, &node_id) in path.nodes.iter().enumerate() {
+        if let Some(contig_seq) = contigs.get(&node_id) {
+            if i == 0 {
+                // First contig is added in full
+                sequence.push_str(contig_seq);
+            } else {
+                // Subsequent contigs might overlap with previous
+                // For simplicity, we're using a fixed overlap of 20 bp
+                // In a real implementation, you'd use the actual overlaps
+                let overlap = 20.min(contig_seq.len());
+                
+                if contig_seq.len() > overlap {
+                    sequence.push_str(&contig_seq[overlap..]);
+                }
+            }
+        }
+    }
+    
+    // Create transcript with appropriate metadata
+    Transcript::new(
+        id,
+        sequence,
+        path.nodes.clone(),
+        path.confidence as f64
+    )
 }
 
 /// Filter transcript paths by confidence score in parallel
@@ -117,7 +102,7 @@ pub fn parallel_path_filtering(
         .collect()
 }
 
-/// Calculate confidence for a path as the average of edge weights
+/// Calculate confidence for a path as the average of edge weights in a DiGraphMap
 fn calculate_path_confidence(graph: &IsoformGraph, path: &[usize]) -> f32 {
     if path.len() <= 1 {
         return 1.0; // Single node has perfect confidence
@@ -127,8 +112,9 @@ fn calculate_path_confidence(graph: &IsoformGraph, path: &[usize]) -> f32 {
     let mut count = 0;
     
     for i in 0..path.len() - 1 {
-        if let Some(weight) = graph.edge_weight(path[i], path[i + 1]) {
-            sum_weights += *weight;
+        // For DiGraphMap, we use edge_weight directly with node IDs
+        if let Some(&weight) = graph.edge_weight(path[i], path[i + 1]) {
+            sum_weights += weight;
             count += 1;
         }
     }
@@ -137,5 +123,51 @@ fn calculate_path_confidence(graph: &IsoformGraph, path: &[usize]) -> f32 {
         0.0
     } else {
         sum_weights / count as f32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use petgraph::Graph;
+    
+    #[test]
+    fn test_parallel_assembly() {
+        // Create test graph
+        let mut graph = Graph::<usize, f32>::new();
+        let n1 = graph.add_node(1);
+        let n2 = graph.add_node(2);
+        let n3 = graph.add_node(3);
+        
+        graph.add_edge(n1, n2, 0.9);
+        graph.add_edge(n2, n3, 0.8);
+        
+        // Create test contigs
+        let mut contigs = HashMap::new();
+        contigs.insert(1, "ATCGATCG".to_string());
+        contigs.insert(2, "ATCGGCTA".to_string());
+        contigs.insert(3, "GCTATAGC".to_string());
+        
+        // Create test paths
+        let path1 = TranscriptPath {
+            nodes: vec![1, 2],
+            confidence: 0.9,
+            length: 16,
+        };
+        
+        let path2 = TranscriptPath {
+            nodes: vec![2, 3],
+            confidence: 0.8,
+            length: 16,
+        };
+        
+        let paths = vec![path1, path2];
+        
+        // Test parallel assembly
+        let transcripts = parallel_transcript_assembly(&paths, &contigs, 0.7);
+        
+        assert_eq!(transcripts.len(), 2);
+        assert_eq!(transcripts[0].path, vec![1, 2]);
+        assert_eq!(transcripts[1].path, vec![2, 3]);
     }
 }

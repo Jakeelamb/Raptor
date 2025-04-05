@@ -1,7 +1,6 @@
 use crate::graph::transcript::Transcript;
 use std::collections::HashMap;
 use std::io::Result;
-use rand;
 
 /// Estimates transcript expression in TPM from a BAM alignment file
 ///

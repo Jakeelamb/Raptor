@@ -1,6 +1,5 @@
 use crate::io::fasta::open_fasta;
-use std::fs::File;
-use std::io::{BufReader, BufRead};
+use std::io::BufRead;
 use serde::{Serialize};
 
 #[derive(Serialize)]
@@ -70,16 +69,16 @@ pub fn calculate_stats(path: &str) -> Stats {
 
 /// Generate and display graph complexity stats from a GFA file
 pub fn calculate_graph_stats(path: &str) -> Option<crate::graph::complexity::PathStats> {
-    use crate::graph::stitch::load_paths_from_gfa;
-    use crate::graph::complexity::compute_path_stats;
+    // Check if the file exists and has a GFA extension
+    if !path.to_lowercase().ends_with(".gfa") {
+        return None;
+    }
     
-    match load_paths_from_gfa(path) {
-        Ok(paths) => {
-            let stats = compute_path_stats(&paths);
-            Some(stats)
-        },
+    // Use the new compute_path_stats function that takes a GFA file path
+    match crate::graph::complexity::compute_path_stats(path) {
+        Ok(stats) => Some(stats),
         Err(e) => {
-            eprintln!("Error loading paths from GFA: {}", e);
+            eprintln!("Error computing graph stats: {}", e);
             None
         }
     }

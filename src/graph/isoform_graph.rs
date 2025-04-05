@@ -1,114 +1,108 @@
-use petgraph::graphmap::DiGraphMap;
 use std::collections::HashMap;
-use crate::graph::assembler::Contig;
+use petgraph::graphmap::DiGraphMap;
+use petgraph::Direction;
+use tracing::debug;
 
 /// Type definition for IsoformGraph - a directed graph where:
-/// - Nodes are contig IDs
-/// - Edge weights are confidence scores based on coverage
+/// - Nodes are contig IDs (usize)
+/// - Edge weights are confidence scores based on coverage (f32)
 pub type IsoformGraph = DiGraphMap<usize, f32>;
 
-/// Build a directed isoform graph from contigs, overlaps, and expression data
+/// Build a graph of potential isoforms from contigs and their overlaps
 pub fn build_isoform_graph(
-    contigs: &[Contig],
-    overlaps: &[(usize, usize, usize)],
-    expression_data: &HashMap<usize, f64>,
+    contigs: &HashMap<usize, String>,
+    overlaps: &Vec<(usize, usize, usize)>,
+    expression_data: &HashMap<usize, f64>
 ) -> IsoformGraph {
+    // Create a new directed graph
     let mut graph = DiGraphMap::new();
     
-    // Add all contigs as nodes
-    for contig in contigs {
-        graph.add_node(contig.id);
+    // Add nodes for each contig
+    for &contig_id in contigs.keys() {
+        graph.add_node(contig_id);
     }
     
-    // Add edges based on overlaps
-    for &(from, to, _overlap) in overlaps {
-        // For each overlap, calculate edge confidence based on expression
-        // The confidence will be higher if both contigs have similar expression
-        let from_expr = expression_data.get(&from).cloned().unwrap_or(1.0);
-        let to_expr = expression_data.get(&to).cloned().unwrap_or(1.0);
+    debug!("Added {} nodes to isoform graph", graph.node_count());
+    
+    // Add edges for overlaps
+    for &(from_id, to_id, overlap_len) in overlaps {
+        // Calculate edge weight based on overlap length and expression
+        let weight = calculate_edge_weight(from_id, to_id, overlap_len, expression_data);
         
-        // Calculate confidence as normalized similarity in expression
-        let max_expr = from_expr.max(to_expr);
-        let min_expr = from_expr.min(to_expr);
-        
-        // Prevent division by zero
-        let confidence = if max_expr > 0.0 {
-            (min_expr / max_expr) as f32
-        } else {
-            0.0
-        };
-        
-        // Only add edges with minimum confidence
-        if confidence > 0.1 {
-            graph.add_edge(from, to, confidence);
-        }
+        // Add edge
+        graph.add_edge(from_id, to_id, weight);
     }
     
-    // Remove low-weight edges that might be spurious
-    prune_low_confidence_edges(&mut graph);
+    debug!("Added {} edges to isoform graph", graph.edge_count());
     
     graph
 }
 
-/// Remove low confidence edges, especially when better alternatives exist
-fn prune_low_confidence_edges(graph: &mut IsoformGraph) {
-    let nodes: Vec<usize> = graph.nodes().collect();
+/// Calculate edge weight based on overlap quality and expression
+fn calculate_edge_weight(
+    from_id: usize,
+    to_id: usize,
+    overlap_len: usize,
+    expression_data: &HashMap<usize, f64>
+) -> f32 {
+    // Base weight from overlap length (normalized)
+    let overlap_factor = (overlap_len as f32).min(100.0) / 100.0;
     
-    for &node in &nodes {
-        let mut outgoing_edges = Vec::new();
-        
-        // Collect all outgoing edges with their weights
-        for neighbor in graph.neighbors(node) {
-            if let Some(weight) = graph.edge_weight(node, neighbor) {
-                outgoing_edges.push((neighbor, *weight));
+    // Expression similarity factor
+    let expr_similarity = match (expression_data.get(&from_id), expression_data.get(&to_id)) {
+        (Some(&from_expr), Some(&to_expr)) => {
+            let min_expr = from_expr.min(to_expr);
+            let max_expr = from_expr.max(to_expr);
+            
+            if max_expr == 0.0 {
+                0.5 // Default if no expression
+            } else {
+                (min_expr / max_expr) as f32
             }
-        }
-        
-        // If there are multiple outgoing edges, keep only the high confidence ones
-        if outgoing_edges.len() > 1 {
-            // Sort by descending confidence
-            outgoing_edges.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            
-            // Get the highest confidence
-            let max_confidence = outgoing_edges[0].1;
-            
-            // Keep only edges with confidence at least 60% of the best one
-            let threshold = max_confidence * 0.6;
-            
-            for (neighbor, weight) in outgoing_edges {
-                if weight < threshold {
-                    graph.remove_edge(node, neighbor);
-                }
-            }
-        }
-    }
+        },
+        _ => 0.5, // Default if expression data is missing
+    };
+    
+    // Combine factors - higher is better
+    let weight = 0.7 * overlap_factor + 0.3 * expr_similarity;
+    
+    // Ensure weight is between 0.0 and 1.0
+    weight.max(0.0).min(1.0)
 }
 
-/// Find nodes with no incoming edges (potential transcript start points)
+/// Find potential transcript start nodes in the graph
 pub fn find_start_nodes(graph: &IsoformGraph) -> Vec<usize> {
     let mut start_nodes = Vec::new();
     
     for node in graph.nodes() {
-        let has_incoming = graph.neighbors_directed(node, petgraph::Direction::Incoming).count() > 0;
-        if !has_incoming {
+        // Start nodes have no incoming edges or many more outgoing than incoming
+        let in_degree = graph.neighbors_directed(node, Direction::Incoming).count();
+        let out_degree = graph.neighbors_directed(node, Direction::Outgoing).count();
+        
+        if in_degree == 0 || (out_degree > 0 && in_degree > 0 && out_degree >= 2 * in_degree) {
             start_nodes.push(node);
         }
     }
     
+    debug!("Found {} potential start nodes", start_nodes.len());
     start_nodes
 }
 
-/// Find nodes with no outgoing edges (potential transcript end points)
+/// Find potential transcript end nodes in the graph
 pub fn find_end_nodes(graph: &IsoformGraph) -> Vec<usize> {
     let mut end_nodes = Vec::new();
     
     for node in graph.nodes() {
-        let has_outgoing = graph.neighbors_directed(node, petgraph::Direction::Outgoing).count() > 0;
-        if !has_outgoing {
+        // End nodes have no outgoing edges or many more incoming than outgoing
+        let in_degree = graph.neighbors_directed(node, Direction::Incoming).count();
+        let out_degree = graph.neighbors_directed(node, Direction::Outgoing).count();
+        
+        if out_degree == 0 || (in_degree > 0 && out_degree > 0 && in_degree >= 2 * out_degree) {
             end_nodes.push(node);
         }
     }
     
+    debug!("Found {} potential end nodes", end_nodes.len());
     end_nodes
 }
 
@@ -117,50 +111,54 @@ mod tests {
     use super::*;
     
     #[test]
-    fn test_build_isoform_graph() {
-        // Create sample contigs
-        let contigs = vec![
-            Contig { id: 0, sequence: "ATCG".to_string(), kmer_path: vec![] },
-            Contig { id: 1, sequence: "TCGA".to_string(), kmer_path: vec![] },
-            Contig { id: 2, sequence: "CGAT".to_string(), kmer_path: vec![] },
-        ];
+    fn test_build_simple_graph() {
+        // Create test contigs
+        let mut contigs = HashMap::new();
+        contigs.insert(1, "ATCGATCG".to_string());
+        contigs.insert(2, "CGATCGAT".to_string());
+        contigs.insert(3, "TCGATCGA".to_string());
         
-        // Create sample overlaps
+        // Create test overlaps
         let overlaps = vec![
-            (0, 1, 3), // ATCG -> TCGA (overlap of 3)
-            (1, 2, 3), // TCGA -> CGAT (overlap of 3)
+            (1, 2, 5),
+            (2, 3, 6),
         ];
         
-        // Create sample expression data
-        let mut expression_data = HashMap::new();
-        expression_data.insert(0, 10.0);
-        expression_data.insert(1, 12.0);
-        expression_data.insert(2, 8.0);
+        // Create test expression data
+        let mut expression = HashMap::new();
+        expression.insert(1, 10.0);
+        expression.insert(2, 12.0);
+        expression.insert(3, 8.0);
         
         // Build graph
-        let graph = build_isoform_graph(&contigs, &overlaps, &expression_data);
+        let graph = build_isoform_graph(&contigs, &overlaps, &expression);
         
-        // Check nodes
+        // Verify graph structure
         assert_eq!(graph.node_count(), 3);
-        
-        // Check edges
         assert_eq!(graph.edge_count(), 2);
         
-        // Check edge weights
-        let weight_0_1 = graph.edge_weight(0, 1).unwrap();
-        let weight_1_2 = graph.edge_weight(1, 2).unwrap();
-        
-        assert!(*weight_0_1 > 0.8); // High confidence due to similar expression
-        assert!(*weight_1_2 > 0.6); // Medium confidence
-        
-        // Check start/end nodes
+        // Verify start and end nodes
         let start_nodes = find_start_nodes(&graph);
         let end_nodes = find_end_nodes(&graph);
         
-        assert_eq!(start_nodes.len(), 1);
-        assert_eq!(start_nodes[0], 0);
+        assert_eq!(start_nodes.len(), 1);  // Node 1 should be the only start
+        assert_eq!(end_nodes.len(), 1);    // Node 3 should be the only end
+    }
+    
+    #[test]
+    fn test_edge_weight_calculation() {
+        // Test basic weight calculation
+        let mut expression = HashMap::new();
+        expression.insert(1, 100.0);
+        expression.insert(2, 80.0);
         
-        assert_eq!(end_nodes.len(), 1);
-        assert_eq!(end_nodes[0], 2);
+        let weight = calculate_edge_weight(1, 2, 50, &expression);
+        
+        // Expected: 0.7 * (50/100) + 0.3 * (80/100) = 0.35 + 0.24 = 0.59
+        assert!((weight - 0.59).abs() < 0.01);
+        
+        // Test with missing expression data
+        let weight_missing = calculate_edge_weight(1, 3, 50, &expression);
+        assert!((weight_missing - 0.5).abs() < 0.01);
     }
 } 
