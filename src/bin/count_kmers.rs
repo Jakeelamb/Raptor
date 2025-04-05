@@ -1,5 +1,5 @@
-use assembler::io::fastq::{open_fastq, read_fastq_records};
-use assembler::kmer::{cms::CountMinSketch, kmer::canonical_kmer};
+use raptor::io::fastq::{open_fastq, read_fastq_records};
+use raptor::kmer::{cms::CountMinSketch, kmer::canonical_kmer};
 use std::collections::HashMap;
 use std::time::Instant;
 

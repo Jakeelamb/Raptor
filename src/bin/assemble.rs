@@ -1,7 +1,7 @@
-use assembler::io::fastq::{open_fastq, read_fastq_records};
-use assembler::io::fasta::FastaWriter;
-use assembler::kmer::kmer::canonical_kmer;
-use assembler::graph::assembler::{greedy_assembly};
+use raptor::io::fastq::{open_fastq, read_fastq_records};
+use raptor::io::fasta::FastaWriter;
+use raptor::kmer::kmer::canonical_kmer;
+use raptor::graph::assembler::{greedy_assembly};
 use rayon::ThreadPoolBuilder;
 
 use std::collections::HashMap;

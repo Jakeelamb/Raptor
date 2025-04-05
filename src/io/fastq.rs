@@ -166,3 +166,24 @@ impl FastqWriter {
         Ok(())
     }
 }
+
+/// Read long reads from a FASTQ file
+/// 
+/// This function reads all records from a FASTQ file and returns them as a vector.
+/// It's specifically intended for loading long reads for transcript polishing.
+///
+/// # Arguments
+/// * `path` - Path to the FASTQ file (can be gzipped)
+///
+/// # Returns
+/// * Result containing a vector of FastqRecord on success, or an io::Error on failure
+pub fn read_long_reads(path: &str) -> io::Result<Vec<FastqRecord>> {
+    let reader = open_fastq(path);
+    let records: Vec<FastqRecord> = stream_fastq_records(reader).collect();
+    
+    if records.is_empty() {
+        Err(io::Error::new(io::ErrorKind::InvalidData, "No reads found in the file"))
+    } else {
+        Ok(records)
+    }
+}

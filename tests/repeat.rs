@@ -1,5 +1,5 @@
-use assembler::graph::simplify::collapse_repeats;
-use assembler::graph::assembler::Contig;
+use raptor::graph::simplify::collapse_repeats;
+use raptor::graph::assembler::Contig;
 
 #[test]
 fn test_repeat_collapse() {

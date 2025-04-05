@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
-#[command(name = "Assembler", version, about = "High-performance Rust-based assembler", long_about = None)]
+#[command(name = "Raptor", version, about = "High-performance Rust-based assembler", long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -117,6 +117,10 @@ pub enum Commands {
         /// Optional path to write isoform GTF
         #[arg(long)]
         gtf: Option<String>,
+        
+        /// Export transcript counts matrix
+        #[arg(long)]
+        counts_matrix: bool,
         
         /// Optional path to write isoform GFF3
         #[arg(long)]
@@ -285,15 +289,27 @@ pub enum Commands {
         output: Option<String>,
     },
     
-    /// Visualize TPM matrix with PCA plot
+    /// Visualize TPM matrix with PCA plot and heatmap
     Visualize {
         /// Path to TPM matrix
         #[arg(long)]
         matrix: String,
         
-        /// Output plot file (SVG or PNG)
+        /// Output PCA plot file (SVG or PNG)
         #[arg(long)]
         output: String,
+        
+        /// Output heatmap file (PNG)
+        #[arg(long)]
+        heatmap: Option<String>,
+        
+        /// Output PCA file (PNG)
+        #[arg(long)]
+        pca: Option<String>,
+        
+        /// Number of components for PCA (default: 2)
+        #[arg(long, default_value_t = 2)]
+        components: usize,
     },
     
     /// Traverse paths in a GFA file and export sequences

@@ -1,101 +1,100 @@
 #!/bin/bash
 
-# This script demonstrates how to run the assembler with isoform detection
-# and custom GTF output
+# This script demonstrates how to run the Raptor with isoform detection
 
-# Make script exit on any error
-set -e
-
-# Default values
-INPUT_FILE="reads.fastq.gz"
-OUTPUT_PREFIX="output"
-GTF_FILE="output.gtf"
+# Set variables for input and output
+INPUT_FASTQ="sample_large.fastq"
+OUTPUT_PREFIX="assembled"
 MIN_CONFIDENCE=0.25
-MAX_PATH_DEPTH=20
-
-# Parse command line arguments
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    -i|--input)
-      INPUT_FILE="$2"
-      shift 2
-      ;;
-    -o|--output)
-      OUTPUT_PREFIX="$2"
-      shift 2
-      ;;
-    --gtf)
-      GTF_FILE="$2"
-      shift 2
-      ;;
-    --min-confidence)
-      MIN_CONFIDENCE="$2"
-      shift 2
-      ;;
-    --max-path-depth)
-      MAX_PATH_DEPTH="$2"
-      shift 2
-      ;;
-    -h|--help)
-      echo "Usage: $0 [-i INPUT_FILE] [-o OUTPUT_PREFIX] [--gtf GTF_FILE] [--min-confidence CONFIDENCE] [--max-path-depth DEPTH]"
-      echo "Run assembler with isoform detection enabled"
-      echo ""
-      echo "Options:"
-      echo "  -i, --input FILE          Input FASTQ(.gz) file (default: reads.fastq.gz)"
-      echo "  -o, --output PREFIX       Output file prefix (default: output)"
-      echo "  --gtf FILE                GTF output file (default: output.gtf)"
-      echo "  --min-confidence VALUE    Minimum confidence for keeping isoform paths (default: 0.25)"
-      echo "  --max-path-depth VALUE    Maximum path depth for isoform traversal (default: 20)"
-      echo "  -h, --help                Show this help message"
-      exit 0
-      ;;
-    *)
-      echo "Unknown option: $1"
-      exit 1
-      ;;
-  esac
-done
+THREADS=$(nproc)
 
 # Check if input file exists
-if [ ! -f "$INPUT_FILE" ]; then
-  echo "Error: Input file $INPUT_FILE does not exist"
-  exit 1
+if [ ! -f "$INPUT_FASTQ" ]; then
+    echo "Error: Input file $INPUT_FASTQ not found"
+    echo "Generating sample data..."
+    cargo run --bin generate_sample
+    
+    if [ ! -f "$INPUT_FASTQ" ]; then
+        echo "Failed to generate sample data. Exiting."
+        exit 1
+    fi
+    
+    echo "Sample data generated successfully."
 fi
 
-echo "Running assembler with isoform detection:"
-echo "  Input: $INPUT_FILE"
-echo "  Output prefix: $OUTPUT_PREFIX"
-echo "  GTF file: $GTF_FILE"
-echo "  Min confidence: $MIN_CONFIDENCE"
-echo "  Max path depth: $MAX_PATH_DEPTH"
-echo ""
+# Function to check if compilation is needed
+need_compile() {
+    if [ ! -f "target/release/raptor" ]; then
+        return 0  # Need to compile
+    fi
+    
+    # Check if any source files are newer than the binary
+    if find src -name "*.rs" -newer "target/release/raptor" | grep -q .; then
+        return 0  # Need to compile
+    fi
+    
+    return 1  # No need to compile
+}
 
-# Compile if needed (comment out if already compiled)
-echo "Compiling assembler..."
-cargo build --release
+# Display header
+echo "======================================================"
+echo "Raptor RNA-Seq Assembly with Isoform Detection"
+echo "======================================================"
+echo "Input: $INPUT_FASTQ"
+echo "Output: ${OUTPUT_PREFIX}_*.fasta"
+echo "Threads: $THREADS"
+echo "Min confidence: $MIN_CONFIDENCE"
+echo "======================================================"
 
-# Run the assembler with isoform detection
-echo "Running assembler..."
-cargo run --release -- assemble \
-  -i "$INPUT_FILE" \
-  -o "$OUTPUT_PREFIX" \
-  --isoforms \
-  --gtf "$GTF_FILE" \
-  --min-confidence "$MIN_CONFIDENCE" \
-  --max-path-depth "$MAX_PATH_DEPTH"
+# Check if we need to compile
+if need_compile; then
+    echo "Run Raptor with isoform detection enabled"
+    cargo build --release
+fi
 
-# Check results
-if [ -f "$GTF_FILE" ]; then
-  echo "Success! GTF file created: $GTF_FILE"
-  echo "Transcript count: $(grep -c 'transcript' "$GTF_FILE")"
+echo "======================================================"
+# Run with isoform detection disabled (basic mode)
+echo "Running Raptor in basic mode (without isoform detection):"
+target/release/raptor assemble \
+    -i "$INPUT_FASTQ" \
+    -o "${OUTPUT_PREFIX}_basic" \
+    --threads "$THREADS"
+
+echo "======================================================"
+# Run with isoform detection enabled
+echo "Running Raptor with isoform detection:"
+target/release/raptor assemble \
+    -i "$INPUT_FASTQ" \
+    -o "$OUTPUT_PREFIX" \
+    --isoforms \
+    --threads "$THREADS" \
+    --min-confidence "$MIN_CONFIDENCE" \
+    --gfa --gfa2 --gtf "${OUTPUT_PREFIX}.gtf" --gff3 "${OUTPUT_PREFIX}.gff3" \
+    --json-metadata "${OUTPUT_PREFIX}_meta.json" --tsv-metadata "${OUTPUT_PREFIX}_meta.tsv"
+
+# If needed, compile with custom features
+if [ "$NEED_CUSTOM_COMPILE" = "true" ]; then
+    echo "Compiling Raptor..."
+    cargo build --release --features "gpu,avx2"
+fi
+
+# Run the Raptor with isoform detection
+echo "Running Raptor..."
+
+# Check if running succeeded
+if [ $? -eq 0 ]; then
+    echo "======================================================"
+    echo "Assembly completed successfully!"
+    echo "Output files:"
+    echo "  - ${OUTPUT_PREFIX}.fasta        (Main assembly)"
+    echo "  - ${OUTPUT_PREFIX}_isoforms.fasta   (Isoform sequences)"
+    echo "  - ${OUTPUT_PREFIX}.gfa          (Assembly graph)"
+    echo "  - ${OUTPUT_PREFIX}.gtf          (Gene annotations)"
+    echo "  - ${OUTPUT_PREFIX}.gff3         (Gene annotations, GFF3 format)"
+    echo "  - ${OUTPUT_PREFIX}_meta.json    (Metadata, JSON format)"
+    echo "  - ${OUTPUT_PREFIX}_meta.tsv     (Metadata, TSV format)"
+    echo "======================================================"
 else
-  echo "Error: GTF file was not created"
-  exit 1
+    echo "Assembly failed."
+    exit 1
 fi
-
-echo "Isoform FASTA file: ${OUTPUT_PREFIX}.isoforms.fasta"
-echo "Isoform GFA file: ${OUTPUT_PREFIX}.isoforms.gfa"
-echo "Isoform JSON file: ${OUTPUT_PREFIX}.isoforms.json"
-echo "Statistics file: ${OUTPUT_PREFIX}.isoforms.stats.json"
-
-echo "Done."

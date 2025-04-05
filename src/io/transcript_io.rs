@@ -61,23 +61,26 @@ impl TranscriptGtfWriter {
     pub fn write_transcripts(&mut self, transcripts: &[Transcript]) -> io::Result<()> {
         for transcript in transcripts {
             let transcript_id = format!("transcript_{}", transcript.id);
+            let gene_id = format!("gene_{}", transcript.id);
             
             // Write transcript entry
             writeln!(
                 self.writer,
                 "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 transcript_id, // seqname
-                "assembler",  // source
+                "RNAtools",  // source
                 "transcript", // feature
                 1,            // start
                 transcript.length, // end
                 transcript.confidence, // score
-                "+",          // strand (assuming all are positive)
+                transcript.strand,  // strand (now using the strand field)
                 ".",          // frame
-                format!("transcript_id \"{}\"; confidence \"{:.4}\"; path \"{}\";",
+                format!("gene_id \"{}\"; transcript_id \"{}\"; confidence \"{:.4}\"; tpm \"{:.3}\"; splicing \"{}\";",
+                    gene_id,
                     transcript_id,
                     transcript.confidence,
-                    transcript.path.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")
+                    transcript.tpm.unwrap_or(0.0),
+                    transcript.splicing
                 )
             )?;
             
@@ -86,14 +89,17 @@ impl TranscriptGtfWriter {
                 self.writer,
                 "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 transcript_id, // seqname
-                "assembler",  // source
+                "RNAtools",  // source
                 "exon",       // feature
                 1,            // start
                 transcript.length, // end
                 transcript.confidence, // score
-                "+",          // strand
+                transcript.strand,   // strand - use transcript strand
                 ".",          // frame
-                format!("transcript_id \"{}\"; exon_number \"1\";", transcript_id)
+                format!("gene_id \"{}\"; transcript_id \"{}\"; exon_number \"1\";", 
+                    gene_id, 
+                    transcript_id
+                )
             )?;
         }
         
@@ -179,6 +185,9 @@ mod tests {
                 path: vec![1, 2, 3],
                 confidence: 0.95,
                 length: 7,
+                strand: '+',
+                tpm: Some(100.0),
+                splicing: "linear".to_string(),
             },
             Transcript {
                 id: 2,
@@ -186,6 +195,9 @@ mod tests {
                 path: vec![4, 5],
                 confidence: 0.85,
                 length: 8,
+                strand: '-',
+                tpm: Some(75.5),
+                splicing: "skipping".to_string(),
             },
         ]
     }
@@ -224,8 +236,8 @@ mod tests {
         let mut contents = String::new();
         file.read_to_string(&mut contents).unwrap();
         
-        assert!(contents.contains("transcript_1\tassembler\ttranscript"));
-        assert!(contents.contains("transcript_2\tassembler\ttranscript"));
+        assert!(contents.contains("transcript_1\traptor\ttranscript"));
+        assert!(contents.contains("transcript_2\traptor\ttranscript"));
         assert!(contents.contains("exon"));
         assert!(contents.contains("transcript_id \"transcript_1\""));
     }

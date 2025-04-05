@@ -1,7 +1,7 @@
-use assembler::io::fastq::{open_fastq, read_fastq_records, FastqWriter};
-use assembler::kmer::cms::CountMinSketch;
-use assembler::kmer::normalize::should_keep_read;
-use assembler::kmer::kmer::canonical_kmer;
+use raptor::io::fastq::{open_fastq, read_fastq_records, FastqWriter};
+use raptor::kmer::cms::CountMinSketch;
+use raptor::kmer::normalize::should_keep_read;
+use raptor::kmer::kmer::canonical_kmer;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

@@ -1,6 +1,6 @@
-# Performance Optimization Opportunities
+# 🚀 Optimization TODO List
 
-This document tracks potential optimizations for improving the performance of the Ultimate Rust K-mer Assembler.
+This document tracks potential optimizations for improving the performance of the Raptor.
 
 ## SIMD Acceleration
 

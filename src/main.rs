@@ -73,6 +73,7 @@ fn main() {
             samples,
             min_tpm,
             polish_reads,
+            counts_matrix,
         } => {
             info!("Starting assembly: input = {}, output = {}, min_len = {}, threads = {}", 
                   input, output, min_len, threads);
@@ -91,7 +92,8 @@ fn main() {
                     collapse_repeats, min_repeat_len, polish, polish_window,
                     streaming, export_metadata, json_metadata, tsv_metadata, 
                     isoforms, gtf, gff3, max_path_depth, min_confidence, 
-                    compute_tpm, polish_isoforms, samples, min_tpm, polish_reads
+                    compute_tpm, polish_isoforms, samples, min_tpm, polish_reads,
+                    counts_matrix
                 );
             }
         }
@@ -518,22 +520,92 @@ fn main() {
             }
         }
         
-        Commands::Visualize { matrix, output } => {
+        Commands::Visualize { matrix, output, heatmap, pca, components } => {
             info!("Generating visualization for TPM matrix: {}", matrix);
             
             use crate::quant::matrix::read_tpm_matrix;
-            use crate::visualize::pca::plot_pca;
+            use crate::visualize::pca::{plot_pca, compute_pca, plot_pca_simple};
+            use crate::visualize::plot::{plot_heatmap, plot_heatmap_with_labels};
+            use ndarray::Array2;
             
             match read_tpm_matrix(&matrix) {
                 Ok(samples) => {
                     info!("Loaded TPM data for {} samples", samples.len());
                     
+                    // Legacy output parameter (backwards compatibility)
                     match plot_pca(&samples, &output) {
                         Ok(_) => {
                             info!("PCA visualization saved to {}", output);
                         },
                         Err(e) => {
                             eprintln!("Error generating PCA plot: {}", e);
+                        }
+                    }
+                    
+                    // Generate heatmap if requested
+                    if let Some(heatmap_path) = heatmap {
+                        // Convert HashMap to ndarray
+                        let sample_names: Vec<String> = samples.keys().cloned().collect();
+                        let n_samples = sample_names.len();
+                        
+                        if n_samples > 0 {
+                            let first_sample = &samples[&sample_names[0]];
+                            let n_features = first_sample.len();
+                            
+                            let mut matrix = Array2::zeros((n_samples, n_features));
+                            for (i, name) in sample_names.iter().enumerate() {
+                                for (j, val) in samples[name].iter().enumerate() {
+                                    matrix[[i, j]] = *val;
+                                }
+                            }
+                            
+                            // Get transcript IDs as column labels
+                            let transcript_labels: Vec<String> = (0..n_features)
+                                .map(|i| format!("transcript_{}", i+1))
+                                .collect();
+                            
+                            match plot_heatmap_with_labels(&matrix, &sample_names, &transcript_labels, &heatmap_path) {
+                                Ok(_) => {
+                                    info!("Heatmap visualization saved to {}", heatmap_path);
+                                },
+                                Err(e) => {
+                                    eprintln!("Error generating heatmap: {}", e);
+                                }
+                            }
+                        } else {
+                            eprintln!("No samples found in the TPM matrix");
+                        }
+                    }
+                    
+                    // Generate PCA plot if requested
+                    if let Some(pca_path) = pca {
+                        // Convert HashMap to ndarray
+                        let sample_names: Vec<String> = samples.keys().cloned().collect();
+                        let n_samples = sample_names.len();
+                        
+                        if n_samples > 0 {
+                            let first_sample = &samples[&sample_names[0]];
+                            let n_features = first_sample.len();
+                            
+                            let mut matrix = Array2::zeros((n_samples, n_features));
+                            for (i, name) in sample_names.iter().enumerate() {
+                                for (j, val) in samples[name].iter().enumerate() {
+                                    matrix[[i, j]] = *val;
+                                }
+                            }
+                            
+                            // Compute PCA and generate plot
+                            let pca_result = compute_pca(&matrix, components);
+                            match plot_pca_simple(&pca_result, &pca_path) {
+                                Ok(_) => {
+                                    info!("PCA visualization saved to {}", pca_path);
+                                },
+                                Err(e) => {
+                                    eprintln!("Error generating PCA plot: {}", e);
+                                }
+                            }
+                        } else {
+                            eprintln!("No samples found in the TPM matrix");
                         }
                     }
                 },

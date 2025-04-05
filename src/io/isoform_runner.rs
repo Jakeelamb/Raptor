@@ -101,7 +101,7 @@ pub fn run_isoform_reconstruction(
     
     // Assemble transcripts
     info!("Assembling transcripts");
-    let mut transcripts = assemble_transcripts(&filtered_paths, &contigs, &overlaps);
+    let mut transcripts = assemble_transcripts(&filtered_paths, &contigs, &overlaps, None);
     info!("Assembled {} transcripts", transcripts.len());
     
     // Apply similarity filtering if requested

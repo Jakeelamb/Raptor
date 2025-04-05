@@ -13,3 +13,4 @@ pub mod transcript;
 pub mod isoform_filter;
 pub mod isoform_parallel;
 pub mod stats;
+pub mod partition;

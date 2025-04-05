@@ -2,6 +2,7 @@ use crate::graph::assembler::Contig;
 use crate::graph::isoform_traverse::TranscriptPath;
 use crate::kmer::rle;
 use std::collections::{HashMap, HashSet};
+use petgraph::graphmap::DiGraphMap;
 
 /// Represents a transcript assembled from a path of contigs
 #[derive(Debug, Clone)]
@@ -16,6 +17,12 @@ pub struct Transcript {
     pub confidence: f64,
     /// Length of the transcript sequence
     pub length: usize,
+    /// Strand information ('+' or '-')
+    pub strand: char,
+    /// Transcript per million (TPM) expression value
+    pub tpm: Option<f64>,
+    /// Alternative splicing events
+    pub splicing: String,
 }
 
 /// Stitch together a transcript sequence from a path of contigs
@@ -58,11 +65,59 @@ pub fn stitch_isoform(
     sequence
 }
 
+/// Detect alternative splicing events in a transcript path
+pub fn detect_splicing(path: &[usize], graph: &DiGraphMap<usize, f32>) -> String {
+    let mut events = vec![];
+    
+    // Check for exon skipping by looking for edges that skip nodes in the path
+    for window in path.windows(3) {
+        if let [a, b, c] = *window {
+            if graph.contains_edge(a, c) {
+                events.push("skipping");
+            }
+        }
+    }
+    
+    // Check for alternative 5' splice sites
+    for i in 0..path.len().saturating_sub(1) {
+        let current = path[i];
+        let mut alt_next = false;
+        
+        // Check if multiple outgoing edges from current node
+        let out_neighbors: Vec<_> = graph.neighbors_directed(current, petgraph::Direction::Outgoing).collect();
+        if out_neighbors.len() > 1 {
+            events.push("alt_5prime");
+        }
+    }
+    
+    // Check for alternative 3' splice sites
+    for i in 1..path.len() {
+        let current = path[i];
+        
+        // Check if multiple incoming edges to current node
+        let in_neighbors: Vec<_> = graph.neighbors_directed(current, petgraph::Direction::Incoming).collect();
+        if in_neighbors.len() > 1 {
+            events.push("alt_3prime");
+        }
+    }
+    
+    // Remove duplicates and sort
+    events.sort();
+    events.dedup();
+    
+    if events.is_empty() { 
+        "linear".into() 
+    } else { 
+        events.join(",") 
+    }
+}
+
 /// Assemble transcripts from multiple paths
 pub fn assemble_transcripts(
     paths: &[TranscriptPath],
     contigs: &[Contig],
-    overlaps: &[(usize, usize, usize)]
+    overlaps: &[(usize, usize, usize)],
+    graph: Option<&DiGraphMap<usize, f32>>
 ) -> Vec<Transcript> {
     let mut transcripts = Vec::new();
     
@@ -76,12 +131,22 @@ pub fn assemble_transcripts(
     for (i, path) in paths.iter().enumerate() {
         let sequence = stitch_isoform(contigs, &path.nodes, overlaps);
         
+        // Detect splicing events if graph is provided
+        let splicing = if let Some(g) = graph {
+            detect_splicing(&path.nodes, g)
+        } else {
+            "unknown".to_string()
+        };
+        
         transcripts.push(Transcript {
             id: i + 1, // 1-based IDs for transcripts
             sequence: sequence.clone(),
             path: path.nodes.clone(),
             confidence: path.confidence as f64,
             length: sequence.len(),
+            strand: '+', // Default to forward strand
+            tpm: None,   // No expression value yet
+            splicing,    // Detected splicing events
         });
     }
     
@@ -272,7 +337,7 @@ mod tests {
         ];
         
         // Assemble transcripts
-        let transcripts = assemble_transcripts(&paths, &contigs, &overlaps);
+        let transcripts = assemble_transcripts(&paths, &contigs, &overlaps, None);
         
         // Should produce two transcripts
         assert_eq!(transcripts.len(), 2);

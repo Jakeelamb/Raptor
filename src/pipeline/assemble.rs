@@ -13,6 +13,7 @@ use std::path::Path as FilePath;
 use tracing::{info, warn};
 use std::fs;
 use std::io::Write;
+
 pub fn assemble_reads(
     input_path: &str, 
     output_path: &str, 
@@ -36,9 +37,10 @@ pub fn assemble_reads(
     min_confidence: f64,
     compute_tpm: bool,
     polish_isoforms: bool,
-    samples: Option<String>,
+    samples_path: Option<String>,
     min_tpm: f64,
-    polish_reads: Option<String>,
+    long_reads: Option<String>,
+    counts_matrix: bool,
 ) { 
     assemble_reads_old(
         input_path, output_path, min_len, output_gfa, output_gfa2, 
@@ -46,7 +48,7 @@ pub fn assemble_reads(
         polish, polish_window, streaming, export_metadata, 
         json_metadata, tsv_metadata, isoforms, gtf_path, gff3_path, 
         max_path_depth, min_confidence, compute_tpm, polish_isoforms,
-        samples, min_tpm, polish_reads
+        samples_path, min_tpm, long_reads, counts_matrix
     ); 
 }
 
@@ -73,9 +75,10 @@ pub fn assemble_reads_old(
     min_confidence: f64,
     compute_tpm: bool,
     polish_isoforms: bool,
-    samples: Option<String>,
+    samples_path: Option<String>,
     min_tpm: f64,
-    polish_reads: Option<String>,
+    long_reads: Option<String>,
+    counts_matrix: bool,
 ) {
     info!("Starting assembly from: {}", input_path);
     
@@ -263,8 +266,52 @@ pub fn assemble_reads_old(
 
         // Process isoforms if requested
         if isoforms {
-            use crate::pipeline::isoform_processor::process_isoforms;
-            let mut transcripts = process_isoforms(&contigs, &links, &kmer_counts, output_path, gtf_path.as_deref(), max_path_depth, min_confidence, get_output_filename);
+            info!("Performing isoform inference from assembly graph");
+            
+            // Default values for new parameters
+            let min_tpm_value = None; // No TPM filtering by default
+            let strand_aware_value = false; // Non-strand-aware by default
+            let bam_path_value = None; // No BAM file for quantification
+            let long_reads_value = None; // No long reads for polishing
+            
+            let mut transcripts = crate::pipeline::isoform_processor::process_isoforms(
+                &contigs,
+                &links,
+                &kmer_counts,
+                output_path,
+                gtf_path.as_deref(),
+                max_path_depth,
+                min_confidence,
+                min_tpm_value,
+                strand_aware_value,
+                bam_path_value,
+                long_reads_value,
+                get_output_filename
+            );
+            
+            info!("Generated {} transcript isoforms", transcripts.len());
+            
+            // Export counts matrix
+            if counts_matrix {
+                info!("Writing isoform counts matrix");
+                let counts_matrix_path = format!("{}_isoform.counts.matrix", output_path);
+                if let Err(e) = crate::quant::matrix::write_isoform_counts_matrix(&transcripts, &counts_matrix_path) {
+                    warn!("Failed to write counts matrix: {}", e);
+                } else {
+                    info!("Counts matrix written to: {}", counts_matrix_path);
+                }
+            }
+            
+            // Export GTF if requested
+            if let Some(gtf_path) = &gtf_path {
+                info!("Writing isoform GTF to: {}", gtf_path);
+                use crate::io::gtf::write_gtf;
+                if let Err(e) = write_gtf(&transcripts, gtf_path) {
+                    warn!("Failed to write GTF file: {}", e);
+                } else {
+                    info!("GTF output complete: {} transcripts written", transcripts.len());
+                }
+            }
             
             // Export GFF3 if requested
             if let Some(gff3_path) = &gff3_path {
@@ -338,7 +385,7 @@ pub fn assemble_reads_old(
                 }
                 
                 // Process multiple samples if provided
-                if let Some(sample_file) = &samples {
+                if let Some(sample_file) = &samples_path {
                     use std::collections::HashMap;
                     use crate::io::sam::parse_sam_transcript_hits;
                     use crate::quant::matrix::write_counts_matrix;
@@ -397,7 +444,7 @@ pub fn assemble_reads_old(
             }
             
             // Apply transcript polishing with long reads if requested
-            if let Some(polish_sam_path) = &polish_reads {
+            if let Some(polish_sam_path) = &long_reads {
                 info!("Polishing transcript sequences with long read alignments from {}", polish_sam_path);
                 use crate::polish::longread::polish_transcripts;
                 

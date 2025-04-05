@@ -1,5 +1,5 @@
-use assembler::graph::polish::polish_contig;
-use assembler::io::fastq::FastqRecord;
+use raptor::graph::polish::polish_contig;
+use raptor::io::fastq::FastqRecord;
 
 #[test]
 fn test_polish_simple() {

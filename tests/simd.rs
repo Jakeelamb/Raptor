@@ -1,4 +1,4 @@
-use assembler::accel::simd::{
+use raptor::accel::simd::{
     hamming_distance_simd, 
     reverse_complement_simd, 
     match_kmers_simd,

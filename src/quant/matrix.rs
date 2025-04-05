@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use crate::graph::transcript::Transcript;
 
 /// Generate matrix from isoform -> TPM mapping per sample
@@ -29,7 +29,7 @@ pub fn write_counts_matrix(
 }
 
 /// Read a TPM matrix file into a map of sample name -> transcript TPM values
-pub fn read_tpm_matrix(path: &str) -> Result<HashMap<String, Vec<f64>>, std::io::Error> {
+pub fn read_tpm_matrix(path: &str) -> std::io::Result<HashMap<String, Vec<f64>>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let mut lines = reader.lines();
@@ -75,4 +75,32 @@ pub fn read_tpm_matrix(path: &str) -> Result<HashMap<String, Vec<f64>>, std::io:
     }
     
     Ok(result)
+}
+
+/// Writes transcript information to a counts matrix format
+///
+/// # Arguments
+/// * `transcripts` - Vector of transcripts to write
+/// * `out_path` - Output file path
+///
+/// # Returns
+/// * IO Result
+pub fn write_isoform_counts_matrix(transcripts: &[Transcript], out_path: &str) -> std::io::Result<()> {
+    let file = File::create(out_path)?;
+    let mut w = BufWriter::new(file);
+
+    writeln!(w, "transcript_id\tlength\ttpm\tconfidence")?;
+
+    for tx in transcripts {
+        writeln!(
+            w,
+            "transcript_{}\t{}\t{:.3}\t{:.2}",
+            tx.id,
+            tx.sequence.len(),
+            tx.tpm.unwrap_or(0.0),
+            tx.confidence
+        )?;
+    }
+
+    Ok(())
 } 

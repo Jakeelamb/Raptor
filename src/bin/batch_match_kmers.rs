@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
 use clap::Parser;
-use assembler::accel::simd::batch_match_kmers_simd;
+use raptor::accel::simd::batch_match_kmers_simd;
 
 /// Batch k-mer matching using SIMD and parallel processing acceleration
 #[derive(Parser, Debug)]

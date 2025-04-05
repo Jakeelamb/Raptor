@@ -1,5 +1,5 @@
-use assembler::graph::assembler::{greedy_assembly};
-use assembler::kmer::kmer::canonical_kmer;
+use raptor::graph::assembler::{greedy_assembly};
+use raptor::kmer::kmer::canonical_kmer;
 use std::collections::HashMap;
 
 #[test]

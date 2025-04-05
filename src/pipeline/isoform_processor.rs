@@ -1,9 +1,13 @@
 use crate::graph::assembler::Contig;
 use crate::graph::isoform_graph::{build_isoform_graph, find_start_nodes, IsoformGraph};
 use crate::graph::isoform_parallel::{parallel_path_discovery, parallel_transcript_assembly, parallel_path_filtering};
-use crate::graph::transcript::{calculate_transcript_stats, Transcript};
+use crate::graph::transcript::{calculate_transcript_stats, Transcript, detect_splicing};
 use crate::io::transcript_io::{TranscriptFastaWriter, TranscriptGtfWriter, write_transcript_json, add_transcripts_to_gfa, write_transcript_stats};
+use crate::quant::align_counts::filter_by_tpm;
+use crate::polish::longread::polish_transcripts_with_long_reads;
+use crate::io::fastq::FastqRecord;
 use std::collections::HashMap;
+use petgraph::graphmap::DiGraphMap;
 use tracing::info;
 
 /// Processes transcripts/isoforms from assembled contigs
@@ -15,6 +19,10 @@ pub fn process_isoforms(
     gtf_path: Option<&str>,
     max_path_depth: usize,
     min_confidence: f64,
+    min_tpm: Option<f64>,
+    strand_specific: bool,
+    bam_path: Option<&str>,
+    long_reads: Option<&[FastqRecord]>,
     get_output_filename: fn(&str, &str) -> String,
 ) -> Vec<Transcript> {
     info!("Performing isoform inference and transcript path export with parallel traversal");
@@ -64,7 +72,37 @@ pub fn process_isoforms(
     // Process paths into transcripts in parallel
     info!("Assembling transcripts from paths in parallel");
     let batch_size = 50; // Process in batches for better performance
-    let transcripts = parallel_transcript_assembly(&filtered_paths, contigs, links, batch_size);
+    
+    // Create DiGraphMap for splicing detection
+    let mut digraph = DiGraphMap::<usize, f32>::new();
+    for (from, to, overlap) in links {
+        digraph.add_edge(*from, *to, *overlap as f32);
+    }
+    
+    // Get transcripts with splicing events detected
+    let mut transcripts = parallel_transcript_assembly_with_splicing(&filtered_paths, contigs, links, &digraph, batch_size, strand_specific);
+    
+    // Polish with long reads if available
+    if let Some(reads) = long_reads {
+        info!("Polishing transcripts with {} long reads", reads.len());
+        transcripts = polish_transcripts_with_long_reads(&transcripts, reads);
+    }
+    
+    // Update transcripts with TPM values if BAM file provided
+    if let Some(bam) = bam_path {
+        info!("Quantifying transcripts using alignment file: {}", bam);
+        if let Err(e) = crate::quant::align_counts::update_transcripts_with_tpm(&mut transcripts, bam) {
+            info!("Warning: Failed to update TPM values: {}", e);
+        }
+    }
+    
+    // Filter by TPM if threshold provided
+    if let Some(threshold) = min_tpm {
+        info!("Filtering transcripts with TPM < {}", threshold);
+        let original_count = transcripts.len();
+        transcripts = filter_by_tpm(transcripts, threshold);
+        info!("Filtered {} transcripts to {} by TPM threshold", original_count, transcripts.len());
+    }
     
     // Filter similar transcripts to reduce redundancy
     let similarity_threshold = 0.85;
@@ -115,4 +153,35 @@ pub fn process_isoforms(
     info!("  Stats: {}", stats_path);
     
     filtered_transcripts
+}
+
+/// Assembles transcripts with splicing event detection
+fn parallel_transcript_assembly_with_splicing(
+    paths: &[crate::graph::isoform_traverse::TranscriptPath], 
+    contigs: &[Contig], 
+    links: &[(usize, usize, usize)],
+    graph: &DiGraphMap<usize, f32>,
+    batch_size: usize,
+    strand_specific: bool
+) -> Vec<Transcript> {
+    let transcripts = parallel_transcript_assembly(paths, contigs, links, batch_size);
+    
+    // Post-process transcripts to add splicing information and strand
+    transcripts.into_iter().enumerate().map(|(i, mut t)| {
+        // Detect splicing events
+        t.splicing = detect_splicing(&t.path, graph);
+        
+        // Set strand based on strand-specific assembly option
+        // In a real implementation, this would use read alignment information
+        if strand_specific {
+            // For demonstration, we'll use a simple heuristic:
+            // Even IDs are forward strand, odd IDs are reverse strand
+            t.strand = if i % 2 == 0 { '+' } else { '-' };
+        } else {
+            // Default to forward strand for non-strand-specific assembly
+            t.strand = '+';
+        }
+        
+        t
+    }).collect()
 }

@@ -19,21 +19,21 @@ pub fn write_gff3(transcripts: &[Transcript], output: &str) -> Result<()> {
         // Write gene feature
         writeln!(
             writer,
-            "{}\tAssembler\tgene\t{}\t{}\t.\t+\t.\tID={};Name={}",
+            "{}\tRaptor\tgene\t{}\t{}\t.\t+\t.\tID={};Name={}",
             tx.id, start, end, gene_id, gene_id
         )?;
         
         // Write mRNA feature
         writeln!(
             writer,
-            "{}\tAssembler\tmRNA\t{}\t{}\t.\t+\t.\tID={};Parent={};confidence={:.3}",
+            "{}\tRaptor\tmRNA\t{}\t{}\t.\t+\t.\tID={};Parent={};confidence={:.3}",
             tx.id, start, end, transcript_id, gene_id, tx.confidence
         )?;
         
         // Write exon feature
         writeln!(
             writer,
-            "{}\tAssembler\texon\t{}\t{}\t.\t+\t.\tParent={}",
+            "{}\tRaptor\texon\t{}\t{}\t.\t+\t.\tParent={}",
             tx.id, start, end, transcript_id
         )?;
     }
@@ -60,14 +60,14 @@ pub fn write_detailed_gff3(
         // Write gene feature
         writeln!(
             writer,
-            "{}\tAssembler\tgene\t1\t{}\t.\t+\t.\tID={};Name={}",
+            "{}\tRaptor\tgene\t1\t{}\t.\t+\t.\tID={};Name={}",
             tx.id, tx.length, gene_id, gene_id
         )?;
         
         // Write mRNA feature
         writeln!(
             writer,
-            "{}\tAssembler\tmRNA\t1\t{}\t.\t+\t.\tID={};Parent={};confidence={:.3}",
+            "{}\tRaptor\tmRNA\t1\t{}\t.\t+\t.\tID={};Parent={};confidence={:.3}",
             tx.id, tx.length, transcript_id, gene_id, tx.confidence
         )?;
         
@@ -84,7 +84,7 @@ pub fn write_detailed_gff3(
             for (i, (start, end)) in exon_starts.iter().zip(exon_ends.iter()).enumerate() {
                 writeln!(
                     writer,
-                    "{}\tAssembler\texon\t{}\t{}\t.\t+\t.\tID=exon_{}_{};Parent={}",
+                    "{}\tRaptor\texon\t{}\t{}\t.\t+\t.\tID=exon_{}_{};Parent={}",
                     tx.id, start, end, tx.id, i+1, transcript_id
                 )?;
             }
@@ -92,7 +92,7 @@ pub fn write_detailed_gff3(
             // Write a single exon for the entire transcript
             writeln!(
                 writer,
-                "{}\tAssembler\texon\t1\t{}\t.\t+\t.\tID=exon_{}_1;Parent={}",
+                "{}\tRaptor\texon\t1\t{}\t.\t+\t.\tID=exon_{}_1;Parent={}",
                 tx.id, tx.length, tx.id, transcript_id
             )?;
         }

@@ -1,8 +1,8 @@
-use assembler::io::fastq::{open_fastq, read_paired_fastq_records, FastqWriter};
-use assembler::kmer::cms::CountMinSketch;
-use assembler::kmer::normalize::{should_keep_read_pair, estimate_read_abundance, AbundanceStats};
-use assembler::kmer::kmer::canonical_kmer;
-use assembler::accel::gpu::kmer_gpu::GpuKmerCounter;
+use raptor::io::fastq::{open_fastq, read_paired_fastq_records, FastqWriter};
+use raptor::kmer::cms::CountMinSketch;
+use raptor::kmer::normalize::{should_keep_read_pair, estimate_read_abundance, AbundanceStats};
+use raptor::kmer::kmer::canonical_kmer;
+use raptor::accel::gpu::kmer_gpu::GpuKmerCounter;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

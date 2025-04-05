@@ -1,240 +1,291 @@
-# Isoform Detection and Transcript Assembly
+# Isoform Detection in Raptor
 
-This feature adds Trinity-class RNA-Seq isoform assembly capabilities to the assembler. It enables the detection and reconstruction of transcript isoforms from assembled contigs using parallel graph traversal algorithms.
+This document provides detailed information about the isoform detection functionality in Raptor, including how it works, the available parameters, and the output formats generated.
 
-## Command Line Usage
+## Overview
 
-To enable isoform detection during assembly, use the `--isoforms` flag:
+RNA-seq assembly aims to reconstruct transcripts from short reads. However, alternative splicing creates multiple transcript isoforms from the same gene, which presents computational challenges. Raptor implements a path traversal-based approach to detect and quantify these alternative isoforms.
+
+## How Isoform Detection Works
+
+Raptor performs isoform detection through the following steps:
+
+1. **De Bruijn Graph Construction**: After normalization, reads are decomposed into k-mers and assembled into a de Bruijn graph.
+
+2. **Graph Simplification**: The graph is simplified by removing tips, bubbles, and other artifacts.
+
+3. **Contig Generation**: Initial contigs are generated using a greedy path traversal algorithm.
+
+4. **Isoform Graph Construction**: Contigs are connected to form an isoform graph representing potential splice junctions.
+
+5. **Path Traversal**: The graph is traversed to identify all possible paths, which represent potential isoforms.
+
+6. **Filtering and Confidence Scoring**: Paths are filtered based on coverage, length, and confidence scores.
+
+7. **Splice Junction Detection**: Splice junctions are identified by analyzing the patterns in the isoform graph.
+
+8. **Strand Determination**: The strand of each transcript is determined when possible.
+
+9. **Quantification**: Expression levels are calculated for each isoform using the read coverage information.
+
+### Splicing Detection
+
+Raptor can detect several types of alternative splicing events:
+
+- **Exon Skipping**: An exon that appears in some isoforms is skipped in others.
+- **Alternative 5' or 3' Splice Sites**: Different exon boundaries are used in different isoforms.
+- **Intron Retention**: An intron that is spliced out in some isoforms is retained in others.
+- **Mutually Exclusive Exons**: Different exons are used in different isoforms.
+
+## Command-Line Usage
+
+### Basic Usage
 
 ```bash
-cargo run -- assemble -i reads.fastq.gz -o output --isoforms
+raptor assemble --input normalized_reads.fastq.gz --output results --isoforms
 ```
+
+### Complete Usage with All Isoform Options
+
+```bash
+raptor assemble \
+  --input normalized_reads.fastq.gz \
+  --output results \
+  --threads 12 \
+  --isoforms \
+  --compute-tpm \
+  --min-confidence 0.3 \
+  --max-path-depth 50 \
+  --min-isoform-length 200 \
+  --polish-isoforms \
+  --polish-reads long_reads.sam \
+  --counts-matrix \
+  --gtf transcripts.gtf \
+  --gff3 transcripts.gff3
+```
+
+## Parameters
+
+### Required Parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `--input` | Input normalized FASTQ file |
+| `--output` | Prefix for output files |
+| `--isoforms` | Enable isoform detection (flag) |
 
 ### Optional Parameters
 
-You can customize the isoform detection process with these additional parameters:
-
-- `--gtf <file>`: Specify a custom output path for the GTF file (default: output.isoforms.gtf)
-- `--max-path-depth <value>`: Maximum depth for transcript path traversal (default: 20)
-- `--min-confidence <value>`: Minimum confidence threshold for keeping transcript paths (default: 0.25)
-
-Example with all options:
-
-```bash
-cargo run -- assemble -i reads.fastq.gz -o output --isoforms --gtf output.gtf --max-path-depth 30 --min-confidence 0.3
-```
-
-## Using the Helper Script
-
-For convenience, a helper script `run_assemble_with_isoforms.sh` is provided to run the assembler with isoform detection:
-
-```bash
-./run_assemble_with_isoforms.sh -i reads.fastq.gz -o output --gtf output.gtf
-```
-
-The script accepts the following parameters:
-
-- `-i, --input FILE`: Input FASTQ(.gz) file (default: reads.fastq.gz)
-- `-o, --output PREFIX`: Output file prefix (default: output)
-- `--gtf FILE`: GTF output file (default: output.gtf)
-- `--min-confidence VALUE`: Minimum confidence for keeping isoform paths (default: 0.25)
-- `--max-path-depth VALUE`: Maximum path depth for isoform traversal (default: 20)
-- `-h, --help`: Show help message
-
-## Expression Quantification
-
-The assembler now supports several methods for quantifying transcript expression:
-
-### TPM Quantification from Read Support
-
-To compute TPM (Transcripts Per Million) values based on the reads used for assembly:
-
-```bash
-cargo run -- assemble -i reads.fastq.gz -o output --isoforms --compute-tpm
-```
-
-This will generate an additional file `output_isoform.tpm.tsv` with transcript IDs, lengths, and TPM values.
-
-### Multi-Sample Expression Quantification
-
-To quantify expression across multiple samples using SAM/BAM alignments:
-
-1. Create a CSV file containing sample names and paths to SAM alignment files:
-   ```
-   sample1,path/to/sample1.sam
-   sample2,path/to/sample2.sam
-   sample3,path/to/sample3.sam
-   ```
-
-2. Run the assembler with both `--compute-tpm` and `--samples` options:
-   ```bash
-   cargo run -- assemble -i reads.fastq.gz -o output --isoforms --compute-tpm --samples samples.csv
-   ```
-
-This will generate:
-- `output_isoform.tpm.tsv` - TPM values from the assembly reads
-- `output_isoform.counts.matrix` - A Trinity-style expression matrix with TPM values for all samples
-
-### Alignment-based Quantification
-
-To generate transcript quantification using external aligners:
-
-1. Assemble transcripts using the normal isoform pipeline
-2. Align reads to the assembled transcripts using your favorite aligner (e.g., HISAT2, minimap2)
-3. Use the resulting SAM/BAM files with the `--samples` option as described above
-
-Example workflow with minimap2:
-```bash
-# First, assemble transcripts
-cargo run -- assemble -i reads.fastq.gz -o transcripts --isoforms
-
-# Align sample reads to the transcripts
-minimap2 -ax sr transcripts.isoforms.fasta sample1.fastq > sample1.sam
-minimap2 -ax sr transcripts.isoforms.fasta sample2.fastq > sample2.sam
-
-# Create a samples.csv file
-echo "sample1,sample1.sam" > samples.csv
-echo "sample2,sample2.sam" >> samples.csv
-
-# Run quantification
-cargo run -- assemble -i reads.fastq.gz -o transcripts --isoforms --compute-tpm --samples samples.csv
-```
-
-## Additional Features
-
-### Transcript Polishing
-
-Improve transcript sequence quality by aligning and polishing with the input reads:
-
-```bash
-cargo run -- assemble -i reads.fastq.gz -o output --isoforms --polish-isoforms
-```
-
-### Transcript Statistics
-
-When running with `--isoforms`, the assembler automatically provides transcript statistics including:
-- Total number of transcripts
-- Average transcript length
-- N50 (weighted median transcript length)
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `--threads` | Number of CPU threads to use | 4 |
+| `--compute-tpm` | Calculate TPM values (flag) | false |
+| `--min-confidence` | Minimum confidence score to keep an isoform (0.0-1.0) | 0.2 |
+| `--max-path-depth` | Maximum depth for path traversal in the graph | 100 |
+| `--min-isoform-length` | Minimum length (bp) to keep an isoform | 150 |
+| `--polish-isoforms` | Enable isoform polishing (flag) | false |
+| `--polish-reads` | Path to long reads SAM/BAM file for polishing | - |
+| `--counts-matrix` | Export transcript counts matrix (flag) | false |
+| `--gtf` | Output GTF file path | - |
+| `--gff3` | Output GFF3 file path | - |
+| `--samples` | CSV file with sample names and alignment files | - |
+| `--strand-specific` | Input data is strand-specific (flag) | false |
+| `--min-tpm` | Minimum TPM to keep an isoform | 0.1 |
+| `--cluster-similar` | Cluster similar isoforms (flag) | false |
+| `--similarity-threshold` | Similarity threshold for clustering (0.0-1.0) | 0.9 |
 
 ## Output Files
 
-When using the isoform features, the following files are generated:
+When running with the `--isoforms` flag, Raptor produces the following output files:
 
 | File | Description |
 |------|-------------|
-| `output.isoforms.fasta` | FASTA format transcript sequences |
-| `output.isoforms.gtf` | GTF format transcript annotations |
-| `output.isoforms.gfa` | GFA format transcript paths |
-| `output.isoforms.json` | JSON format transcript details |
-| `output.isoforms.stats.json` | Transcript statistics in JSON format |
-| `output_isoform.tpm.tsv` | TPM expression values (when using `--compute-tpm`) |
-| `output_isoform.counts.matrix` | Multi-sample expression matrix (when using `--samples`) |
+| `[prefix].isoforms.fasta` | FASTA file containing the sequences of all detected isoforms |
+| `[prefix].isoforms.gfa` | GFA format representation of the isoform graph |
+| `[prefix].isoform.tpm.tsv` | TSV file with TPM values for each isoform (if `--compute-tpm` is enabled) |
+| `[prefix]_isoform.counts.matrix` | Matrix of isoform counts across samples (if `--counts-matrix` is enabled) |
+| `[prefix].isoforms.gtf` | GTF annotation file for the isoforms (if `--gtf` path is provided) |
+| `[prefix].isoforms.gff3` | GFF3 annotation file for the isoforms (if `--gff3` path is provided) |
+| `[prefix].splice_junctions.bed` | BED file containing all detected splice junctions |
+| `[prefix].isoform_clusters.tsv` | TSV file with clustering information (if `--cluster-similar` is enabled) |
 
-## Technical Details
+## Output Format Details
 
-The isoform detection process works in several stages:
+### FASTA Output
 
-1. **Graph Building**: Constructs an isoform graph from the assembled contigs
-2. **Parallel Path Discovery**: Finds potential transcript paths through the graph using multi-threaded traversal
-3. **Confidence Scoring**: Evaluates paths based on k-mer coverage and graph connectivity
-4. **Path Filtering**: Removes low-confidence paths that likely don't represent real transcripts
-5. **Similarity Filtering**: Collapses redundant isoforms to reduce output complexity
-6. **Transcript Assembly**: Generates final transcript sequences and annotations
+The FASTA output contains the sequence of each isoform with headers in the following format:
 
-All stages use parallel processing for optimal performance on multi-core systems.
-
-## Differential Expression Analysis
-
-The assembler now supports differential expression analysis between groups of samples:
-
-### Running Differential Expression Analysis
-
-After generating a counts matrix with multiple samples, you can identify differentially expressed transcripts:
-
-```bash
-cargo run -- diffexp --matrix output_isoform.counts.matrix \
-  --group-a sample1,sample2 \
-  --group-b sample3,sample4 \
-  --output de_results.tsv
+```
+>transcript_1 length=1245 confidence=0.87 tpm=12.3 splicing=SE,IR strand=+
+ATGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAG...
 ```
 
-Optional parameters:
-- `--p-value VALUE`: P-value threshold for significance (default: 0.05)
-- `--fold-change VALUE`: Log2 fold-change threshold (default: 1.0)
+The header includes:
+- Transcript ID
+- Length in base pairs
+- Confidence score (0.0-1.0)
+- TPM value (if `--compute-tpm` is enabled)
+- Splicing types detected (SE: Skipped Exon, IR: Intron Retention, etc.)
+- Strand information (+ or -)
 
-### Output Format
+### GTF/GFF3 Output
 
-The differential expression output file contains the following columns:
-- `transcript_id`: Identifier of the transcript
-- `log2FC`: Log2 fold change (a positive value means higher expression in group B)
-- `p_value`: Statistical significance (smaller values indicate higher significance)
+The GTF/GFF3 output follows standard format requirements and includes the following features:
 
-### Workflow Example
+- Transcript records
+- Exon records with parent-child relationships
+- CDS predictions (when possible)
+- Splice junction annotations
+- Expression information in the attributes field
+
+Example GTF line:
+```
+scaffold_1  raptor  transcript  1245  2468  .  +  .  transcript_id "transcript_1"; gene_id "gene_1"; confidence "0.87"; TPM "12.3";
+scaffold_1  raptor  exon        1245  1500  .  +  .  transcript_id "transcript_1"; gene_id "gene_1"; exon_number "1";
+```
+
+### TPM Values File
+
+The TPM (Transcripts Per Million) file is a tab-separated file with the following columns:
+
+1. Transcript ID
+2. Length (bp)
+3. TPM value
+
+### Count Matrix
+
+The count matrix file format has transcripts as rows and samples as columns. The first line is a header with sample names:
+
+```
+transcript_id sample1 sample2 sample3 ...
+transcript_1  124     98      156     ...
+transcript_2  56      43      87      ...
+...
+```
+
+### Splice Junction BED
+
+The splice junction BED file uses the BED12 format to represent splice junctions:
+
+```
+scaffold_1  1244  2468  transcript_1  87  +  1245  2467  0,0,0  2  255,223  0,1000
+```
+
+This format allows visualization of splice junctions in genome browsers.
+
+## Advanced Features
+
+### Transcript Clustering
+
+When `--cluster-similar` is enabled, Raptor clusters similar isoforms to reduce redundancy. The similarity threshold controls how similar transcripts must be to be clustered together. The clustering information is output to `[prefix].isoform_clusters.tsv`.
+
+### Transcript Polishing
+
+When `--polish-isoforms` is enabled, Raptor uses information from aligned long reads (provided via `--polish-reads`) to improve the accuracy of isoform sequences. This can correct errors in the assembly and improve the detection of splice junctions.
+
+### Multi-Sample TPM Calculation
+
+When a samples file is provided via `--samples`, Raptor calculates TPM values for each sample. The samples file format is a CSV with two columns:
+
+```
+sample_name,alignment_file
+```
+
+Where `alignment_file` is a SAM/BAM file with reads aligned to the assembled transcripts.
+
+## Example Workflows
+
+### Basic Isoform Detection
 
 ```bash
-# 1. Assemble transcripts with isoform detection
-cargo run -- assemble -i reads.fastq.gz -o transcripts --isoforms
+# Normalize reads
+raptor normalize --input1 reads_1.fastq.gz --input2 reads_2.fastq.gz --output normalized
 
-# 2. Align reads from multiple samples
-minimap2 -ax sr transcripts.isoforms.fasta sample1.fastq > sample1.sam
-minimap2 -ax sr transcripts.isoforms.fasta sample2.fastq > sample2.sam
-minimap2 -ax sr transcripts.isoforms.fasta sample3.fastq > sample3.sam
-minimap2 -ax sr transcripts.isoforms.fasta sample4.fastq > sample4.sam
+# Detect isoforms
+raptor assemble --input normalized_norm.fastq.gz --output results --isoforms
+```
 
-# 3. Create a samples file
+### Isoform Detection with Expression Quantification
+
+```bash
+# Normalize reads
+raptor normalize --input1 reads_1.fastq.gz --input2 reads_2.fastq.gz --output normalized
+
+# Detect isoforms and calculate TPM
+raptor assemble --input normalized_norm.fastq.gz --output results --isoforms --compute-tpm
+```
+
+### Isoform Detection with Long-Read Polishing
+
+```bash
+# Normalize short reads
+raptor normalize --input1 reads_1.fastq.gz --input2 reads_2.fastq.gz --output normalized
+
+# Align long reads to assembled transcripts
+# (first run a basic assembly)
+raptor assemble --input normalized_norm.fastq.gz --output initial
+
+# Align long reads to the initial assembly
+minimap2 -ax map-ont initial.isoforms.fasta long_reads.fastq > long_alignments.sam
+
+# Run full assembly with polishing
+raptor assemble --input normalized_norm.fastq.gz --output final \
+  --isoforms --compute-tpm --polish-isoforms --polish-reads long_alignments.sam
+```
+
+### Multi-Sample Analysis
+
+```bash
+# Normalize reads
+raptor normalize --input1 reads_1.fastq.gz --input2 reads_2.fastq.gz --output normalized
+
+# Create sample information file
 echo "sample1,sample1.sam" > samples.csv
 echo "sample2,sample2.sam" >> samples.csv
-echo "sample3,sample3.sam" >> samples.csv
-echo "sample4,sample4.sam" >> samples.csv
 
-# 4. Generate the expression matrix
-cargo run -- assemble -i reads.fastq.gz -o transcripts --isoforms \
-  --compute-tpm --samples samples.csv
-
-# 5. Perform differential expression analysis
-cargo run -- diffexp --matrix transcripts_isoform.counts.matrix \
-  --group-a sample1,sample2 --group-b sample3,sample4 \
-  --output de_results.tsv
+# Detect isoforms with multi-sample quantification
+raptor assemble --input normalized_norm.fastq.gz --output results \
+  --isoforms --compute-tpm --samples samples.csv --counts-matrix
 ```
 
-## GTF Comparison
+## Troubleshooting
 
-The assembler now supports comparing predicted GTF files with reference/truth GTF files to evaluate assembly accuracy:
+### Common Issues
 
-### Running GTF Comparison
+1. **Too many or too few isoforms detected**
+   - Adjust `--min-confidence` (lower for more isoforms, higher for fewer)
+   - Adjust `--max-path-depth` (higher for more complex graphs)
+   - Verify input read quality and coverage
 
-```bash
-cargo run -- gtf-compare --truth reference.gtf --predicted output.isoforms.gtf
+2. **Missing splice junctions**
+   - Check that read coverage is sufficient across potential junction sites
+   - Consider using longer reads if available
+
+3. **Poor quantification accuracy**
+   - Ensure sufficient read depth for reliable quantification
+   - Use biological replicates when possible
+   - Consider validating key isoforms with targeted methods (RT-PCR, etc.)
+
+## Performance Considerations
+
+- Isoform detection is computationally intensive; use more threads when available
+- Memory usage increases with graph complexity; for very large datasets, consider:
+  - Running on a high-memory machine
+  - Splitting the analysis by chromosome or scaffold
+  - Using a higher confidence threshold to reduce the number of paths
+
+## References
+
+For more details on the algorithmic approaches used in Raptor's isoform detection, consult the following papers:
+
+1. Grabherr MG, et al. (2011). "Full-length transcriptome assembly from RNA-Seq data without a reference genome."
+2. Pertea M, et al. (2015). "StringTie enables improved reconstruction of a transcriptome from RNA-seq reads."
+3. Li B & Dewey CN (2011). "RSEM: accurate transcript quantification from RNA-Seq data with or without a reference genome."
+
+## Citation
+
+If you use Raptor's isoform detection in your research, please cite:
+
 ```
-
-Optional parameters:
-- `--output PATH`: Write detailed metrics to a TSV file
-
-### Output Metrics
-
-The comparison outputs the following metrics:
-- `True Positives`: Number of correctly predicted transcript features
-- `False Positives`: Number of predicted features that don't match the reference
-- `False Negatives`: Number of reference features that weren't predicted
-- `Precision`: Proportion of predicted features that are correct
-- `Recall`: Proportion of reference features that were predicted
-- `F1 Score`: Harmonic mean of precision and recall
-
-### Use Cases
-
-This feature is particularly useful for:
-- Evaluating assembler performance on simulated data where the ground truth is known
-- Comparing the output of different assembly approaches
-- Benchmarking against known transcript sets (e.g., Ensembl annotations)
-
-## Summary Table of Features
-
-| Feature | Description | Command |
-|---------|-------------|---------|
-| Isoform Assembly | Reconstruct transcript isoforms | `assemble --isoforms` |
-| TPM Quantification | Calculate TPM expression values | `assemble --isoforms --compute-tpm` |
-| Multi-sample Analysis | Process multiple sample alignments | `assemble --isoforms --samples samples.csv` |
-| Differential Expression | Compare expression between sample groups | `diffexp --matrix --group-a --group-b` |
-| GTF Comparison | Evaluate assembly accuracy | `gtf-compare --truth --predicted` |
-| Transcript Polishing | Improve sequence quality | `assemble --isoforms --polish-isoforms` | 
+[Citation information will be added upon publication]
+``` 

@@ -83,11 +83,14 @@ pub fn parallel_transcript_assembly(
             chunk.iter().enumerate().map(|(i, path)| {
                 let sequence = stitch_isoform(contigs, &path.nodes, links);
                 Transcript {
-                    id: i, // Temporary ID, will be fixed later
+                    id: i + 1, // 1-based IDs for transcripts
                     sequence: sequence.clone(),
                     path: path.nodes.clone(),
                     confidence: path.confidence as f64,
                     length: sequence.len(),
+                    strand: '+', // Default to forward strand
+                    tpm: None,   // No expression value yet
+                    splicing: "unknown".to_string(), // Unknown splicing events
                 }
             }).collect::<Vec<_>>()
         })

@@ -1,163 +1,100 @@
-# Repomix
+# 🦖 Raptor
 
-A high-performance Rust-based RNA-seq assembler with advanced isoform detection and quantification.
+**A blazing-fast, parallel, graph-based RNA-Seq assembler.**  
+_K-mer powered. Isoform aware. Built for scale._
 
-## Features
+[![Build Status](https://img.shields.io/github/actions/workflow/status/Jakeelamb/Raptor/build.yml?branch=main)](https://github.com/Jakeelamb/Raptor/actions)  
+[![Crates.io](https://img.shields.io/crates/v/raptor)](https://crates.io/crates/raptor)  
+[![GPU Accelerated](https://img.shields.io/badge/GPU-accelerated-green)](#gpu-acceleration)  
+[![License](https://img.shields.io/github/license/Jakeelamb/Raptor)](./LICENSE)
 
-- **K-mer normalization**: Efficient preprocessing with both GPU and CPU support
-- **Greedy de novo assembly**: Fast contig generation from normalized reads
-- **Isoform inference**: Sophisticated path traversal for transcript isoform detection
-- **RLE compression**: Repeat-aware compression for efficient storage and processing
-- **Quantification**: TPM calculation and expression matrix generation
-- **Differential expression**: Statistical analysis of expression differences
-- **Visualization**: PCA plots of expression data
-- **Multiple outputs**: GFA1, GFA2, GFF3, GTF export formats
-- **Hybrid assembly**: Long-read polishing and hybrid assembly capabilities
-- **Benchmarking**: Evaluation against reference transcriptomes
+---
 
-## Installation
+Raptor is a modern RNA-Seq assembler built for performance and biological accuracy. Inspired by Trinity, bbnorm, and SeqKit, Raptor supports:
+
+- 🧠 **Greedy k-mer extension** (adaptive k, canonical hashing)
+- ⚙️ **Parallel assembly** (Rayon, SIMD)
+- ⚡ **GPU-accelerated k-mer normalization**
+- 🔗 **Graph-based isoform stitching** (Butterfly-like traversal)
+- 💾 **Streaming input and low-RAM support**
+- 🧬 **Isoform filtering, polishing, quantification**
+- 📈 **PCA, heatmaps, TPM matrices, and GTF export**
+
+---
+
+## 📦 Installation
+
+> Requires Rust 1.72+ and optionally CUDA for GPU support.
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/repomix.git
-cd repomix
-
-# Build and install
+git clone https://github.com/Jakeelamb/Raptor.git
+cd raptor
 cargo build --release
-cargo install --path .
+
+# Optional: compile with CUDA:
+cargo build --release --features "gpu"
 ```
 
-## Quick Start
+## 🚀 Quick Start
 
 ```bash
-# Normalize reads
-repomix normalize -i reads.fastq.gz -o norm.fastq.gz
+# Normalize reads using GPU-accelerated CMS
+raptor normalize \
+  -i sample_R1.fastq.gz \
+  -o norm.fastq.gz \
+  --gpu \
+  --streaming
 
-# Assemble transcripts
-repomix assemble -i norm.fastq.gz -o assembled --isoforms
+# Assemble transcriptome from normalized reads
+raptor assemble \
+  -i norm.fastq.gz \
+  -o my_assembly \
+  --threads 16 \
+  --gfa --isoforms \
+  --json-metadata metadata.json \
+  --min-confidence 0.75
 
-# Analyze differential expression
-repomix diffexp --matrix expression.matrix --group-a sample1,sample2 --group-b sample3,sample4 --output diff_results.tsv
+# Visualize transcript diversity
+raptor stats --input my_assembly_isoform.counts.matrix --pca pca.png --heatmap heatmap.png
 ```
 
-## Assembly Pipeline
+## 🧪 Example Outputs
 
-1. **Normalization**: Reduce read redundancy while preserving coverage
-   ```bash
-   repomix normalize --input1 reads.fastq.gz --output normalized
-   ```
+| File | Description |
+|------|-------------|
+| my_assembly.fasta | Assembled contigs |
+| my_assembly.gfa | GFA1 graph of overlaps |
+| my_assembly_isoforms.fasta | Inferred transcripts |
+| my_assembly_isoforms.gfa | Graph with isoform P lines |
+| my_assembly_isoforms.gtf | GTF format annotation |
+| my_assembly_isoform.counts.matrix | TPM + confidence scores |
+| heatmap.png, pca.png | Visual TPM analysis |
 
-2. **Assembly**: Reconstruct transcripts from normalized reads
-   ```bash
-   repomix assemble --input normalized_norm.fastq.gz --output assembled --isoforms --gtf transcripts.gtf
-   ```
+## 🛠️ Key Features
 
-3. **Quantification**: Calculate expression levels
-   ```bash
-   # Uses the --compute-tpm flag during assembly
-   repomix assemble --input normalized_norm.fastq.gz --output assembled --isoforms --compute-tpm
-   ```
+✅ Adaptive k-mer selection  
+✅ Paired-end support  
+✅ Long-read polishing  
+✅ Splicing-aware path inference  
+✅ GFA2 + BandageNG annotations  
+✅ JSON/TSV metadata export  
+✅ Differential isoform comparison via GTF  
 
-4. **Differential Expression**: Compare expression between conditions
-   ```bash
-   repomix diffexp --matrix assembled_isoform.counts.matrix --group-a sample1,sample2 --group-b sample3,sample4 --output diff_results.tsv
-   ```
+## 📚 Citations & References
 
-## Advanced Features
+If you use Raptor in your research, please cite the tool (citation coming soon) and the underlying software inspirations:
 
-### Transcript Filtering by Expression
+- Grabherr et al. "Full-length transcriptome assembly from RNA-Seq data without a reference genome." Nat Biotech (2011)
 
-Filter out low-abundance transcripts:
-```bash
-repomix assemble --input reads.fastq.gz --output assembled --isoforms --compute-tpm --min-tpm 1.0
-```
+- BBTools (BBNorm): https://jgi.doe.gov/data-and-tools/bbtools
 
-### Transcript Polishing with Long Reads
+- SeqKit: https://bioinf.shenwei.me/seqkit/
 
-Use long-read alignments to improve transcript accuracy:
-```bash
-# First align long reads to transcripts with minimap2
-minimap2 -ax map-ont assembled.fasta nanopore_reads.fastq > alignments.sam
+## 🤝 Contributing
 
-# Then use the alignments to polish transcripts
-repomix assemble --input reads.fastq.gz --output polished --isoforms --polish-reads alignments.sam
-```
+PRs welcome! Run `cargo fmt && cargo clippy` before submitting.
+See CONTRIBUTING.md for details.
 
-### Multi-Sample Analysis
+## 🧠 License
 
-Analyze multiple samples together:
-```bash
-# Create sample file (CSV format: sample_name,alignment_file)
-echo "sample1,alignments1.sam" > samples.csv
-echo "sample2,alignments2.sam" >> samples.csv
-
-# Run assembly with multi-sample support
-repomix assemble --input reads.fastq.gz --output multi --isoforms --compute-tpm --samples samples.csv
-```
-
-## GFA Path Traversal
-
-This tool supports traversing paths defined in GFA files and reconstructing the full sequences. This is particularly useful for isoform analysis and visualization.
-
-### Features
-
-- **Edge-aware segment navigation**: Navigate through graph segments while respecting edges
-- **Orientation-aware traversal**: Handle both forward (+) and reverse (-) segment orientation
-- **Export options**: Output formats include FASTA, DOT (for Graphviz), TSV metadata, and more
-- **Path visualization**: Generate visualizations for tools like Bandage or ODGI
-
-### Usage
-
-```bash
-# Basic usage
-cargo run --release -- traverse -i input.gfa -s segments.tsv -o output
-
-# Advanced usage with all options
-cargo run --release -- traverse \
-    -i input.gfa \
-    -s segments.tsv \
-    -o output \
-    --formats fasta,dot,json,odgi \
-    --include-edges \
-    --visualize \
-    --metadata
-```
-
-### Input File Formats
-
-- **GFA file**: Standard GFA format containing segments (S lines) and paths (P lines)
-- **Segment sequences**: Tab-separated file with `segment_id\tsequence` format
-
-### Output Files
-
-- `output.fasta`: FASTA sequences for each path
-- `output.dot`: DOT graph visualization (can be rendered using Graphviz)
-- `output.json`: JSON metadata about paths
-- `output.path_stats.tsv`: TSV file with path statistics
-- `output.paths.gfa`: ODGI-compatible path definitions
-
-### Example Script
-
-For a complete example, see the `scripts/run_path_traversal.sh` script, which demonstrates:
-
-1. Creating sample GFA and segment files
-2. Running the traversal command
-3. Visualizing the output paths
-
-## Output Files
-
-- `*.fasta`: Assembled sequences
-- `*.gfa`: Graph Fragment Assembly format for visualizing the assembly graph
-- `*.gtf`: Gene Transfer Format for genomic feature annotation
-- `*.gff3`: General Feature Format version 3 for genomic features
-- `*.tpm.tsv`: Transcript expression in Transcripts Per Million
-- `*.counts.matrix`: Expression matrix for multiple samples
-- `*_pca.svg`: PCA visualization of sample relationships
-
-## Authors
-
-- Your name and contributors
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details. 
+MIT © 2024 Jacob Lamb / Mueller Lab 
