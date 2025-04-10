@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 #[cfg(feature = "gpu")]
 use raptor::gpu::kmer_gpu::GpuKmerCounter;
 

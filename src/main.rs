@@ -43,20 +43,14 @@ fn main() {
             // Run the normalization pipeline
             println!("Running normalization pipeline");
             let start = std::time::Instant::now();
-            
+
             if let Some(input2_path) = input2 {
                 // For paired-end reads
-                if let Err(e) = pipeline::normalize::normalize_paired(&input1, &input2_path, &output, gpu, streaming) {
-                    eprintln!("Error during normalization: {}", e);
-                    return;
-                }
+                pipeline::normalize::normalize_paired(&input1, &input2_path, &output, gpu, streaming);
             } else {
                 // For single-end reads
-                if let Err(e) = pipeline::normalize::normalize_single(&input1, &output, gpu, streaming) {
-                    eprintln!("Error during normalization: {}", e);
-                    return;
-                }
-            }
+                pipeline::normalize::normalize_single(&input1, &output, gpu, streaming);
+        }
             
             println!("Normalization completed in {:.2}s", start.elapsed().as_secs_f32());
         },
@@ -67,68 +61,65 @@ fn main() {
             min_len, 
             threads, 
             gfa, 
-            adaptive_k, 
-            rle, 
-            distributed, 
-            buckets, 
-            gfa2, 
-            collapse_repeats, 
-            min_repeat_len, 
-            polish, 
-            polish_window, 
-            streaming, 
-            export_metadata, 
-            json_metadata, 
-            tsv_metadata, 
+            adaptive_k,
+            rle,
+            distributed,
+            buckets,
+            gfa2,
+            collapse_repeats,
+            min_repeat_len,
+            polish,
+            polish_window,
+            streaming,
+            export_metadata,
+            json_metadata,
+            tsv_metadata,
             isoforms, 
             gtf, 
             counts_matrix, 
-            gff3, 
+            gff3,
             max_path_depth, 
-            min_confidence, 
-            min_path_len, 
+            min_confidence,
+            min_path_len,
             dev_mode, 
-            compute_tpm, 
-            polish_isoforms, 
-            samples, 
-            min_tpm, 
+            compute_tpm,
+            polish_isoforms,
+            samples,
+            min_tpm,
             polish_reads 
         } => {
             // Run the assembly pipeline
             println!("Running assembly pipeline");
             let start = std::time::Instant::now();
             
-            if let Err(e) = pipeline::assemble::assemble_reads(
+            pipeline::assemble::assemble_reads_old(
                 &input, 
                 &output, 
                 min_len, 
                 gfa, 
-                gfa2, 
-                adaptive_k, 
-                rle, 
-                collapse_repeats, 
-                min_repeat_len, 
-                polish, 
-                polish_window, 
-                streaming, 
-                export_metadata, 
-                json_metadata, 
-                tsv_metadata, 
-                isoforms, 
-                gtf, 
-                gff3, 
-                max_path_depth, 
-                min_confidence, 
-                compute_tpm, 
-                polish_isoforms, 
-                samples, 
-                min_tpm, 
-                polish_reads, 
-                counts_matrix
-            ) {
-                eprintln!("Error during assembly: {}", e);
-                return;
-            }
+                gfa2,
+                adaptive_k,
+                rle,
+                collapse_repeats,
+                min_repeat_len,
+                polish,
+                polish_window,
+                streaming,
+                export_metadata,
+                json_metadata.map(String::from),
+                tsv_metadata.map(String::from),
+                isoforms,
+                gtf.map(String::from),
+                gff3.map(String::from),
+                max_path_depth,
+                min_confidence,
+                compute_tpm,
+                polish_isoforms,
+                samples.map(String::from),
+                min_tpm,
+                polish_reads.map(String::from),
+                    counts_matrix
+                );
             
             println!("Assembly completed in {:.2}s", start.elapsed().as_secs_f32());
         },
