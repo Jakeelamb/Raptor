@@ -35,10 +35,10 @@ fn main() {
             input2, 
             output, 
             gpu, 
-            threads, 
+            threads: _, 
             streaming, 
-            coverage_target, 
-            max_reads 
+            coverage_target: _, 
+            max_reads: _ 
         } => {
             // Run the normalization pipeline
             println!("Running normalization pipeline");
@@ -55,48 +55,52 @@ fn main() {
             println!("Normalization completed in {:.2}s", start.elapsed().as_secs_f32());
         },
 
-        Commands::Assemble { 
-            input, 
-            output, 
-            min_len, 
-            threads, 
-            gfa, 
+        Commands::Assemble {
+            input,
+            output,
+            min_len,
+            threads: _,
+            gfa,
+            gpu,
             adaptive_k,
             rle,
-            distributed,
-            buckets,
+            distributed: _,
+            buckets: _,
             gfa2,
             collapse_repeats,
             min_repeat_len,
             polish,
             polish_window,
-            streaming,
+            streaming: _,
             export_metadata,
             json_metadata,
             tsv_metadata,
-            isoforms, 
-            gtf, 
-            counts_matrix, 
+            isoforms,
+            gtf,
+            counts_matrix,
             gff3,
-            max_path_depth, 
+            max_path_depth,
             min_confidence,
-            min_path_len,
-            dev_mode, 
+            min_path_len: _,
+            dev_mode: _,
             compute_tpm,
             polish_isoforms,
             samples,
             min_tpm,
-            polish_reads 
+            polish_reads
         } => {
             // Run the assembly pipeline
             println!("Running assembly pipeline");
+            if gpu {
+                println!("GPU acceleration requested");
+            }
             let start = std::time::Instant::now();
-            
-            pipeline::assemble::assemble_reads_old(
-                &input, 
-                &output, 
-                min_len, 
-                gfa, 
+
+            pipeline::assemble::assemble_reads_with_gpu(
+                &input,
+                &output,
+                min_len,
+                gfa,
                 gfa2,
                 adaptive_k,
                 rle,
@@ -104,7 +108,7 @@ fn main() {
                 min_repeat_len,
                 polish,
                 polish_window,
-                streaming,
+                false, // streaming - now handled internally
                 export_metadata,
                 json_metadata.map(String::from),
                 tsv_metadata.map(String::from),
@@ -118,9 +122,10 @@ fn main() {
                 samples.map(String::from),
                 min_tpm,
                 polish_reads.map(String::from),
-                    counts_matrix
-                );
-            
+                counts_matrix,
+                gpu,
+            );
+
             println!("Assembly completed in {:.2}s", start.elapsed().as_secs_f32());
         },
         
@@ -434,7 +439,7 @@ fn main() {
             }
         }
         
-        Commands::Visualize { matrix, output, heatmap, pca, components } => {
+        Commands::Visualize { matrix, output: _, heatmap, pca, components } => {
             info!("Visualizing expression data");
             
             // Simple validation

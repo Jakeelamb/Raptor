@@ -52,35 +52,6 @@ pub fn save_partitions(partitions: &HashMap<usize, Vec<String>>, output_dir: &st
     file_paths
 }
 
-/// Create a minimizer for a k-mer (used for more advanced partitioning)
-fn minimizer(kmer: &[u8], m: usize) -> u64 {
-    if kmer.len() < m {
-        return 0;
-    }
-
-    kmer.windows(m)
-        .map(|window| xx::hash64(window) as u64)
-        .min()
-        .unwrap_or(0)
-}
-
-/// Find minimizer positions within a sequence
-pub fn find_minimizer_positions(seq: &str, k: usize, m: usize) -> Vec<(usize, u64)> {
-    if seq.len() < k || k < m {
-        return vec![];
-    }
-    
-    let bytes = seq.as_bytes();
-    bytes
-        .windows(k)
-        .enumerate()
-        .map(|(i, window)| {
-            let min_hash = minimizer(window, m);
-            (i, min_hash)
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

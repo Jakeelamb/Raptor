@@ -132,7 +132,7 @@ pub fn create_expression_matrix(
 ///
 /// # Returns
 /// * HashMap mapping sample names to vectors of counts
-pub fn load_counts_matrix(csv_path: &str, transcripts: &[Transcript]) -> Result<HashMap<String, Vec<f64>>> {
+pub fn load_counts_matrix(_csv_path: &str, transcripts: &[Transcript]) -> Result<HashMap<String, Vec<f64>>> {
     let mut counts_matrix = HashMap::new();
     
     // In a real implementation, this would parse the CSV file

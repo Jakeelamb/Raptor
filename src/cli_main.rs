@@ -65,47 +65,51 @@ pub enum Commands {
         /// Output GFA format as well
         #[arg(long)]
         gfa: bool,
-        
+
+        /// Enable GPU acceleration for k-mer counting and overlap detection
+        #[arg(long)]
+        gpu: bool,
+
         /// Enable adaptive k-mer selection
         #[arg(long)]
         adaptive_k: bool,
-        
+
         /// Enable run-length encoding for compression
         #[arg(long)]
         rle: bool,
-        
+
         /// Enable distributed assembly
         #[arg(long)]
         distributed: bool,
-        
+
         /// Number of buckets for distributed assembly
         #[arg(long, default_value_t = 16)]
         buckets: usize,
-        
+
         /// Output GFA2 format as well
         #[arg(long)]
         gfa2: bool,
-        
+
         /// Enable repeat collapsing using RLE
         #[arg(long)]
         collapse_repeats: bool,
-        
+
         /// Minimum repeat length to collapse (in RLE tuples)
         #[arg(long, default_value_t = 20)]
         min_repeat_len: usize,
-        
+
         /// Enable contig polishing
         #[arg(long)]
         polish: bool,
-        
+
         /// Window size for polishing
         #[arg(long, default_value_t = 25)]
         polish_window: usize,
-        
+
         /// Enable streaming mode for large datasets
         #[arg(long)]
         streaming: bool,
-        
+
         /// Export metadata in JSON format
         #[arg(long)]
         export_metadata: bool,
@@ -117,55 +121,55 @@ pub enum Commands {
         /// Optional path to write contig metadata as TSV
         #[arg(long)]
         tsv_metadata: Option<String>,
-        
+
         /// Enable isoform inference and transcript path export
         #[arg(long)]
         isoforms: bool,
-        
+
         /// Optional path to write isoform GTF
         #[arg(long)]
         gtf: Option<String>,
-        
+
         /// Export transcript counts matrix
         #[arg(long)]
         counts_matrix: bool,
-        
+
         /// Optional path to write isoform GFF3
         #[arg(long)]
         gff3: Option<String>,
-        
+
         /// Maximum path depth for isoform traversal
         #[arg(long, default_value_t = 20)]
         max_path_depth: usize,
-        
+
         /// Minimum confidence for keeping isoform paths
         #[arg(long, default_value_t = 0.9)]
         min_confidence: f64,
-        
+
         /// Minimum path length for isoform traversal (shorter paths can be kept if highly confident)
         #[arg(long, default_value_t = 50)]
         min_path_len: usize,
-        
+
         /// Enable development mode (bypasses filters and outputs debug information)
         #[arg(long)]
         dev_mode: bool,
-        
+
         /// Compute TPM expression values for transcripts
         #[arg(long)]
         compute_tpm: bool,
-        
+
         /// Polish isoform sequences using aligned reads
         #[arg(long)]
         polish_isoforms: bool,
-        
+
         /// CSV file with sample name and SAM alignment path
         #[arg(long, value_name = "CSV")]
         samples: Option<String>,
-        
+
         /// Minimum TPM value for keeping transcripts
         #[arg(long, default_value_t = 0.1)]
         min_tpm: f64,
-        
+
         /// SAM/BAM file with long reads mapped to transcripts for polishing
         #[arg(long)]
         polish_reads: Option<String>,

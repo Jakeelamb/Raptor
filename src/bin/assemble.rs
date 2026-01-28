@@ -139,7 +139,7 @@ fn assemble_contigs(k: usize, kmer_counts: &HashMap<String, u32>, min_len: usize
     let mut sorted_kmers: Vec<(&String, &u32)> = kmer_counts.iter().collect();
     sorted_kmers.sort_by(|a, b| b.1.cmp(a.1));
     
-    for (kmer, &count) in sorted_kmers {
+    for (kmer, &_count) in sorted_kmers {
         if used.contains(kmer) {
             continue;
         }

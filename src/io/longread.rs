@@ -51,32 +51,6 @@ fn find_exact_position(contig: &str, read: &str, approximate_start: usize) -> Op
     search_region.find(read).map(|pos| search_start + pos)
 }
 
-/// Integrate long read alignments into the polishing workflow
-pub fn integrate_long_reads_for_polishing(
-    contig: &str, 
-    short_reads: &[String], 
-    long_reads: &[FastqRecord],
-    _window_size: usize
-) -> String {
-    use crate::graph::polish::polish_contig_string;
-    
-    // First, align long reads to get coverage data
-    let long_read_alignments = align_long_reads(contig, long_reads);
-    
-    // Convert long read alignments to sequences for polishing
-    let mut all_reads = short_reads.to_vec();
-    
-    for (start, end) in long_read_alignments {
-        if start < contig.len() && end <= contig.len() {
-            // Add the aligned portion of the long read
-            all_reads.push(contig[start..end].to_string());
-        }
-    }
-    
-    // Use the string-based polishing function with both short and long reads
-    polish_contig_string(contig, &all_reads, 0.7)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

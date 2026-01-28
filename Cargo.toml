@@ -10,8 +10,7 @@ default-run = "raptor"
 
 # Define features
 [features]
-default = ["mpi-support"]
-mpi-support = ["mpi"]
+default = []
 gpu = ["ocl"]
 
 [dependencies]
@@ -35,9 +34,6 @@ tempfile = "3.10.1"
 serde = { version = "1.0.207", features = ["derive"] }
 serde_json = "1.0.105"
 rand = "0.8.5"
-smartcore = "0.3.2"
-statrs = "0.15.0"
-wide = "0.7.15"
 num_cpus = "1.16.0"
 
 # Replaced with our own implementations
@@ -45,7 +41,6 @@ num_cpus = "1.16.0"
 # linfa-reduction = "0.6.1"
 
 # Optional dependencies
-mpi = { version = "0.8.0", optional = true }
 ocl = { version = "0.19.6", optional = true }
 
 [[bin]]

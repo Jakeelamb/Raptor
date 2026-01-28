@@ -44,15 +44,15 @@ pub fn process_isoforms(
     contigs: &[Contig],
     links: &[(usize, usize, usize)],
     kmer_counts: &HashMap<usize, usize>,
-    output_path: &str,
-    gtf_path: Option<&str>,
+    _output_path: &str,
+    _gtf_path: Option<&str>,
     max_path_depth: usize,
     min_confidence: f64,
-    min_tpm: Option<f64>,
-    strand_aware: bool,
-    bam_path: Option<&str>,
-    long_reads: Option<&str>,
-    get_output_filename: fn(&str, Option<&str>) -> String,
+    _min_tpm: Option<f64>,
+    _strand_aware: bool,
+    _bam_path: Option<&str>,
+    _long_reads: Option<&str>,
+    _get_output_filename: fn(&str, Option<&str>) -> String,
 ) -> Result<Vec<Transcript>> {
     info!("Processing isoforms from {} contigs with {} links", contigs.len(), links.len());
     
