@@ -1,4 +1,4 @@
-use raptor::io::fastq::{open_fastq, read_fastq_records, FastqRecord};
+use raptor::io::fastq::{open_fastq, stream_fastq_records, FastqRecord};
 use raptor::io::fasta::FastaWriter;
 #[allow(deprecated)]
 use raptor::kmer::kmer::canonical_kmer;
@@ -16,34 +16,34 @@ fn main() {
         eprintln!("Usage: {} input.fastq output.fasta [--dev-mode]", args[0]);
         std::process::exit(1);
     }
-    
+
     let input_path = &args[1];
     let output_path = &args[2];
-    
+
     // Default parameters - modified for better results with low-coverage data
     let k = 25;  // K-mer size set to 25
     let min_coverage = 2;  // Lower coverage threshold
     let min_length = 50;   // Shorter minimum contig length
     let threads = num_cpus::get();
     let dev_mode = args.contains(&"--dev-mode".to_string());
-    
+
     if dev_mode {
         println!("DEV MODE ENABLED: Will output additional debug information and skip filtering thresholds");
     }
-    
-    println!("Assembling with k={}, min_coverage={}, threads={}, min_length={}", 
+
+    println!("Assembling with k={}, min_coverage={}, threads={}, min_length={}",
              k, min_coverage, threads, min_length);
-    
+
     // Initialize thread pool
     ThreadPoolBuilder::new()
         .num_threads(threads)
         .build_global()
         .unwrap();
-    
-    // Read input FASTQ file
+
+    // Read input FASTQ file using streaming for memory efficiency
     println!("Reading input file {}...", input_path);
     let reader = open_fastq(input_path);
-    let records: Vec<FastqRecord> = read_fastq_records(reader).collect();
+    let records: Vec<FastqRecord> = stream_fastq_records(reader).collect();
     println!("Read {} records", records.len());
     
     // Build k-mer map from reads

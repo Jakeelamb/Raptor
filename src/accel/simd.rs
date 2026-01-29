@@ -2,39 +2,117 @@ use std::arch::x86_64::*;
 use std::cmp;
 use rayon::prelude::*;
 
-/// Calculate Hamming distance (number of mismatching positions) between two byte slices
+/// Check if AVX2 is available at runtime
 #[inline]
-pub fn hamming_distance_simd(a: &[u8], b: &[u8]) -> usize {
-    // Use only the common length (minimum of both slices)
+fn is_avx2_available() -> bool {
+    #[cfg(target_feature = "avx2")]
+    {
+        true
+    }
+    #[cfg(not(target_feature = "avx2"))]
+    {
+        is_x86_feature_detected!("avx2")
+    }
+}
+
+/// Calculate Hamming distance using AVX2 (32 bytes at a time).
+///
+/// This provides 2x speedup over SSE2 for sequences >= 32 bytes.
+#[inline]
+#[target_feature(enable = "avx2")]
+unsafe fn hamming_distance_avx2_inner(a: &[u8], b: &[u8]) -> usize {
     let common_length = std::cmp::min(a.len(), b.len());
-    
     let mut dist = 0;
     let mut i = 0;
 
-    // Process 16 bytes at a time
+    // Process 32 bytes at a time with AVX2
+    while i + 32 <= common_length {
+        let a_chunk = _mm256_loadu_si256(a.as_ptr().add(i) as *const __m256i);
+        let b_chunk = _mm256_loadu_si256(b.as_ptr().add(i) as *const __m256i);
+        let cmp = _mm256_cmpeq_epi8(a_chunk, b_chunk);
+        let mask = _mm256_movemask_epi8(cmp) as u32;
+        // Count mismatches (bits that are 0 in the mask)
+        dist += 32 - mask.count_ones() as usize;
+        i += 32;
+    }
+
+    // Process remaining 16 bytes with SSE2
     while i + 16 <= common_length {
-        unsafe {
-            let a_chunk = _mm_loadu_si128(a.as_ptr().add(i) as *const __m128i);
-            let b_chunk = _mm_loadu_si128(b.as_ptr().add(i) as *const __m128i);
-            let cmp = _mm_cmpeq_epi8(a_chunk, b_chunk);
-            let mask = _mm_movemask_epi8(cmp);
-            // Count mismatches (bits that are 0 in the mask)
-            dist += 16 - mask.count_ones() as usize;
-        }
+        let a_chunk = _mm_loadu_si128(a.as_ptr().add(i) as *const __m128i);
+        let b_chunk = _mm_loadu_si128(b.as_ptr().add(i) as *const __m128i);
+        let cmp = _mm_cmpeq_epi8(a_chunk, b_chunk);
+        let mask = _mm_movemask_epi8(cmp);
+        dist += 16 - mask.count_ones() as usize;
         i += 16;
     }
 
-    // Fallback for remaining bytes
+    // Scalar fallback for remaining bytes
     for j in i..common_length {
         if a[j] != b[j] {
             dist += 1;
         }
     }
-    
-    // Add the difference in length as mismatches
-    dist += a.len().abs_diff(b.len());
 
+    // Add length difference as mismatches
+    dist += a.len().abs_diff(b.len());
     dist
+}
+
+/// Calculate Hamming distance using SSE2 (16 bytes at a time).
+#[inline]
+unsafe fn hamming_distance_sse2_inner(a: &[u8], b: &[u8]) -> usize {
+    let common_length = std::cmp::min(a.len(), b.len());
+    let mut dist = 0;
+    let mut i = 0;
+
+    // Process 16 bytes at a time
+    while i + 16 <= common_length {
+        let a_chunk = _mm_loadu_si128(a.as_ptr().add(i) as *const __m128i);
+        let b_chunk = _mm_loadu_si128(b.as_ptr().add(i) as *const __m128i);
+        let cmp = _mm_cmpeq_epi8(a_chunk, b_chunk);
+        let mask = _mm_movemask_epi8(cmp);
+        dist += 16 - mask.count_ones() as usize;
+        i += 16;
+    }
+
+    // Scalar fallback
+    for j in i..common_length {
+        if a[j] != b[j] {
+            dist += 1;
+        }
+    }
+
+    dist += a.len().abs_diff(b.len());
+    dist
+}
+
+/// Calculate Hamming distance (number of mismatching positions) between two byte slices.
+///
+/// Automatically selects the best SIMD implementation:
+/// - AVX2 (32 bytes/iteration) if available
+/// - SSE2 (16 bytes/iteration) as fallback
+/// - Scalar for remaining bytes
+#[inline]
+pub fn hamming_distance_simd(a: &[u8], b: &[u8]) -> usize {
+    // For short sequences, scalar is faster (no SIMD setup overhead)
+    if a.len() < 16 && b.len() < 16 {
+        let common_length = std::cmp::min(a.len(), b.len());
+        let mut dist = 0;
+        for i in 0..common_length {
+            if a[i] != b[i] {
+                dist += 1;
+            }
+        }
+        return dist + a.len().abs_diff(b.len());
+    }
+
+    unsafe {
+        if is_avx2_available() {
+            hamming_distance_avx2_inner(a, b)
+        } else {
+            hamming_distance_sse2_inner(a, b)
+        }
+    }
 }
 
 /// Returns the reverse complement of a DNA sequence

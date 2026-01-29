@@ -1,6 +1,7 @@
-use raptor::io::fastq::{open_fastq, read_fastq_records, FastqWriter};
+use raptor::io::fastq::{open_fastq, stream_fastq_records, FastqWriter};
 use raptor::kmer::cms::CountMinSketch;
 use raptor::kmer::normalize::should_keep_read;
+#[allow(deprecated)]
 use raptor::kmer::kmer::canonical_kmer;
 
 fn main() {
@@ -12,17 +13,17 @@ fn main() {
 
     let input_path = &args[1];
     let output_prefix = &args[2];
-    
+
     // Allow command-line overrides for parameters
     let k = if args.len() > 3 { args[3].parse().unwrap_or(15) } else { 15 }; // Shorter k size
     let target = if args.len() > 4 { args[4].parse().unwrap_or(5) } else { 5 }; // Lower target coverage
     let min_abund = if args.len() > 5 { args[5].parse().unwrap_or(1) } else { 1 }; // Accept even low-abundance k-mers
-    
+
     println!("Running in normalization mode with parameters: k={}, target={}, min_abund={}", k, target, min_abund);
-    
-    // First pass: count k-mers
+
+    // First pass: count k-mers using streaming for memory efficiency
     let reader = open_fastq(input_path);
-    let records = read_fastq_records(reader);
+    let records = stream_fastq_records(reader);
     let mut cms = CountMinSketch::new(4, 1 << 20);
     let mut all_records = vec![];
     

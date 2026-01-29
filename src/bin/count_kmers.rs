@@ -1,4 +1,5 @@
-use raptor::io::fastq::{open_fastq, read_fastq_records};
+use raptor::io::fastq::{open_fastq, stream_fastq_records};
+#[allow(deprecated)]
 use raptor::kmer::{cms::CountMinSketch, kmer::canonical_kmer};
 use std::collections::HashMap;
 use std::time::Instant;
@@ -16,13 +17,13 @@ fn main() {
     } else {
         21 // Default k-mer size
     };
-    
+
     println!("Processing {} with k-mer size: {}", input_path, k);
     let start = Instant::now();
-    
-    // Process the FASTQ file
+
+    // Process the FASTQ file using streaming for memory efficiency
     let reader = open_fastq(input_path);
-    let records = read_fastq_records(reader);
+    let records = stream_fastq_records(reader);
     
     // Set up k-mer counting
     let mut cms = CountMinSketch::new(4, 1 << 20);

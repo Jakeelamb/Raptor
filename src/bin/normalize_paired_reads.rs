@@ -1,6 +1,7 @@
-use raptor::io::fastq::{open_fastq, read_paired_fastq_records, FastqWriter};
+use raptor::io::fastq::{open_fastq, stream_paired_fastq_records, FastqWriter};
 use raptor::kmer::cms::CountMinSketch;
 use raptor::kmer::normalize::{should_keep_read_pair, estimate_read_abundance};
+#[allow(deprecated)]
 use raptor::kmer::kmer::canonical_kmer;
 use raptor::accel::gpu::kmer_gpu::GpuKmerCounter;
 
@@ -46,7 +47,7 @@ fn main() {
         
         let reader1 = open_fastq(input_r1);
         let reader2 = open_fastq(input_r2);
-        let mut pair_iterator = read_paired_fastq_records(reader1, reader2);
+        let mut pair_iterator = stream_paired_fastq_records(reader1, reader2);
         
         // Process in chunks
         loop {
@@ -109,7 +110,7 @@ fn main() {
         
         let reader1 = open_fastq(input_r1);
         let reader2 = open_fastq(input_r2);
-        let mut pair_iterator = read_paired_fastq_records(reader1, reader2);
+        let mut pair_iterator = stream_paired_fastq_records(reader1, reader2);
         
         // Process reads in chunks
         loop {
@@ -176,7 +177,7 @@ fn main() {
         
         let reader1 = open_fastq(input_r1);
         let reader2 = open_fastq(input_r2);
-        let pairs = read_paired_fastq_records(reader1, reader2);
+        let pairs = stream_paired_fastq_records(reader1, reader2);
         let all_pairs: Vec<(_, _)> = pairs.collect();
         total_pairs = all_pairs.len();
         

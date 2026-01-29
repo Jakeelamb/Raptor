@@ -4,3 +4,6 @@ pub mod rle;
 pub mod kmer;
 pub mod normalize;
 pub mod repeat;
+pub mod nthash;
+pub mod bloom;
+pub mod minimizer;
