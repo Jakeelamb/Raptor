@@ -1,6 +1,7 @@
 use raptor::io::fastq::{open_fastq, stream_fastq_records};
-#[allow(deprecated)]
-use raptor::kmer::{cms::CountMinSketch, kmer::canonical_kmer};
+use raptor::kmer::cms::CountMinSketch;
+use raptor::kmer::nthash::NtHashIterator;
+use raptor::kmer::kmer::KmerU64;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -24,35 +25,38 @@ fn main() {
     // Process the FASTQ file using streaming for memory efficiency
     let reader = open_fastq(input_path);
     let records = stream_fastq_records(reader);
-    
+
     // Set up k-mer counting
     let mut cms = CountMinSketch::new(4, 1 << 20);
-    let mut total_kmers = 0;
-    let mut total_reads = 0;
+    let mut total_kmers = 0usize;
+    let mut total_reads = 0usize;
     let mut kmer_histogram: HashMap<u16, usize> = HashMap::new();
-    let mut exact_counts: HashMap<String, u16> = HashMap::new();
-    
+    // Track exact counts using u64 encoding for memory efficiency
+    let mut exact_counts: HashMap<u64, u16> = HashMap::new();
+
     // Process each read
     for record in records {
         total_reads += 1;
-        
-        if record.sequence.len() < k {
+
+        let bytes = record.sequence.as_bytes();
+        if bytes.len() < k {
             continue;
         }
-        
-        // Process each k-mer in the read
-        for i in 0..=record.sequence.len() - k {
-            if let Some(kmer) = canonical_kmer(&record.sequence[i..i + k]) {
-                // Count in CMS
-                cms.insert(&kmer);
-                
-                // Keep exact counts for first 1000 unique k-mers
-                if exact_counts.len() < 1000 {
-                    *exact_counts.entry(kmer.clone()).or_insert(0) += 1;
+
+        // Process each k-mer using ntHash for fast hashing
+        for (pos, hash) in NtHashIterator::new(bytes, k) {
+            // Count in CMS using hash directly
+            cms.insert_hash(hash);
+
+            // Keep exact counts for first 1000 unique k-mers (using u64 encoding)
+            if exact_counts.len() < 1000 {
+                if let Some(kmer) = KmerU64::from_slice(&bytes[pos..pos + k]) {
+                    let canonical = kmer.canonical();
+                    *exact_counts.entry(canonical.encoded).or_insert(0) += 1;
                 }
-                
-                total_kmers += 1;
             }
+
+            total_kmers += 1;
         }
     }
     
@@ -84,9 +88,11 @@ fn main() {
     println!("\nTop 5 most frequent k-mers:");
     let mut top_kmers: Vec<_> = exact_counts.into_iter().collect();
     top_kmers.sort_by(|a, b| b.1.cmp(&a.1));
-    
-    for (kmer, count) in top_kmers.iter().take(5) {
-        println!("  {}: {} occurrences", kmer, count);
+
+    for (kmer_encoded, count) in top_kmers.iter().take(5) {
+        // Decode u64 back to string for display
+        let kmer_str = raptor::kmer::kmer::decode_kmer(*kmer_encoded, k);
+        println!("  {}: {} occurrences", kmer_str, count);
     }
     
     println!("\nComplete.");

@@ -1,8 +1,7 @@
 use raptor::io::fastq::{open_fastq, stream_paired_fastq_records, FastqWriter};
 use raptor::kmer::cms::CountMinSketch;
 use raptor::kmer::normalize::{should_keep_read_pair, estimate_read_abundance};
-#[allow(deprecated)]
-use raptor::kmer::kmer::canonical_kmer;
+use raptor::kmer::nthash::NtHashIterator;
 use raptor::accel::gpu::kmer_gpu::GpuKmerCounter;
 
 // Process reads in chunks to reduce memory usage
@@ -130,24 +129,16 @@ fn main() {
                 break;
             }
             
-            // Count k-mers for this chunk
+            // Count k-mers for this chunk using ntHash
             for (r1, r2) in &chunk {
-                // Process R1
-                if r1.sequence.len() >= k {
-                    for i in 0..=r1.sequence.len() - k {
-                        if let Some(kmer) = canonical_kmer(&r1.sequence[i..i + k]) {
-                            cms.insert(&kmer);
-                        }
-                    }
+                // Process R1 with ntHash
+                for (_, hash) in NtHashIterator::new(r1.sequence.as_bytes(), k) {
+                    cms.insert_hash(hash);
                 }
-                
-                // Process R2
-                if r2.sequence.len() >= k {
-                    for i in 0..=r2.sequence.len() - k {
-                        if let Some(kmer) = canonical_kmer(&r2.sequence[i..i + k]) {
-                            cms.insert(&kmer);
-                        }
-                    }
+
+                // Process R2 with ntHash
+                for (_, hash) in NtHashIterator::new(r2.sequence.as_bytes(), k) {
+                    cms.insert_hash(hash);
                 }
             }
             
@@ -184,24 +175,16 @@ fn main() {
         // CPU-based normalization
         let mut cms = CountMinSketch::new(4, 1 << 20);
         
-        // First pass - count k-mers from both mates
+        // First pass - count k-mers from both mates using ntHash
         for (r1, r2) in &all_pairs {
-            // Process R1
-            if r1.sequence.len() >= k {
-                for i in 0..=r1.sequence.len() - k {
-                    if let Some(kmer) = canonical_kmer(&r1.sequence[i..i + k]) {
-                        cms.insert(&kmer);
-                    }
-                }
+            // Process R1 with ntHash
+            for (_, hash) in NtHashIterator::new(r1.sequence.as_bytes(), k) {
+                cms.insert_hash(hash);
             }
-            
-            // Process R2
-            if r2.sequence.len() >= k {
-                for i in 0..=r2.sequence.len() - k {
-                    if let Some(kmer) = canonical_kmer(&r2.sequence[i..i + k]) {
-                        cms.insert(&kmer);
-                    }
-                }
+
+            // Process R2 with ntHash
+            for (_, hash) in NtHashIterator::new(r2.sequence.as_bytes(), k) {
+                cms.insert_hash(hash);
             }
         }
         

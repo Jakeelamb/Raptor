@@ -1,8 +1,7 @@
 use raptor::io::fastq::{open_fastq, stream_fastq_records, FastqWriter};
 use raptor::kmer::cms::CountMinSketch;
 use raptor::kmer::normalize::should_keep_read;
-#[allow(deprecated)]
-use raptor::kmer::kmer::canonical_kmer;
+use raptor::kmer::nthash::NtHashIterator;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -21,20 +20,16 @@ fn main() {
 
     println!("Running in normalization mode with parameters: k={}, target={}, min_abund={}", k, target, min_abund);
 
-    // First pass: count k-mers using streaming for memory efficiency
+    // First pass: count k-mers using streaming with ntHash for speed
     let reader = open_fastq(input_path);
     let records = stream_fastq_records(reader);
     let mut cms = CountMinSketch::new(4, 1 << 20);
     let mut all_records = vec![];
-    
+
     for record in records {
-        // Only consider k-mers if the sequence is long enough
-        if record.sequence.len() >= k {
-            for i in 0..=record.sequence.len() - k {
-                if let Some(kmer) = canonical_kmer(&record.sequence[i..i + k]) {
-                    cms.insert(&kmer);
-                }
-            }
+        // Count k-mers using ntHash for O(1) rolling updates
+        for (_, hash) in NtHashIterator::new(record.sequence.as_bytes(), k) {
+            cms.insert_hash(hash);
         }
         all_records.push(record);
     }
