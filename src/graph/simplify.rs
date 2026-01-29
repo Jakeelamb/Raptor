@@ -65,52 +65,53 @@ fn is_rle_similar(seq1: &str, seq2: &str, threshold: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+    use crate::kmer::kmer::encode_kmer;
+
     #[test]
     fn test_is_rle_similar() {
         // The RLE of "ATATATATATAT" might be [(A,1), (T,1)] * 6
         // The RLE of "ATATATATATAT" should be similar to itself
         assert!(is_rle_similar("ATATATATATAT", "ATATATATATAT", 0.9));
-        
+
         // Should be similar with small changes
         assert!(is_rle_similar("ATATATATATAT", "ATATATATCTAT", 0.8));
-        
+
         // Should not be similar with large changes
         assert!(!is_rle_similar("ATATATATATAT", "GCGCGCGCGCGC", 0.5));
     }
-    
+
     #[test]
     fn test_collapse_repeats() {
         let contig1 = Contig {
             id: 1,
             sequence: "ATATATATATAT".to_string(),
-            kmer_path: vec!["ATG".to_string(), "TGC".to_string()]
+            kmer_path: vec![encode_kmer("ATG").unwrap(), encode_kmer("TGC").unwrap()]
         };
-        
+
         let contig2 = Contig {
             id: 2,
             sequence: "ATATATATATAT".to_string(),
-            kmer_path: vec!["GCA".to_string(), "CAT".to_string()]
+            kmer_path: vec![encode_kmer("GCA").unwrap(), encode_kmer("CAT").unwrap()]
         };
-        
+
         let contig3 = Contig {
             id: 3,
             sequence: "GCGCGCGCGCGC".to_string(),
-            kmer_path: vec!["GCG".to_string(), "CGC".to_string()]
+            kmer_path: vec![encode_kmer("GCG").unwrap(), encode_kmer("CGC").unwrap()]
         };
-        
+
         let contigs = vec![contig1, contig2, contig3];
-        
+
         // Collapse with high similarity threshold (0.9)
         let collapsed = collapse_repeats(contigs.clone(), 0);
-        
+
         // Should merge the first two contigs
         assert_eq!(collapsed.len(), 2);
-        
+
         // Verify that one of the collapsed contigs is the similarity one
         let contains_similar = collapsed.iter().any(|c| c.sequence == "ATATATATATAT");
         assert!(contains_similar);
-        
+
         // Verify that the non-similar contig is still there
         let contains_different = collapsed.iter().any(|c| c.sequence == "GCGCGCGCGCGC");
         assert!(contains_different);

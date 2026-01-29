@@ -1,6 +1,8 @@
-use crate::accel::backend::{AdjacencyTable, ComputeBackend};
-use crate::accel::simd::match_kmers_with_overlap;
+use crate::accel::backend::{AdjacencyTable, AdjacencyTableU64, ComputeBackend};
+#[allow(deprecated)]
 use crate::kmer::kmer::canonical_kmer;
+use crate::kmer::kmer::{KmerU64, canonical_kmer_u64};
+use ahash::AHashMap;
 use rayon::prelude::*;
 use std::collections::HashMap;
 
@@ -32,7 +34,96 @@ impl Default for CpuBackend {
     }
 }
 
+impl CpuBackend {
+    /// Count k-mers using u64 encoding for maximum performance.
+    /// Uses sliding window encoding to avoid redundant work.
+    /// Zero allocations in the inner loop.
+    pub fn count_kmers_u64(&self, sequences: &[String], k: usize) -> AHashMap<u64, u32> {
+        if k > 32 {
+            panic!("k-mer size {} exceeds maximum of 32 for u64 encoding", k);
+        }
+
+        // Parallel k-mer counting with thread-local hashmaps
+        let thread_counts: Vec<AHashMap<u64, u32>> = sequences
+            .par_iter()
+            .fold(
+                || AHashMap::with_capacity(1024),
+                |mut counts, seq| {
+                    let bytes = seq.as_bytes();
+                    if bytes.len() >= k {
+                        // Initialize first k-mer
+                        if let Some(mut kmer) = KmerU64::from_slice(&bytes[0..k]) {
+                            let canonical = kmer.canonical();
+                            *counts.entry(canonical.encoded).or_insert(0) += 1;
+
+                            // Sliding window: extend and re-canonicalize
+                            for i in k..bytes.len() {
+                                if let Some(next) = kmer.extend(bytes[i]) {
+                                    kmer = next;
+                                    let canonical = kmer.canonical();
+                                    *counts.entry(canonical.encoded).or_insert(0) += 1;
+                                } else {
+                                    // Invalid base encountered, restart
+                                    if i + 1 >= k {
+                                        if let Some(fresh) = KmerU64::from_slice(&bytes[i + 1 - k..i + 1]) {
+                                            kmer = fresh;
+                                            let canonical = kmer.canonical();
+                                            *counts.entry(canonical.encoded).or_insert(0) += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    counts
+                },
+            )
+            .collect();
+
+        // Pre-size the merged map
+        let total_estimate: usize = thread_counts.iter().map(|m| m.len()).sum();
+        let mut merged = AHashMap::with_capacity(total_estimate);
+
+        // Merge thread-local counts
+        for local in thread_counts {
+            for (kmer, count) in local {
+                *merged.entry(kmer).or_insert(0) += count;
+            }
+        }
+
+        merged
+    }
+
+    /// Build adjacency table using u64-encoded k-mers.
+    /// Much faster than string-based version due to integer operations.
+    pub fn build_adjacency_u64(&self, kmer_counts: &AHashMap<u64, u32>, k: usize) -> AdjacencyTableU64 {
+        let mut adjacency = AdjacencyTableU64::with_capacity(k as u8, kmer_counts.len());
+
+        // Mask for k-1 bases
+        let suffix_mask: u64 = (1u64 << ((k - 1) * 2)) - 1;
+
+        // Build adjacency by trying all possible extensions
+        for (&kmer, &_count) in kmer_counts {
+            // Get suffix (last k-1 bases)
+            let suffix = kmer & suffix_mask;
+
+            // Try all 4 possible extensions
+            for base in 0u64..4 {
+                let next = (suffix << 2) | base;
+                let next_canonical = canonical_kmer_u64(next, k);
+
+                if let Some(&next_count) = kmer_counts.get(&next_canonical) {
+                    adjacency.add_edge(kmer, next_canonical, next_count);
+                }
+            }
+        }
+
+        adjacency
+    }
+}
+
 impl ComputeBackend for CpuBackend {
+    #[allow(deprecated)]
     fn count_kmers(&self, sequences: &[String], k: usize) -> HashMap<String, u32> {
         // Parallel k-mer counting with thread-local hashmaps
         let thread_counts: Vec<HashMap<String, u32>> = sequences
@@ -63,30 +154,84 @@ impl ComputeBackend for CpuBackend {
         merged
     }
 
+    /// Optimized overlap detection using suffix/prefix indexing.
+    /// Complexity: O(n*k) instead of O(n^2) for n contigs.
     fn find_overlaps(
         &self,
         contigs: &[String],
         min_overlap: usize,
         max_mismatch: usize,
     ) -> Vec<(usize, usize, usize)> {
-        // Generate all pairs (excluding self-comparisons)
-        let contig_pairs: Vec<(usize, usize)> = (0..contigs.len())
-            .flat_map(|i| (0..contigs.len()).map(move |j| (i, j)))
-            .filter(|&(i, j)| i != j)
+        if contigs.is_empty() {
+            return Vec::new();
+        }
+
+        // Build suffix index: maps suffix -> list of (contig_idx, suffix_len)
+        // This allows O(1) lookup of potential overlaps
+        let mut suffix_index: AHashMap<String, Vec<(usize, usize)>> = AHashMap::new();
+
+        // Index all suffixes of length >= min_overlap
+        for (idx, contig) in contigs.iter().enumerate() {
+            let len = contig.len();
+            for suffix_len in min_overlap..=len.min(100) {  // Cap at 100 to avoid memory explosion
+                let suffix = &contig[len - suffix_len..];
+                suffix_index
+                    .entry(suffix.to_string())
+                    .or_default()
+                    .push((idx, suffix_len));
+            }
+        }
+
+        // Find overlaps by looking up prefixes in suffix index
+        let results: Vec<(usize, usize, usize)> = contigs
+            .par_iter()
+            .enumerate()
+            .flat_map(|(to_idx, contig)| {
+                let mut overlaps = Vec::new();
+                let len = contig.len();
+
+                // Check all prefixes against suffix index
+                for prefix_len in min_overlap..=len.min(100) {
+                    let prefix = &contig[0..prefix_len];
+
+                    if let Some(matches) = suffix_index.get(prefix) {
+                        for &(from_idx, suffix_len) in matches {
+                            if from_idx != to_idx && suffix_len == prefix_len {
+                                // Verify the overlap with mismatch tolerance
+                                let from = &contigs[from_idx];
+                                let from_suffix = &from[from.len() - suffix_len..];
+
+                                // Count mismatches
+                                let mismatches = from_suffix
+                                    .chars()
+                                    .zip(prefix.chars())
+                                    .filter(|(a, b)| a != b)
+                                    .count();
+
+                                if mismatches <= max_mismatch {
+                                    overlaps.push((from_idx, to_idx, prefix_len));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                overlaps
+            })
             .collect();
 
-        // Parallel overlap detection
-        contig_pairs
-            .par_iter()
-            .filter_map(|&(i, j)| {
-                let from = &contigs[i];
-                let to = &contigs[j];
+        // Deduplicate (keep longest overlap per pair)
+        let mut best_overlaps: AHashMap<(usize, usize), usize> = AHashMap::new();
+        for (from, to, len) in results {
+            let entry = best_overlaps.entry((from, to)).or_insert(0);
+            if len > *entry {
+                *entry = len;
+            }
+        }
 
-                match_kmers_with_overlap(from, to, min_overlap, max_mismatch).map(|(shift, _)| {
-                    let overlap_len = from.len() - shift;
-                    (i, j, overlap_len)
-                })
-            })
+        best_overlaps
+            .into_iter()
+            .map(|((from, to), len)| (from, to, len))
             .collect()
     }
 

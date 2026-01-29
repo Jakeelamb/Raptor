@@ -68,58 +68,60 @@ pub fn write_transcript_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+    use crate::kmer::kmer::encode_kmer;
+
     #[test]
     fn test_generate_metadata() {
         let contigs = vec![
             Contig {
                 id: 0,
                 sequence: "AAAACCCCCGGGGTTTT".to_string(),
-                kmer_path: vec!["AAAAC".to_string()],
+                kmer_path: vec![encode_kmer("AAAAC").unwrap()],
             },
             Contig {
                 id: 1,
                 sequence: "ATATATAT".to_string(),
-                kmer_path: vec!["ATATA".to_string()],
+                kmer_path: vec![encode_kmer("ATATA").unwrap()],
             },
         ];
-        
+
         let metadata = generate_metadata(&contigs);
-        
+
         assert_eq!(metadata.len(), 2);
-        
+
         // First contig
         assert_eq!(metadata[0].id, 1);
         assert_eq!(metadata[0].length, 17);
-        
-        // Check RLE compression: Original is "AAAACCCCCGGGGTTTT", 
+
+        // Check RLE compression: Original is "AAAACCCCCGGGGTTTT",
         // RLE is [(A,4), (C,5), (G,4), (T,4)], so 4 elements vs 17 original
         // AAAACCCCCGGGGTTTT has 4 elements in RLE: A4, C5, G4, T4
         let expected_compression = 1.0 - (4.0 / 17.0);
         println!("Expected: {}, Actual: {}", expected_compression, metadata[0].rle_compression);
         assert!((metadata[0].rle_compression - expected_compression).abs() < 0.001);
-        
+
         // Check GC content: "AAAACCCCCGGGGTTTT" has 9 G/C out of 17 total
         let expected_gc = 9.0 / 17.0;
         assert!((metadata[0].gc_content - expected_gc).abs() < 0.001);
-        
+
         // Second contig
         assert_eq!(metadata[1].id, 2);
         assert_eq!(metadata[1].length, 8);
     }
 
     // Create and return mock contigs for testing
+    #[allow(dead_code)]
     fn create_test_contigs() -> Vec<Contig> {
         vec![
             Contig {
                 id: 0,
                 sequence: "ATCGATCGATCG".to_string(),
-                kmer_path: vec!["ATC".to_string(), "TCG".to_string()],
+                kmer_path: vec![encode_kmer("ATC").unwrap(), encode_kmer("TCG").unwrap()],
             },
             Contig {
                 id: 1,
                 sequence: "GCTAGCTAGCT".to_string(),
-                kmer_path: vec!["GCT".to_string(), "CTA".to_string()],
+                kmer_path: vec![encode_kmer("GCT").unwrap(), encode_kmer("CTA").unwrap()],
             },
         ]
     }

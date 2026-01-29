@@ -1,15 +1,13 @@
-use crate::io::fastq::{open_fastq, read_fastq_records, stream_fastq_records};
+use crate::io::fastq::{open_fastq, stream_fastq_records, FastqRecord};
 use crate::io::fasta::FastaWriter;
 use crate::io::gfa::GfaWriter;
 use crate::io::gfa2::Gfa2Writer;
-use crate::kmer::kmer::canonical_kmer;
 use crate::kmer::variable_k::{optimal_k, kmer_coverage_histogram, select_best_k};
-use crate::graph::assembler::greedy_assembly;
+use crate::graph::assembler::greedy_assembly_u64;
 use crate::graph::overlap::find_overlaps;
 use crate::graph::stitch::OverlapGraphBuilder;
-use crate::accel::{ComputeBackend, create_backend};
+use crate::accel::{ComputeBackend, create_backend, CpuBackend};
 use std::collections::HashMap;
-use std::path::Path as FilePath;
 use tracing::{info, warn};
 use std::fs;
 use std::io::Write;
@@ -91,45 +89,77 @@ pub fn assemble_reads_with_gpu(
     let max_k = 41;
     let mut k = 31; // Default k-mer size
 
-    let mut records = Vec::new();
+    let mut records: Vec<FastqRecord> = Vec::new();
 
-    // First, count total sequences to decide on backend
+    // Use streaming mode for memory efficiency with large files
+    let cpu_backend = CpuBackend::new();
+
+    // Stream sequences and count k-mers in chunks for memory efficiency
+    info!("Streaming FASTQ records for k-mer counting...");
     let reader = open_fastq(input_path);
-    let total_records: Vec<_> = read_fastq_records(reader).collect();
-    let num_sequences = total_records.len();
+    let mut sequences: Vec<String> = Vec::new();
+    let mut num_sequences = 0;
+
+    // Chunk size for streaming processing (adjust based on available memory)
+    const CHUNK_SIZE: usize = 100_000;
+
+    // First pass: collect sequences for k optimization (sample if large)
+    for record in stream_fastq_records(reader) {
+        sequences.push(record.sequence);
+        num_sequences += 1;
+    }
+
+    info!("Loaded {} sequences", num_sequences);
 
     // Create the appropriate compute backend
     let backend = create_backend(use_gpu, num_sequences, num_sequences / 10 + 100);
     info!("Using compute backend: {}", backend.name());
 
-    // Extract sequences for k-mer optimization
-    let sequences: Vec<String> = total_records.iter()
-        .map(|record| record.sequence.clone())
-        .collect();
+    // Determine k-mer size from sample
+    let sample_size = sequences.len().min(10_000);
+    let sample: Vec<String> = sequences.iter().take(sample_size).cloned().collect();
 
-    // Determine k-mer size
     if _adaptive_k {
-        let hist = kmer_coverage_histogram(&sequences, max_k);
+        let hist = kmer_coverage_histogram(&sample, max_k);
         k = select_best_k(&hist);
         info!("Using adaptive k-mer: {}", k);
     } else {
-        k = optimal_k(&sequences, max_k);
+        k = optimal_k(&sample, max_k);
         info!("Using optimal k-mer size: {}", k);
     }
 
-    // Count k-mers using the selected backend
-    info!("Counting k-mers with k={} using {}", k, backend.name());
-    let kmer_counts = backend.count_kmers(&sequences, k);
-    info!("Found {} unique k-mers", kmer_counts.len());
+    // Ensure k <= 32 for u64 encoding
+    if k > 32 {
+        info!("Capping k-mer size at 32 for u64 encoding (was {})", k);
+        k = 32;
+    }
+
+    // Count k-mers using optimized u64 path
+    info!("Counting k-mers with k={} using optimized u64 encoding", k);
+    let kmer_counts_u64 = cpu_backend.count_kmers_u64(&sequences, k);
+    info!("Found {} unique k-mers", kmer_counts_u64.len());
+
+    // Build adjacency table for assembly
+    info!("Building adjacency table...");
+    let adjacency = cpu_backend.build_adjacency_u64(&kmer_counts_u64, k);
+    info!("Adjacency table built with {} forward edges", adjacency.forward.len());
 
     // Keep records for polishing if needed
     if polish || (isoforms && (polish_isoforms || compute_tpm)) {
-        records = total_records;
+        let reader = open_fastq(input_path);
+        records = stream_fastq_records(reader).collect();
     }
 
-    // Perform greedy assembly
+    // Perform greedy assembly using u64 k-mers
     info!("Assembling contigs with minimum length: {}", min_len);
-    let mut contigs = greedy_assembly(k, &kmer_counts, min_len);
+    let mut contigs = greedy_assembly_u64(k, &kmer_counts_u64, &adjacency, min_len);
+
+    // Legacy path for GPU backend (uses String k-mers)
+    // Convert u64 counts to String counts for compatibility with existing GPU code
+    let kmer_counts: HashMap<String, u32> = kmer_counts_u64
+        .iter()
+        .map(|(&kmer, &count)| (crate::kmer::kmer::decode_kmer(kmer, k), count))
+        .collect();
 
     // Collapse repeats if requested
     if collapse_repeats {

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
+use ahash::AHashMap;
 
-/// Adjacency table for k-mer graph traversal
+/// Adjacency table for k-mer graph traversal (String-based, legacy)
 #[derive(Debug, Clone, Default)]
 pub struct AdjacencyTable {
     /// Maps each k-mer to its neighbors with counts
@@ -20,6 +21,61 @@ impl AdjacencyTable {
     pub fn add_edge(&mut self, from: String, to: String, count: u32) {
         self.forward.entry(from.clone()).or_default().push((to.clone(), count));
         self.backward.entry(to).or_default().push((from, count));
+    }
+}
+
+/// High-performance adjacency table using u64-encoded k-mers.
+/// Uses AHashMap for faster hashing of integer keys.
+/// Memory: ~16 bytes per edge vs ~100+ bytes for String-based.
+#[derive(Debug, Clone)]
+pub struct AdjacencyTableU64 {
+    /// Maps each k-mer (u64) to its successors with counts
+    pub forward: AHashMap<u64, Vec<(u64, u32)>>,
+    /// Maps each k-mer (u64) to its predecessors with counts
+    pub backward: AHashMap<u64, Vec<(u64, u32)>>,
+    /// K-mer size (needed for decoding)
+    pub k: u8,
+}
+
+impl AdjacencyTableU64 {
+    pub fn new(k: u8) -> Self {
+        Self {
+            forward: AHashMap::new(),
+            backward: AHashMap::new(),
+            k,
+        }
+    }
+
+    pub fn with_capacity(k: u8, capacity: usize) -> Self {
+        Self {
+            forward: AHashMap::with_capacity(capacity),
+            backward: AHashMap::with_capacity(capacity),
+            k,
+        }
+    }
+
+    #[inline]
+    pub fn add_edge(&mut self, from: u64, to: u64, count: u32) {
+        self.forward.entry(from).or_default().push((to, count));
+        self.backward.entry(to).or_default().push((from, count));
+    }
+
+    /// Get forward neighbors of a k-mer
+    #[inline]
+    pub fn get_successors(&self, kmer: u64) -> Option<&Vec<(u64, u32)>> {
+        self.forward.get(&kmer)
+    }
+
+    /// Get backward neighbors of a k-mer
+    #[inline]
+    pub fn get_predecessors(&self, kmer: u64) -> Option<&Vec<(u64, u32)>> {
+        self.backward.get(&kmer)
+    }
+}
+
+impl Default for AdjacencyTableU64 {
+    fn default() -> Self {
+        Self::new(31)
     }
 }
 

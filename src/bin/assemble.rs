@@ -1,6 +1,8 @@
 use raptor::io::fastq::{open_fastq, read_fastq_records, FastqRecord};
 use raptor::io::fasta::FastaWriter;
+#[allow(deprecated)]
 use raptor::kmer::kmer::canonical_kmer;
+use raptor::kmer::kmer::encode_kmer;
 use raptor::graph::assembler::Contig;
 use rayon::ThreadPoolBuilder;
 use std::collections::{HashMap, HashSet};
@@ -131,46 +133,47 @@ fn main() {
 }
 
 // Improved version of greedy assembly with extension
+#[allow(deprecated)]
 fn assemble_contigs(k: usize, kmer_counts: &HashMap<String, u32>, min_len: usize) -> Vec<Contig> {
     let mut contigs = Vec::new();
     let mut used = HashSet::new();
-    
+
     // Sort k-mers by abundance
     let mut sorted_kmers: Vec<(&String, &u32)> = kmer_counts.iter().collect();
     sorted_kmers.sort_by(|a, b| b.1.cmp(a.1));
-    
+
     for (kmer, &_count) in sorted_kmers {
         if used.contains(kmer) {
             continue;
         }
-        
+
         // Try to extend this k-mer in both directions
         let mut contig = kmer.clone();
-        let mut path = vec![kmer.clone()];
+        let mut path: Vec<u64> = vec![encode_kmer(kmer).unwrap_or(0)];
         used.insert(kmer.clone());
-        
+
         // Forward extension
         let mut current = kmer.clone();
         loop {
             let suffix = &current[1..];
             let mut best_next = None;
             let mut best_count = 0;
-            
+
             // Find the best extension
             for (ext_kmer, &ext_count) in kmer_counts.iter() {
                 if used.contains(ext_kmer) {
                     continue;
                 }
-                
+
                 if ext_kmer.starts_with(suffix) && ext_count > best_count {
                     best_next = Some(ext_kmer);
                     best_count = ext_count;
                 }
             }
-            
+
             if let Some(next) = best_next {
                 used.insert(next.clone());
-                path.push(next.clone());
+                path.push(encode_kmer(next).unwrap_or(0));
                 let extension = &next[k-1..];
                 contig.push_str(extension);
                 current = next.clone();
@@ -178,7 +181,7 @@ fn assemble_contigs(k: usize, kmer_counts: &HashMap<String, u32>, min_len: usize
                 break;
             }
         }
-        
+
         if contig.len() >= min_len {
             contigs.push(Contig {
                 id: contigs.len(),
@@ -187,6 +190,6 @@ fn assemble_contigs(k: usize, kmer_counts: &HashMap<String, u32>, min_len: usize
             });
         }
     }
-    
+
     contigs
 }
