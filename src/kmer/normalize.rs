@@ -1,6 +1,7 @@
 // src/kmer/normalize.rs
 use crate::io::fastq::FastqRecord;
-use crate::kmer::{cms::CountMinSketch, kmer::canonical_kmer};
+use crate::kmer::cms::CountMinSketch;
+use crate::kmer::nthash::NtHashIterator;
 use rand::Rng;
 
 /// Statistics about a read's k-mer abundance
@@ -10,24 +11,15 @@ pub struct AbundanceStats {
     pub min: u32,
 }
 
-/// Estimates the abundance statistics for a read sequence
+/// Estimates the abundance statistics for a read sequence.
+/// Uses ntHash for fast O(1) rolling hash computation.
 pub fn estimate_read_abundance(seq: &str, k: usize, sketch: &[u32]) -> AbundanceStats {
-    let mut abund = vec![];
-    for i in 0..=seq.len().saturating_sub(k) {
-        if let Some(kmer) = canonical_kmer(&seq[i..i + k]) {
-            let mut hash = 0u64;
-            for b in kmer.bytes() {
-                hash = hash.wrapping_mul(4).wrapping_add(match b {
-                    b'A' | b'a' => 0, 
-                    b'C' | b'c' => 1, 
-                    b'G' | b'g' => 2, 
-                    _ => 3,
-                });
-            }
-            let count = sketch[(hash % 65536) as usize];
-            abund.push(count);
-        }
-    }
+    let bytes = seq.as_bytes();
+    let sketch_mask = (sketch.len() - 1) as u64;
+
+    let mut abund: Vec<u32> = NtHashIterator::new(bytes, k)
+        .map(|(_, hash)| sketch[(hash & sketch_mask) as usize])
+        .collect();
 
     if abund.is_empty() {
         return AbundanceStats { median: 0, min: 0 };
@@ -41,7 +33,8 @@ pub fn estimate_read_abundance(seq: &str, k: usize, sketch: &[u32]) -> Abundance
     }
 }
 
-/// Determines whether a read should be kept based on its k-mer coverage
+/// Determines whether a read should be kept based on its k-mer coverage.
+/// Uses ntHash for fast O(1) rolling hash computation.
 pub fn should_keep_read(
     record: &FastqRecord,
     cms: &CountMinSketch,
@@ -52,38 +45,36 @@ pub fn should_keep_read(
     if record.sequence.len() < k {
         return false; // Skip reads shorter than k
     }
-    
-    // Get median abundance of k-mers in the read
-    let mut abundances = Vec::new();
-    for i in 0..=record.sequence.len() - k {
-        let kmer_slice = &record.sequence[i..i + k];
-        if let Some(kmer) = canonical_kmer(kmer_slice) {
-            abundances.push(cms.estimate(&kmer));
-        }
-    }
-    
+
+    let bytes = record.sequence.as_bytes();
+
+    // Get median abundance of k-mers in the read using ntHash
+    let mut abundances: Vec<u16> = NtHashIterator::new(bytes, k)
+        .map(|(_, hash)| cms.estimate_hash(hash))
+        .collect();
+
     // If no valid k-mers, skip this read
     if abundances.is_empty() {
         return false;
     }
-    
+
     // Sort abundances and find median
     abundances.sort_unstable();
     let median_idx = abundances.len() / 2;
     let median_abund = abundances[median_idx];
-    
+
     // Skip reads with low abundance (potential errors)
     if median_abund < min_abund {
         return false;
     }
-    
+
     // Keep high-abundance reads with probability target/abundance
     if median_abund > target {
         let mut rng = rand::thread_rng();
         let keep_prob = target as f64 / median_abund as f64;
         return rng.gen::<f64>() < keep_prob;
     }
-    
+
     // Always keep reads at or below target abundance
     true
 }
