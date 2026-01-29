@@ -53,7 +53,7 @@ fn edit_distance(a: &str, b: &str) -> usize {
 /// This is O(m+n) vs O(m*n) for edit distance, providing 100-1000x speedup.
 /// Jaccard similarity = |intersection| / |union|
 #[inline]
-fn kmer_jaccard_similarity(seq1: &str, seq2: &str, k: usize) -> f64 {
+pub fn kmer_jaccard_similarity(seq1: &str, seq2: &str, k: usize) -> f64 {
     if seq1.len() < k || seq2.len() < k {
         // Fall back to length-based similarity for very short sequences
         let min_len = seq1.len().min(seq2.len());

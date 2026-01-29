@@ -43,6 +43,21 @@ num_cpus = "1.16.0"
 # Optional dependencies
 ocl = { version = "0.19.6", optional = true }
 
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "kmer_counting"
+harness = false
+
+[[bench]]
+name = "overlap_detection"
+harness = false
+
+[[bench]]
+name = "isoform_paths"
+harness = false
+
 [[bin]]
 name = "raptor"
 path = "src/main.rs"
