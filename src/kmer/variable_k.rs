@@ -1,10 +1,12 @@
 use std::collections::HashMap;
-use crate::kmer::kmer::canonical_kmer;
+use ahash::AHashSet;
+use crate::kmer::nthash::NtHashIterator;
 
-/// Generate a histogram of unique k-mer counts for different k values
+/// Generate a histogram of unique k-mer counts for different k values.
+/// Uses ntHash for fast O(1) rolling hash computation.
 pub fn kmer_coverage_histogram(sequences: &[String], max_k: usize) -> HashMap<usize, usize> {
     let mut counts: HashMap<usize, usize> = HashMap::new();
-    
+
     // Choose k values to test up to max_k
     let k_values: Vec<usize> = if max_k <= 21 {
         vec![15, 17, 19, 21]
@@ -15,22 +17,18 @@ pub fn kmer_coverage_histogram(sequences: &[String], max_k: usize) -> HashMap<us
     };
 
     for &k in &k_values {
-        let mut seen = HashMap::new();
+        // Use u64 hash set for memory efficiency
+        let mut seen: AHashSet<u64> = AHashSet::new();
 
         for seq in sequences {
-            if seq.len() < k {
-                continue;
-            }
-            
-            for i in 0..=seq.len() - k {
-                if let Some(kmer) = canonical_kmer(&seq[i..i + k]) {
-                    *seen.entry(kmer).or_insert(0) += 1;
-                }
+            let bytes = seq.as_bytes();
+            // Use ntHash for O(1) rolling hash per k-mer
+            for (_, hash) in NtHashIterator::new(bytes, k) {
+                seen.insert(hash);
             }
         }
 
-        let unique = seen.len();
-        counts.insert(k, unique);
+        counts.insert(k, seen.len());
     }
 
     counts

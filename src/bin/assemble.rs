@@ -1,11 +1,10 @@
 use raptor::io::fastq::{open_fastq, stream_fastq_records, FastqRecord};
 use raptor::io::fasta::FastaWriter;
-#[allow(deprecated)]
-use raptor::kmer::kmer::canonical_kmer;
-use raptor::kmer::kmer::encode_kmer;
+use raptor::kmer::kmer::{KmerU64, decode_kmer};
+use raptor::kmer::nthash::NtHashIterator;
 use raptor::graph::assembler::Contig;
 use rayon::ThreadPoolBuilder;
-use std::collections::{HashMap, HashSet};
+use ahash::{AHashMap, AHashSet};
 use std::path::Path;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -46,16 +45,28 @@ fn main() {
     let records: Vec<FastqRecord> = stream_fastq_records(reader).collect();
     println!("Read {} records", records.len());
     
-    // Build k-mer map from reads
-    println!("Building k-mer map...");
-    let mut kmer_map = HashMap::new();
+    // Build k-mer map from reads using u64 encoding for memory efficiency
+    println!("Building k-mer map with ntHash...");
+    let mut kmer_map: AHashMap<u64, u32> = AHashMap::new();
     for record in &records {
-        let sequence = &record.sequence;
-        for i in 0..=sequence.len().saturating_sub(k) {
-            if i + k <= sequence.len() {
-                let kmer = &sequence[i..i+k];
-                if let Some(canonical) = canonical_kmer(kmer) {
-                    *kmer_map.entry(canonical).or_insert(0u32) += 1;
+        let bytes = record.sequence.as_bytes();
+        // Use KmerU64 for canonical encoding
+        if bytes.len() >= k {
+            if let Some(mut kmer) = KmerU64::from_slice(&bytes[0..k]) {
+                let canonical = kmer.canonical();
+                *kmer_map.entry(canonical.encoded).or_insert(0) += 1;
+
+                // Sliding window
+                for i in k..bytes.len() {
+                    if let Some(next) = kmer.extend(bytes[i]) {
+                        kmer = next;
+                        let canonical = kmer.canonical();
+                        *kmer_map.entry(canonical.encoded).or_insert(0) += 1;
+                    } else if let Some(fresh) = KmerU64::from_slice(&bytes[i + 1 - k..i + 1]) {
+                        kmer = fresh;
+                        let canonical = kmer.canonical();
+                        *kmer_map.entry(canonical.encoded).or_insert(0) += 1;
+                    }
                 }
             }
         }
@@ -69,7 +80,7 @@ fn main() {
     if dev_mode {
         let debug_dir = Path::new(output_path).parent().unwrap_or(Path::new("."));
         let debug_file = debug_dir.join("debug_kmers.tsv");
-        
+
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -79,11 +90,12 @@ fn main() {
                 eprintln!("Warning: Could not create debug file: {}", e);
                 OpenOptions::new().write(true).open("/dev/null").unwrap()
             });
-            
+
         // Write all k-mers with their counts for analysis
         writeln!(&mut file, "kmer\tcount").unwrap();
-        for (kmer, count) in &kmer_map {
-            writeln!(&mut file, "{}\t{}", kmer, count).unwrap();
+        for (&kmer_encoded, &count) in &kmer_map {
+            let kmer_str = decode_kmer(kmer_encoded, k);
+            writeln!(&mut file, "{}\t{}", kmer_str, count).unwrap();
         }
     }
     
@@ -95,9 +107,9 @@ fn main() {
     println!("Retained {} k-mers ({}%)", kmer_map.len(), 
              (kmer_map.len() as f32 / original_kmer_count as f32 * 100.0).round());
     
-    // Assemble contigs using greedy algorithm
+    // Assemble contigs using greedy algorithm with u64 encoding
     println!("Assembling contigs...");
-    let mut contigs = assemble_contigs(k, &kmer_map, min_length);
+    let mut contigs = assemble_contigs_u64(k, &kmer_map, min_length);
     
     // Filter short contigs (unless in dev mode)
     if !dev_mode {
@@ -132,51 +144,60 @@ fn main() {
     println!("Done!");
 }
 
-// Improved version of greedy assembly with extension
-#[allow(deprecated)]
-fn assemble_contigs(k: usize, kmer_counts: &HashMap<String, u32>, min_len: usize) -> Vec<Contig> {
+/// Greedy assembly using u64-encoded k-mers for memory efficiency.
+/// Uses suffix matching via bit operations.
+fn assemble_contigs_u64(k: usize, kmer_counts: &AHashMap<u64, u32>, min_len: usize) -> Vec<Contig> {
+    const BASES: [char; 4] = ['A', 'C', 'G', 'T'];
     let mut contigs = Vec::new();
-    let mut used = HashSet::new();
+    let mut used: AHashSet<u64> = AHashSet::new();
 
-    // Sort k-mers by abundance
-    let mut sorted_kmers: Vec<(&String, &u32)> = kmer_counts.iter().collect();
+    // Sort k-mers by abundance (descending)
+    let mut sorted_kmers: Vec<(&u64, &u32)> = kmer_counts.iter().collect();
     sorted_kmers.sort_by(|a, b| b.1.cmp(a.1));
 
-    for (kmer, &_count) in sorted_kmers {
-        if used.contains(kmer) {
+    // Mask for suffix (k-1 bases)
+    let suffix_mask: u64 = (1u64 << ((k - 1) * 2)) - 1;
+
+    for (&kmer, &_count) in sorted_kmers {
+        if used.contains(&kmer) {
             continue;
         }
 
-        // Try to extend this k-mer in both directions
-        let mut contig = kmer.clone();
-        let mut path: Vec<u64> = vec![encode_kmer(kmer).unwrap_or(0)];
-        used.insert(kmer.clone());
+        // Start with this k-mer
+        let mut contig = decode_kmer(kmer, k);
+        let mut path: Vec<u64> = vec![kmer];
+        used.insert(kmer);
 
         // Forward extension
-        let mut current = kmer.clone();
+        let mut current = kmer;
         loop {
-            let suffix = &current[1..];
-            let mut best_next = None;
-            let mut best_count = 0;
+            // Get suffix (last k-1 bases)
+            let suffix = current & suffix_mask;
 
-            // Find the best extension
-            for (ext_kmer, &ext_count) in kmer_counts.iter() {
-                if used.contains(ext_kmer) {
-                    continue;
-                }
+            let mut best_next: Option<u64> = None;
+            let mut best_count = 0u32;
 
-                if ext_kmer.starts_with(suffix) && ext_count > best_count {
-                    best_next = Some(ext_kmer);
-                    best_count = ext_count;
+            // Try all 4 possible extensions
+            for base in 0u64..4 {
+                let next = (suffix << 2) | base;
+                // Get canonical form
+                let next_canonical = raptor::kmer::kmer::canonical_kmer_u64(next, k);
+
+                if let Some(&ext_count) = kmer_counts.get(&next_canonical) {
+                    if !used.contains(&next_canonical) && ext_count > best_count {
+                        best_next = Some(next_canonical);
+                        best_count = ext_count;
+                    }
                 }
             }
 
             if let Some(next) = best_next {
-                used.insert(next.clone());
-                path.push(encode_kmer(next).unwrap_or(0));
-                let extension = &next[k-1..];
-                contig.push_str(extension);
-                current = next.clone();
+                used.insert(next);
+                path.push(next);
+                // Extract last base and append
+                let last_base = BASES[(next & 0b11) as usize];
+                contig.push(last_base);
+                current = next;
             } else {
                 break;
             }

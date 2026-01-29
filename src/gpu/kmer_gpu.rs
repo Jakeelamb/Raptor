@@ -258,23 +258,42 @@ pub fn get_gpu_info() -> Option<String> {
     None
 }
 
-/// CPU fallback for k-mer counting (used when GPU is not available)
+/// CPU fallback for k-mer counting (used when GPU is not available).
+/// Uses KmerU64 for efficient sliding window encoding.
 pub fn count_kmers_cpu(sequences: &[String], k: usize) -> HashMap<String, u32> {
-    use crate::kmer::kmer::canonical_kmer;
+    use crate::kmer::kmer::{KmerU64, decode_kmer};
 
-    let mut counts = HashMap::new();
+    let mut counts: HashMap<u64, u32> = HashMap::new();
     for seq in sequences {
-        if seq.len() < k {
+        let bytes = seq.as_bytes();
+        if bytes.len() < k {
             continue;
         }
 
-        for i in 0..=seq.len() - k {
-            if let Some(kmer) = canonical_kmer(&seq[i..i + k]) {
-                *counts.entry(kmer).or_insert(0) += 1;
+        // Use KmerU64 sliding window
+        if let Some(mut kmer) = KmerU64::from_slice(&bytes[0..k]) {
+            let canonical = kmer.canonical();
+            *counts.entry(canonical.encoded).or_insert(0) += 1;
+
+            for i in k..bytes.len() {
+                if let Some(next) = kmer.extend(bytes[i]) {
+                    kmer = next;
+                    let canonical = kmer.canonical();
+                    *counts.entry(canonical.encoded).or_insert(0) += 1;
+                } else if let Some(fresh) = KmerU64::from_slice(&bytes[i + 1 - k..i + 1]) {
+                    kmer = fresh;
+                    let canonical = kmer.canonical();
+                    *counts.entry(canonical.encoded).or_insert(0) += 1;
+                }
             }
         }
     }
+
+    // Convert u64 keys to String for compatibility
     counts
+        .into_iter()
+        .map(|(encoded, count)| (decode_kmer(encoded, k), count))
+        .collect()
 }
 
 /// GPU k-mer counter using ntHash for O(1) rolling updates.
