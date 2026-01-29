@@ -48,7 +48,35 @@ impl CountMinSketch {
         }
         min_count
     }
-    
+
+    /// Insert a pre-computed hash into the sketch.
+    /// Uses double hashing to generate multiple indices from a single hash.
+    #[inline]
+    pub fn insert_hash(&mut self, hash: u64) {
+        let h1 = hash as usize;
+        let h2 = (hash >> 32) as usize;
+        for i in 0..self.depth {
+            let idx = (h1.wrapping_add(i.wrapping_mul(h2))) % self.width;
+            if self.matrix[i][idx] < u16::MAX {
+                self.matrix[i][idx] += 1;
+            }
+        }
+    }
+
+    /// Get the estimated count for a pre-computed hash.
+    /// Uses double hashing to generate multiple indices from a single hash.
+    #[inline]
+    pub fn estimate_hash(&self, hash: u64) -> u16 {
+        let h1 = hash as usize;
+        let h2 = (hash >> 32) as usize;
+        let mut min_count = u16::MAX;
+        for i in 0..self.depth {
+            let idx = (h1.wrapping_add(i.wrapping_mul(h2))) % self.width;
+            min_count = min_count.min(self.matrix[i][idx]);
+        }
+        min_count
+    }
+
     /// Calculate a hash index for the given item and row
     fn hash_index<T: Hash>(&self, item: &T, row: usize) -> usize {
         let mut hasher = self.hashers[row].build_hasher();
