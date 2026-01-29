@@ -7,8 +7,9 @@ fn main() {
     let input_path_str = "sample_large.fastq";
     let k = 25;
 
+    // Use streaming for memory efficiency
     let reader = raptor::io::fastq::open_fastq(input_path_str);
-    let records: Vec<_> = raptor::io::fastq::read_fastq_records(reader).collect();
+    let records: Vec<_> = raptor::io::fastq::stream_fastq_records(reader).collect();
     let sequences: Vec<String> = records.iter().map(|r| r.sequence.clone()).collect();
 
     #[cfg(feature = "gpu")]

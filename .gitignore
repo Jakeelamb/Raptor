@@ -1,0 +1,86 @@
+# Rust / Cargo #
+# ==================================
+# Ignore build artifacts and dependencies
+/target/
+
+# Ignore Cargo lock file (optional, typically committed for binaries, ignored for libraries)
+# Uncomment the next line if this is a library crate:
+# Cargo.lock
+
+# Generated Files & Output Directories #
+# ==================================
+# Ignore assembly outputs
+*.fasta
+*.contigs.fa
+assembled_contigs*.fasta
+assembly_output/
+vis_demo/
+*.gfa
+*.gfa2
+*.dot
+*.svg
+*.json
+*.tsv
+*.matrix
+*_pca.svg
+de_results.tsv
+metrics.tsv
+annotated_graph.gfa2
+odgi_graph.json
+graph_data.json
+prepare_odgi_data.py # Generated script
+# Ignore normalization outputs
+norm.fastq.gz
+*_R1.norm.fastq.gz
+*_R2.norm.fastq.gz
+*_norm.fastq.gz
+normalized_*.fastq.gz
+*.gz
+*.fastq*
+*.fasta*
+*.fasta
+*.fastq
+*.fq
+*.fq.gz
+*.fq.gz.part
+*.fq.gz.part.gz
+
+# Ignore specific compiled binaries from scripts (if not in /target)
+vis_demo/generate_odgi_json
+vis_demo/gfa2_annotated
+
+# Ignore test data outputs
+test_data/output*
+test_data/*.csv # Ignore generated result CSVs
+
+# Temporary/Log Files #
+# ==================================
+assemble_updates.txt
+main_update.txt
+
+# Large Data Files (Optional - uncomment if you don't want to track these) #
+# ===================================================================
+# sample_large.fastq
+# sample_with_motifs.fastq
+# high_coverage_sample.fastq
+# sample.fasta
+# sample.fastq
+# test_data/*.fastq
+# test_data/*.txt # Be careful if source txt files exist
+
+# OS Generated Files #
+# ==================================
+.DS_Store
+Thumbs.db
+
+# Editor/IDE Files #
+# ==================================
+.vscode/
+.idea/
+*.swp
+*~
+
+# Miscellaneous #
+# ==================================
+# Ignore the raptor output file itself if it's in the repo
+raptor-output.txt

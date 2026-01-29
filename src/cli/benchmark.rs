@@ -1,5 +1,6 @@
 use std::time::Instant;
-use crate::io::fastq::{open_fastq, read_fastq_records};
+use crate::io::fastq::{open_fastq, stream_fastq_records};
+#[allow(deprecated)]
 use crate::kmer::kmer::canonical_kmer;
 use std::collections::HashMap;
 
@@ -8,7 +9,7 @@ pub fn benchmark_kmer_counting(input: &str, k: usize) {
     let mut counts = HashMap::new();
 
     let reader = open_fastq(input);
-    let records = read_fastq_records(reader);
+    let records = stream_fastq_records(reader);
 
     println!("Starting k-mer counting benchmark with k={}", k);
     

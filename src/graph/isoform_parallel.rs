@@ -3,7 +3,6 @@ use crate::graph::isoform_graph::IsoformGraph;
 use crate::graph::isoform_traverse::{find_directed_paths, TranscriptPath};
 use crate::graph::transcript::Transcript;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Process paths in parallel using multiple threads
 pub fn parallel_path_discovery(
@@ -41,16 +40,16 @@ pub fn parallel_transcript_assembly(
     let filtered_paths: Vec<&TranscriptPath> = paths.iter()
         .filter(|path| path.confidence >= min_confidence)
         .collect();
+
+    // Use reference directly - no need to clone into Arc
+    // The contigs map is only read, not modified
+    let contigs_ref = contigs;
     
-    // Convert to Arc for thread-safe sharing
-    let contigs_arc = Arc::new(contigs.clone());
-    
-    // Process in parallel
+    // Process in parallel - use reference directly
     filtered_paths.par_iter()
         .enumerate()
         .map(|(idx, path)| {
-            let contigs = Arc::clone(&contigs_arc);
-            assemble_single_transcript(idx, path, &contigs)
+            assemble_single_transcript(idx, path, contigs_ref)
         })
         .collect()
 }

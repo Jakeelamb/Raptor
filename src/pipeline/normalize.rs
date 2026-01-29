@@ -1,7 +1,7 @@
-use crate::io::fastq::{open_fastq, read_fastq_records, read_paired_fastq_records, FastqWriter,
-                             stream_fastq_records, stream_paired_fastq_records};
+use crate::io::fastq::{open_fastq, FastqWriter, stream_fastq_records, stream_paired_fastq_records};
 use crate::kmer::cms::CountMinSketch;
 use crate::kmer::normalize::{should_keep_read, should_keep_read_pair};
+#[allow(deprecated)]
 use crate::kmer::kmer::canonical_kmer;
 use tracing::info;
 use std::time::Instant;
@@ -43,10 +43,10 @@ pub fn normalize_single(input_path: &str, output_prefix: &str, _use_gpu: bool, s
         }
     } else {
         info!("Using in-memory mode for k-mer counting");
-        // Read all records into memory for k-mer counting
-        for record in read_fastq_records(reader) {
+        // Stream records for k-mer counting (streaming is always more efficient)
+        for record in stream_fastq_records(reader) {
             total_records += 1;
-            
+
             if record.sequence.len() >= k {
                 for i in 0..=record.sequence.len() - k {
                     if let Some(kmer) = canonical_kmer(&record.sequence[i..i + k]) {
@@ -54,7 +54,7 @@ pub fn normalize_single(input_path: &str, output_prefix: &str, _use_gpu: bool, s
                     }
                 }
             }
-            
+
             // Progress update
             if total_records % 100_000 == 0 {
                 info!("Processed {} records in first pass...", total_records);
@@ -93,15 +93,15 @@ pub fn normalize_single(input_path: &str, output_prefix: &str, _use_gpu: bool, s
         }
     } else {
         info!("Using in-memory mode for filtering");
-        // Load all records into memory for filtering
-        for record in read_fastq_records(reader) {
+        // Stream records for filtering (streaming is always more efficient)
+        for record in stream_fastq_records(reader) {
             current_record += 1;
-            
+
             if should_keep_read(&record, &cms, k, target_coverage, min_abundance) {
                 writer.write_record(&record).expect("Failed to write record");
                 kept_count += 1;
             }
-            
+
             // Progress update
             if current_record % 100_000 == 0 {
                 info!("Processed {}/{} records in second pass...", current_record, total_records);
@@ -162,10 +162,10 @@ pub fn normalize_paired(input_r1: &str, input_r2: &str, output_prefix: &str, _us
         }
     } else {
         info!("Using in-memory mode for paired k-mer counting");
-        // Load all paired records into memory for k-mer counting
-        for (r1, r2) in read_paired_fastq_records(reader1, reader2) {
+        // Stream paired records for k-mer counting (streaming is always more efficient)
+        for (r1, r2) in stream_paired_fastq_records(reader1, reader2) {
             total_pairs += 1;
-            
+
             // Process R1
             if r1.sequence.len() >= k {
                 for i in 0..=r1.sequence.len() - k {
@@ -174,7 +174,7 @@ pub fn normalize_paired(input_r1: &str, input_r2: &str, output_prefix: &str, _us
                     }
                 }
             }
-            
+
             // Process R2
             if r2.sequence.len() >= k {
                 for i in 0..=r2.sequence.len() - k {
@@ -183,7 +183,7 @@ pub fn normalize_paired(input_r1: &str, input_r2: &str, output_prefix: &str, _us
                     }
                 }
             }
-            
+
             // Progress update
             if total_pairs % 100_000 == 0 {
                 info!("Processed {} read pairs in first pass...", total_pairs);
@@ -225,16 +225,16 @@ pub fn normalize_paired(input_r1: &str, input_r2: &str, output_prefix: &str, _us
         }
     } else {
         info!("Using in-memory mode for paired filtering");
-        // Load all paired records into memory for filtering
-        for (r1, r2) in read_paired_fastq_records(reader1, reader2) {
+        // Stream paired records for filtering (streaming is always more efficient)
+        for (r1, r2) in stream_paired_fastq_records(reader1, reader2) {
             current_pair += 1;
-            
+
             if should_keep_read_pair(&r1, &r2, &cms, k, target_coverage, min_abundance) {
                 writer1.write_record(&r1).expect("Failed to write R1");
                 writer2.write_record(&r2).expect("Failed to write R2");
                 kept_count += 1;
             }
-            
+
             // Progress update
             if current_pair % 100_000 == 0 {
                 info!("Processed {}/{} read pairs in second pass...", current_pair, total_pairs);
