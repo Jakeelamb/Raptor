@@ -67,7 +67,7 @@ fn calculate_edge_weight(
     let weight = 0.7 * overlap_factor + 0.3 * expr_similarity;
     
     // Ensure weight is between 0.0 and 1.0
-    weight.max(0.0).min(1.0)
+    weight.clamp(0.0, 1.0)
 }
 
 /// Find potential transcript start nodes in the graph

@@ -1,3 +1,6 @@
+//! GPU k-mer counting - optional GPU acceleration
+#![allow(dead_code)]
+
 #[cfg(feature = "gpu")]
 use ocl::{Buffer, ProQue, flags};
 use std::collections::HashMap;

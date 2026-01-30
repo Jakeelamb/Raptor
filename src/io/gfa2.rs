@@ -40,7 +40,7 @@ impl Gfa2Writer {
         coverage: Option<f32>,
     ) -> Result<()> {
         let rle = rle_encode(sequence);
-        let rle_ratio = if sequence.len() > 0 {
+        let rle_ratio = if !sequence.is_empty() {
             1.0 - (rle.len() as f32 / sequence.len() as f32)
         } else {
             0.0

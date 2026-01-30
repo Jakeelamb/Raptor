@@ -1,3 +1,6 @@
+//! Graph module - includes optional algorithms (isoform inference, etc.)
+#![allow(dead_code)]
+
 pub mod assembler;
 pub mod overlap;
 pub mod simplify;

@@ -1,3 +1,6 @@
+//! SIMD-accelerated k-mer operations
+#![allow(dead_code)]
+
 use std::arch::x86_64::*;
 use std::cmp;
 use rayon::prelude::*;

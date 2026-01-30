@@ -4,8 +4,11 @@ pub mod backend;
 pub mod cpu_backend;
 pub mod gpu_backend;
 
+// Public API exports - some may be unused internally but available for library users
+#[allow(unused_imports)]
 pub use backend::{ComputeBackend, AdjacencyTable, GPU_THRESHOLD_READS};
 pub use cpu_backend::CpuBackend;
+#[allow(unused_imports)]
 pub use gpu_backend::GpuBackend;
 
 /// Create the appropriate backend based on configuration
@@ -20,7 +23,7 @@ pub use gpu_backend::GpuBackend;
 pub fn create_backend(
     use_gpu: bool,
     num_sequences: usize,
-    max_contigs: usize,
+    _max_contigs: usize,
 ) -> Box<dyn ComputeBackend> {
     if use_gpu && num_sequences >= GPU_THRESHOLD_READS {
         #[cfg(feature = "gpu")]
@@ -52,11 +55,13 @@ pub fn create_backend(
 }
 
 /// Create a CPU backend (convenience function)
+#[allow(dead_code)]
 pub fn create_cpu_backend() -> Box<dyn ComputeBackend> {
     Box::new(CpuBackend::new())
 }
 
 /// Create a CPU backend with specific thread count
+#[allow(dead_code)]
 pub fn create_cpu_backend_with_threads(threads: usize) -> Box<dyn ComputeBackend> {
     Box::new(CpuBackend::with_threads(threads))
 }

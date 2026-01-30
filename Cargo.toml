@@ -14,7 +14,7 @@ default = []
 gpu = ["ocl"]
 
 [dependencies]
-bio = "1.6.0"
+bio = "3.0.0"
 gfa = "0.10.1"
 log = "0.4.19"
 rayon = "1.10.0"

@@ -1,5 +1,4 @@
 use ndarray::Array2;
-use ndarray_stats::QuantileExt;
 use plotters::prelude::*;
 use std::collections::HashMap;
 

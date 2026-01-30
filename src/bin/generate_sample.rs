@@ -88,11 +88,11 @@ fn main() {
         let sequence = if rng.gen_bool(0.4) {
             // 40% chance to include a common motif
             let motif_idx = rng.gen_range(0..common_motifs.len());
-            generate_sequence_with_motif(&mut rng, read_length, &common_motifs[motif_idx], base_dist)
+            generate_sequence_with_motif(&mut rng, read_length, common_motifs[motif_idx], base_dist)
         } else if rng.gen_bool(0.15) {
             // ~15% chance (of the remaining 60%) to include a rare motif
             let motif_idx = rng.gen_range(0..rare_motifs.len());
-            generate_sequence_with_motif(&mut rng, read_length, &rare_motifs[motif_idx], base_dist)
+            generate_sequence_with_motif(&mut rng, read_length, rare_motifs[motif_idx], base_dist)
         } else {
             // Remaining ~45% are completely random
             (0..read_length)

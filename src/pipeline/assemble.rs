@@ -6,7 +6,7 @@ use crate::kmer::variable_k::{optimal_k, kmer_coverage_histogram, select_best_k}
 use crate::graph::assembler::greedy_assembly_u64;
 use crate::graph::overlap::find_overlaps;
 use crate::graph::stitch::OverlapGraphBuilder;
-use crate::accel::{ComputeBackend, create_backend, CpuBackend};
+use crate::accel::{create_backend, CpuBackend};
 use std::collections::HashMap;
 use tracing::{info, warn};
 use std::fs;
@@ -66,7 +66,7 @@ pub fn assemble_reads_with_gpu(
     min_repeat_len: usize,
     polish: bool,
     polish_window: usize,
-    streaming: bool,
+    _streaming: bool,
     export_metadata: bool,
     json_metadata: Option<String>,
     tsv_metadata: Option<String>,
@@ -87,7 +87,7 @@ pub fn assemble_reads_with_gpu(
 
     // Determine k-mer size - either adaptive or fixed optimal
     let max_k = 41;
-    let mut k = 31; // Default k-mer size
+    let mut k: usize;
 
     let mut records: Vec<FastqRecord> = Vec::new();
 
@@ -260,9 +260,9 @@ pub fn assemble_reads_with_gpu(
         let min_overlap = (k / 2).max(15); // Use at least half of k but minimum 15bp
         let max_mismatches = 3; // Allow up to 3 mismatches in the overlap
 
-        // Use backend for overlap detection
+        // Use backend for overlap detection (currently unused, kept for future integration)
         info!("Finding overlaps using {}", backend.name());
-        let backend_overlaps = backend.find_overlaps(&contig_seqs, min_overlap, max_mismatches);
+        let _backend_overlaps = backend.find_overlaps(&contig_seqs, min_overlap, max_mismatches);
 
         let builder = OverlapGraphBuilder::new(min_overlap, max_mismatches, max_mismatches);
         let graph = builder.build_overlap_graph(&contig_seqs);

@@ -49,7 +49,7 @@ pub fn export_odgi_json(
         let gc_count = seq.bytes()
             .filter(|&b| b == b'G' || b == b'C' || b == b'g' || b == b'c')
             .count();
-        let gc_content = if seq.len() > 0 {
+        let gc_content = if !seq.is_empty() {
             gc_count as f32 / seq.len() as f32
         } else {
             0.0
@@ -104,7 +104,7 @@ pub fn export_odgi_json(
     let shared_segments = segment_usage.values().filter(|&&v| v > 1).count();
     graph_metadata.insert("shared_segments".to_string(), shared_segments as f32);
     graph_metadata.insert("branchiness".to_string(), 
-        if segment_map.len() > 0 { 
+        if !segment_map.is_empty() { 
             shared_segments as f32 / segment_map.len() as f32 
         } else { 
             0.0 

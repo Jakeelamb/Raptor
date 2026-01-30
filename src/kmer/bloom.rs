@@ -59,7 +59,7 @@ impl BloomFilter {
     /// * `num_hashes` - Number of hash functions to use
     pub fn new(num_bits: usize, num_hashes: usize) -> Self {
         // Round up to next multiple of 64 for u64 storage
-        let num_bits = ((num_bits + 63) / 64) * 64;
+        let num_bits = num_bits.div_ceil(64) * 64;
         let num_u64s = num_bits / 64;
 
         Self {
@@ -221,7 +221,7 @@ impl CountingBloomFilter {
     /// Create with explicit parameters.
     pub fn new(num_counters: usize, num_hashes: usize) -> Self {
         // Round up to multiple of 16 (counters per u64)
-        let num_counters = ((num_counters + 15) / 16) * 16;
+        let num_counters = num_counters.div_ceil(16) * 16;
         let num_u64s = num_counters / 16;
 
         Self {

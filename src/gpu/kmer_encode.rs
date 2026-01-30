@@ -1,12 +1,13 @@
-/// 2-bit k-mer encoding utilities for GPU processing
-///
-/// DNA bases are encoded as:
-/// - A = 00 (0)
-/// - C = 01 (1)
-/// - G = 10 (2)
-/// - T = 11 (3)
-///
-/// This allows k-mers up to k=32 to fit in a single u64
+//! 2-bit k-mer encoding utilities for GPU processing
+//!
+//! DNA bases are encoded as:
+//! - A = 00 (0)
+//! - C = 01 (1)
+//! - G = 10 (2)
+//! - T = 11 (3)
+//!
+//! This allows k-mers up to k=32 to fit in a single u64
+#![allow(dead_code)]
 
 /// Encode a single nucleotide to 2 bits
 #[inline]

@@ -121,7 +121,7 @@ pub fn polish_contig_parallel(
 
     // Divide into overlapping chunks
     let overlap = window; // Overlap by window size for boundary handling
-    let num_chunks = (seq_len + chunk_size - 1) / chunk_size;
+    let num_chunks = seq_len.div_ceil(chunk_size);
 
     // Process chunks in parallel
     (0..num_chunks).into_par_iter().for_each(|chunk_idx| {

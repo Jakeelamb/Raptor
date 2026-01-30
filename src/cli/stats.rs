@@ -1,3 +1,6 @@
+//! Statistics calculation for assembly results
+#![allow(dead_code)]
+
 use crate::io::fasta::open_fasta;
 use std::io::BufRead;
 use serde::{Serialize};
