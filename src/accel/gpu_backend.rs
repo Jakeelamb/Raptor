@@ -1,3 +1,6 @@
+//! GPU backend - optional GPU acceleration support
+#![allow(dead_code)]
+
 use crate::accel::backend::{AdjacencyTable, ComputeBackend};
 use std::collections::HashMap;
 

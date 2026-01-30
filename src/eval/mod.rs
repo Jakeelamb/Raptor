@@ -1,3 +1,6 @@
+//! Evaluation module - optional benchmarking and comparison features
+#![allow(dead_code)]
+
 pub mod metrics;
 pub mod gtf_compare;
 

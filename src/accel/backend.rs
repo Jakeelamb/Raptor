@@ -1,3 +1,6 @@
+//! Backend abstraction for compute operations
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use ahash::AHashMap;
 

@@ -1,3 +1,6 @@
+//! I/O module - includes optional format support (ODGI, SAM, etc.)
+#![allow(dead_code)]
+
 pub mod fastq;
 pub mod fasta;
 pub mod gfa;

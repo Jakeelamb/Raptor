@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use raptor::io::fastq::{open_fastq, stream_paired_fastq_records, FastqWriter};
 use raptor::kmer::cms::CountMinSketch;
 use raptor::kmer::normalize::{should_keep_read_pair, estimate_read_abundance};
@@ -8,6 +10,7 @@ use raptor::accel::gpu::kmer_gpu::GpuKmerCounter;
 const CHUNK_SIZE: usize = 100_000; // Process this many read pairs at a time
 
 // Default values for modern RNA-Seq datasets
+#[allow(dead_code)]
 const DEFAULT_MAX_READS: usize = 5_000_000;
 const DEFAULT_COVERAGE_TARGET: usize = 500;
 const DEFAULT_MIN_ABUNDANCE: usize = 1;

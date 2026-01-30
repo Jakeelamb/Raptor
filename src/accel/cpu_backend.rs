@@ -1,3 +1,6 @@
+//! CPU backend implementation with Rayon parallelization
+#![allow(dead_code)]
+
 use crate::accel::backend::{AdjacencyTable, AdjacencyTableU64, ComputeBackend};
 #[allow(deprecated)]
 use crate::kmer::kmer::canonical_kmer;
@@ -265,7 +268,7 @@ impl ComputeBackend for CpuBackend {
 
         // Use minimizers for memory-efficient indexing
         // k=15 provides good specificity, w=5 gives ~3x reduction in index size
-        let k = min_overlap.min(15).max(8);
+        let k = min_overlap.clamp(8, 15);
         let w = 5;
 
         // Build minimizer index for suffix regions
@@ -346,7 +349,7 @@ impl ComputeBackend for CpuBackend {
         let bases = ["A", "C", "G", "T"];
 
         // Build adjacency by trying all possible extensions
-        for (kmer, &count) in kmer_counts {
+        for (kmer, &_count) in kmer_counts {
             if kmer.len() < k {
                 continue;
             }

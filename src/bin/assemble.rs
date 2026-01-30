@@ -1,7 +1,6 @@
 use raptor::io::fastq::{open_fastq, stream_fastq_records, FastqRecord};
 use raptor::io::fasta::FastaWriter;
 use raptor::kmer::kmer::{KmerU64, decode_kmer};
-use raptor::kmer::nthash::NtHashIterator;
 use raptor::graph::assembler::Contig;
 use rayon::ThreadPoolBuilder;
 use ahash::{AHashMap, AHashSet};
@@ -116,7 +115,7 @@ fn main() {
         let pre_filter_count = contigs.len();
         contigs.retain(|c| c.sequence.len() >= min_length);
         println!("Filtered {} short contigs, retained {}", pre_filter_count - contigs.len(), contigs.len());
-    } else if contigs.len() > 0 {
+    } else if !contigs.is_empty() {
         // In dev mode, write all contigs regardless of length
         let debug_dir = Path::new(output_path).parent().unwrap_or(Path::new("."));
         let debug_file = debug_dir.join("debug_contigs.fasta");

@@ -162,7 +162,7 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
     };
     
     // For test compatibility
-    let branch_count = if paths.len() > 0 && segments.len() > 0 && branch_nodes.is_empty() {
+    let branch_count = if !paths.is_empty() && !segments.is_empty() && branch_nodes.is_empty() {
         // If there are paths and segments but no branch nodes detected,
         // we must at least have 1 branch for the test case
         1

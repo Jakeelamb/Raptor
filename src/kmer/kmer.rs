@@ -81,7 +81,7 @@ impl KmerU64 {
     /// Decode back to a String (for output/debugging).
     pub fn decode(&self) -> String {
         let mut result = String::with_capacity(self.len as usize);
-        let mut temp = self.encoded;
+        let temp = self.encoded;
         let bases = [b'A', b'C', b'G', b'T'];
 
         // Extract bases from most significant to least significant

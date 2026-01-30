@@ -92,8 +92,8 @@ pub fn read_gfa_contigs(gfa_path: &str) -> Result<Vec<Contig>> {
             }
             
             let id_str = parts[1];
-            let id = if id_str.starts_with("contig_") {
-                id_str[7..].parse::<usize>().unwrap_or(contigs.len()) - 1
+            let id = if let Some(stripped) = id_str.strip_prefix("contig_") {
+                stripped.parse::<usize>().unwrap_or(contigs.len()) - 1
             } else {
                 contigs.len()
             };
@@ -154,19 +154,19 @@ pub fn read_gfa_links(gfa_path: &str) -> Result<Vec<(usize, usize, usize)>> {
             // Extract overlap size from CIGAR (format like "10M")
             let cigar = parts[5];
             let overlap_size = cigar
-                .trim_end_matches(|c| c == 'M' || c == 'm')
+                .trim_end_matches(['M', 'm'])
                 .parse::<usize>()
                 .unwrap_or(0);
             
             // Convert IDs to numeric indices
-            let from_idx = if from_id.starts_with("contig_") {
-                from_id[7..].parse::<usize>().unwrap_or(0) - 1
+            let from_idx = if let Some(stripped) = from_id.strip_prefix("contig_") {
+                stripped.parse::<usize>().unwrap_or(0) - 1
             } else {
                 *id_map.get(from_id).unwrap_or(&0)
             };
-            
-            let to_idx = if to_id.starts_with("contig_") {
-                to_id[7..].parse::<usize>().unwrap_or(0) - 1
+
+            let to_idx = if let Some(stripped) = to_id.strip_prefix("contig_") {
+                stripped.parse::<usize>().unwrap_or(0) - 1
             } else {
                 *id_map.get(to_id).unwrap_or(&0)
             };

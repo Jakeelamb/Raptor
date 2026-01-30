@@ -7,6 +7,7 @@
 //!
 //! The sketch-based approach is a memory-efficient approximation that uses
 //! ntHash for fast rolling hash computation.
+#![allow(dead_code)]
 
 pub mod kmer_gpu {
     use crate::kmer::nthash::NtHashIterator;
@@ -35,7 +36,7 @@ pub mod kmer_gpu {
             // Size the sketch based on expected k-mers
             // Use power of 2 for fast modulo via bitmask
             let estimated_kmers = expected_reads * 100; // Assume ~100 k-mers per read
-            let width = (estimated_kmers / 4).next_power_of_two().max(65536).min(1 << 24);
+            let width = (estimated_kmers / 4).next_power_of_two().clamp(65536, 1 << 24);
 
             GpuKmerCounter {
                 width,

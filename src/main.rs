@@ -110,18 +110,18 @@ fn main() {
                 polish_window,
                 false, // streaming - now handled internally
                 export_metadata,
-                json_metadata.map(String::from),
-                tsv_metadata.map(String::from),
+                json_metadata,
+                tsv_metadata,
                 isoforms,
-                gtf.map(String::from),
-                gff3.map(String::from),
+                gtf,
+                gff3,
                 max_path_depth,
                 min_confidence,
                 compute_tpm,
                 polish_isoforms,
-                samples.map(String::from),
+                samples,
                 min_tpm,
-                polish_reads.map(String::from),
+                polish_reads,
                 counts_matrix,
                 gpu,
             );
@@ -280,16 +280,6 @@ fn main() {
             }
             
             // Define helper functions
-            trait Log2 {
-                fn log2(self) -> f64;
-            }
-            
-            impl Log2 for f64 {
-                fn log2(self) -> f64 {
-                    self.log2()
-                }
-            }
-            
             fn variance(x: &[f64]) -> f64 {
                 let mean = x.iter().sum::<f64>() / x.len() as f64;
                 let var = x.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / x.len() as f64;
@@ -351,9 +341,9 @@ fn main() {
                 let fold_change = if mean_a > 0.0 && mean_b > 0.0 {
                     (mean_a / mean_b).log2()
                 } else if mean_a > 0.0 {
-                    std::f64::INFINITY
+                    f64::INFINITY
                 } else if mean_b > 0.0 {
-                    std::f64::NEG_INFINITY
+                    f64::NEG_INFINITY
                 } else {
                     0.0 // Both are zero
                 };

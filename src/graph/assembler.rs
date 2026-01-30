@@ -5,7 +5,6 @@ use crate::kmer::kmer::canonical_kmer;
 use crate::kmer::kmer::decode_kmer;
 use crate::accel::backend::AdjacencyTableU64;
 use ahash::{AHashMap, AHashSet};
-use rayon::prelude::*;
 
 /// Base lookup table for decoding 2-bit encoded nucleotides
 /// A=00, C=01, G=10, T=11
@@ -322,7 +321,7 @@ pub fn remove_tips(
 /// Trace the length of a tip (dead-end path).
 fn trace_tip_length(
     adjacency: &AdjacencyTableU64,
-    kmer_counts: &AHashMap<u64, u32>,
+    _kmer_counts: &AHashMap<u64, u32>,
     start: u64,
     _k: usize,
     max_len: usize,
@@ -421,7 +420,7 @@ pub fn detect_bubbles(
 /// Try to find a bubble starting from a branching k-mer.
 fn find_bubble_from_branch(
     adjacency: &AdjacencyTableU64,
-    kmer_counts: &AHashMap<u64, u32>,
+    _kmer_counts: &AHashMap<u64, u32>,
     start: u64,
     successors: &[(u64, u32)],
     _k: usize,
