@@ -26,17 +26,41 @@ def val(row: dict[str, str], key: str) -> str:
 
 def build_table(rows: list[dict[str, str]]) -> list[str]:
     lines = [
-        "| Tool | Time (s) | Peak RSS (KB) | Contigs | N50 | Genome Fraction % | Misassemblies | NGA50 | Duplication Ratio |",
-        "|------|----------|---------------|---------|-----|-------------------|---------------|-------|-------------------|",
+        "| Tool | Source Run | Time (s) | Peak RSS (KB) | Contigs | N50 | Genome Fraction % | Misassemblies | NGA50 | Duplication Ratio |",
+        "|------|------------|----------|---------------|---------|-----|-------------------|---------------|-------|-------------------|",
     ]
     for row in rows:
         lines.append(
-            "| {tool} | {time_seconds} | {peak_memory_kb} | {num_contigs} | {n50} | "
+            "| {tool} | {run} | {time_seconds} | {peak_memory_kb} | {num_contigs} | {n50} | "
             "{genome_fraction_percent} | {misassemblies} | {nga50} | {duplication_ratio} |".format(
                 **row
             )
         )
     return lines
+
+
+def metric_ready(row: dict[str, str]) -> bool:
+    return any(
+        val(row, key) != "N/A"
+        for key in ("time_seconds", "num_contigs", "n50", "genome_fraction_percent", "nga50")
+    )
+
+
+def select_latest_rows(dataset_rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    latest: dict[str, dict[str, str]] = {}
+    for row in sorted(dataset_rows, key=lambda r: (val(r, "run"), metric_ready(r))):
+        tool = val(row, "tool")
+        current = latest.get(tool)
+        if current is None:
+            latest[tool] = row
+            continue
+        if val(row, "run") > val(current, "run"):
+            latest[tool] = row
+            continue
+        if val(row, "run") == val(current, "run") and metric_ready(row) and not metric_ready(current):
+            latest[tool] = row
+
+    return sorted(latest.values(), key=lambda r: (val(r, "tool") != "raptor", val(r, "tool")))
 
 
 def main() -> None:
@@ -70,15 +94,17 @@ def main() -> None:
         )
     else:
         for dataset in sorted(grouped):
-            dataset_rows = sorted(grouped[dataset], key=lambda r: (val(r, "tool") != "raptor", val(r, "tool")))
+            dataset_rows = select_latest_rows(grouped[dataset])
             tools = ", ".join(val(r, "tool") for r in dataset_rows)
-            comparator_ready = any(val(r, "tool") != "raptor" and val(r, "n50") != "N/A" for r in dataset_rows)
+            comparator_ready = any(
+                val(r, "tool") != "raptor" and metric_ready(r) for r in dataset_rows
+            ) and any(val(r, "tool") == "raptor" and metric_ready(r) for r in dataset_rows)
 
             lines.extend(
                 [
                     f"## Dataset: `{dataset}`",
                     "",
-                    f"Tools present in summary: {tools}",
+                    f"Latest complete rows by tool: {tools}",
                     "",
                 ]
             )

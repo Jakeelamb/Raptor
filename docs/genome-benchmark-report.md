@@ -35,7 +35,7 @@ target/release/raptor assemble-large \
   --polish
 ```
 
-## Results
+## Baseline Results
 
 ### Assembly
 
@@ -72,6 +72,23 @@ target/release/raptor assemble-large \
 
 This run shows that the checked-in `assemble-large` pipeline is operational end-to-end on a nontrivial paired-end dataset and produces multi-hundred-kilobase scaffold continuity from a local benchmark.
 
+## Comparator Run
+
+On 2026-03-09, the same `quick_test` dataset was also run through the benchmark harness against SPAdes 4.2.0 with QUAST 5.3.0 evaluation.
+
+### Comparator Summary
+
+| Tool | Runtime (s) | Contigs | N50 | Genome Fraction (%) | NGA50 | Misassemblies |
+|------|-------------|---------|-----|---------------------|-------|---------------|
+| SPAdes | 232.424 | 37 | 130,153 | 88.601 | 120,152 | 0 |
+| Raptor | 259.361 | 1,681 | 1,518 | 81.649 | 1,371 | 0 |
+
+### Comparator Interpretation
+
+This is the first real cross-tool evidence checked into the repo, and it is not yet competitive. On `quick_test`, SPAdes is both faster and far more contiguous than the current Raptor contig output.
+
+Raptor's scaffolder still adds meaningful continuity after assembly, reaching 102 scaffolds with scaffold N50 67,516 bp in the same run, but the underlying contig graph quality remains the main bottleneck.
+
 The current evidence is good enough for:
 
 - regression tracking
@@ -87,15 +104,14 @@ It is not yet strong enough for:
 
 To support stronger external claims, the benchmark suite still needs:
 
-- comparator runs from the same scripts and hardware
 - at least one larger public real-world benchmark
-- QUAST-style evaluation metrics
 - peak RSS memory capture on the benchmark host
 - repeated runs or variance estimates
+- quality improvements that materially close the contiguity gap against established assemblers
 
 ## Next Benchmark Priorities
 
-1. Install and benchmark SPAdes with the same datasets and thread counts.
-2. Add QUAST output parsing into the benchmark summary pipeline.
-3. Add at least one larger public dataset beyond `quick_test`.
-4. Aggregate results into a single cross-tool summary table for README and release notes.
+1. Improve graph cleaning and extension so the raw contig set does not fragment into thousands of pieces on `quick_test`.
+2. Add at least one larger public dataset beyond `quick_test`.
+3. Capture peak RSS memory reliably for both tools on this host.
+4. Repeat each benchmark enough times to report variance instead of a single run.

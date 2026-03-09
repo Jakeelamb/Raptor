@@ -38,7 +38,44 @@ def read_quast(run_dir: Path, tool: str) -> dict[str, str]:
     for path in candidates:
         if path.exists():
             return read_kv_file(path)
+    report_path = run_dir / "quast" / "report.tsv"
+    if report_path.exists():
+        return read_quast_report(report_path, tool)
     return {}
+
+
+def read_quast_report(path: Path, tool: str) -> dict[str, str]:
+    with path.open(newline="") as handle:
+        reader = csv.reader(handle, delimiter="\t")
+        rows = list(reader)
+
+    if not rows or len(rows[0]) < 2:
+        return {}
+
+    header = rows[0]
+    wanted_labels = {
+        tool,
+        tool.capitalize(),
+        tool.upper(),
+        "SPAdes" if tool == "spades" else "Raptor" if tool == "raptor" else tool,
+    }
+    column_index = None
+    for index, label in enumerate(header):
+        if label.strip() in wanted_labels:
+            column_index = index
+            break
+    if column_index is None:
+        return {}
+
+    metrics: dict[str, str] = {}
+    for row in rows[1:]:
+        if len(row) <= column_index:
+            continue
+        key = row[0].strip()
+        value = row[column_index].strip()
+        if key:
+            metrics[key] = value or "N/A"
+    return metrics
 
 
 def collect_rows() -> list[dict[str, str]]:
@@ -127,8 +164,22 @@ def write_markdown(rows: list[dict[str, str]]) -> None:
     MD_PATH.write_text("\n".join(lines) + "\n")
 
 
+def row_sort_key(row: dict[str, str]) -> tuple[str, str, int, str]:
+    has_metrics = any(
+        row.get(key, "N/A") != "N/A"
+        for key in ("time_seconds", "num_contigs", "n50", "genome_fraction_percent", "nga50")
+    )
+    return (
+        row["dataset"],
+        row["tool"],
+        0 if has_metrics else 1,
+        row["run"],
+    )
+
+
 def main() -> None:
     rows = collect_rows()
+    rows.sort(key=row_sort_key)
     write_csv(rows)
     write_markdown(rows)
     print(f"Wrote {len(rows)} rows to {CSV_PATH}")

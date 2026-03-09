@@ -11,26 +11,24 @@ It is the publication-facing comparison view for Raptor's genome assembly benchm
 
 ## Dataset: `drosophila`
 
-Tools present in summary: spades
+Latest complete rows by tool: spades
 
-| Tool | Time (s) | Peak RSS (KB) | Contigs | N50 | Genome Fraction % | Misassemblies | NGA50 | Duplication Ratio |
-|------|----------|---------------|---------|-----|-------------------|---------------|-------|-------------------|
-| spades | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
+| Tool | Source Run | Time (s) | Peak RSS (KB) | Contigs | N50 | Genome Fraction % | Misassemblies | NGA50 | Duplication Ratio |
+|------|------------|----------|---------------|---------|-----|-------------------|---------------|-------|-------------------|
+| spades | drosophila_20260130_153531 | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 
 Comparator metrics are not yet complete for this dataset; treat this as an execution record, not a winner table.
 
 ## Dataset: `quick_test`
 
-Tools present in summary: raptor, raptor, raptor, spades
+Latest complete rows by tool: raptor, spades
 
-| Tool | Time (s) | Peak RSS (KB) | Contigs | N50 | Genome Fraction % | Misassemblies | NGA50 | Duplication Ratio |
-|------|----------|---------------|---------|-----|-------------------|---------------|-------|-------------------|
-| raptor | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
-| raptor | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
-| raptor | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
-| spades | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
+| Tool | Source Run | Time (s) | Peak RSS (KB) | Contigs | N50 | Genome Fraction % | Misassemblies | NGA50 | Duplication Ratio |
+|------|------------|----------|---------------|---------|-----|-------------------|---------------|-------|-------------------|
+| raptor | quick_test_20260309_140001 | 259.361 | N/A | 1681 | 1518 | 81.649 | 0 | 1371 | 1.010 |
+| spades | quick_test_20260309_140001 | 232.424 | N/A | 37 | 130153 | 88.601 | 0 | 120152 | 1.000 |
 
-Comparator metrics are not yet complete for this dataset; treat this as an execution record, not a winner table.
+Comparator metrics are present for this dataset.
 
 ## Update Workflow
 

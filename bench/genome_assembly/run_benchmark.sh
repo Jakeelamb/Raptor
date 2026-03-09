@@ -12,6 +12,7 @@ RESULTS_DIR="${SCRIPT_DIR}/results"
 RAPTOR_BIN="${SCRIPT_DIR}/../../target/release/raptor"
 SUMMARY_SCRIPT="${SCRIPT_DIR}/summarize_results.py"
 TIME_BIN=""
+SPADES_PHRED_OFFSET="${SPADES_PHRED_OFFSET:-33}"
 
 DATASET="${1:-simulated}"
 THREADS="${2:-8}"
@@ -53,6 +54,16 @@ check_dependencies() {
     echo "Dependencies OK"
 }
 
+elapsed_seconds() {
+    local start_time=$1
+    local end_time=$2
+    python3 - << EOF
+start_time = float("${start_time}")
+end_time = float("${end_time}")
+print(f"{end_time - start_time:.3f}")
+EOF
+}
+
 # Get memory usage (Linux)
 get_peak_memory() {
     local pid=$1
@@ -77,7 +88,7 @@ run_spades() {
     local threads=$4
 
     echo "=== Running SPAdes ==="
-    mkdir -p "${output_dir}"
+    rm -rf "${output_dir}"
 
     local start_time=$(date +%s.%N)
 
@@ -87,8 +98,8 @@ run_spades() {
         -2 "${reads2}" \
         -o "${output_dir}" \
         -t "${threads}" \
-        --careful \
-        2>&1 | tee "${output_dir}/spades.log" &
+        --phred-offset "${SPADES_PHRED_OFFSET}" \
+        --careful &
 
     local pid=$!
     local peak_mem=$(get_peak_memory $pid) &
@@ -99,7 +110,7 @@ run_spades() {
     wait $mem_pid 2>/dev/null || true
 
     local end_time=$(date +%s.%N)
-    local elapsed=$(echo "$end_time - $start_time" | bc)
+    local elapsed=$(elapsed_seconds "${start_time}" "${end_time}")
 
     # Get peak memory from log if available
     if [ -f "${output_dir}/spades.log" ]; then
@@ -161,7 +172,7 @@ run_raptor() {
     fi
 
     local end_time=$(date +%s.%N)
-    local elapsed=$(echo "$end_time - $start_time" | bc)
+    local elapsed=$(elapsed_seconds "${start_time}" "${end_time}")
 
     echo "Raptor completed in ${elapsed}s"
     echo "${elapsed}" > "${output_dir}/time.txt"
@@ -281,6 +292,7 @@ run_quast() {
 
     if [ "$QUAST_AVAILABLE" = true ]; then
         echo "=== Running QUAST comparison ==="
+        mkdir -p "${output_dir}"
         quast.py \
             -r "${reference}" \
             -o "${output_dir}" \
