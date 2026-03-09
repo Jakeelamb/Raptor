@@ -126,6 +126,8 @@ Methodology and publishing guidance live in [bench/genome_assembly/README.md](./
 
 The current checked-in baseline report is in [docs/genome-benchmark-report.md](./docs/genome-benchmark-report.md).
 
+The generated cross-tool comparison view is in [docs/genome-benchmark-comparison.md](./docs/genome-benchmark-comparison.md).
+
 ## 🖥️ HPC Support
 
 Raptor includes scripts specifically designed for high-performance computing environments:

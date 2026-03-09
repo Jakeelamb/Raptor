@@ -17,6 +17,7 @@ This directory contains the reproducible benchmark workflow for positioning Rapt
 - `quick_benchmark.sh`: fast smoke benchmark on synthetic data
 - `run_benchmark.sh`: full benchmark run for one dataset
 - `summarize_results.py`: aggregates multiple runs into CSV and Markdown tables
+- `render_comparison_report.py`: turns summary CSV data into a checked-in comparison document
 
 Generated paths:
 
@@ -78,6 +79,9 @@ Strongly recommended:
 
 # 4. Aggregate all benchmark runs
 python3 ./bench/genome_assembly/summarize_results.py
+
+# 5. Render the publication-facing comparison report
+python3 ./bench/genome_assembly/render_comparison_report.py
 ```
 
 You can also create the comparator environment directly:
