@@ -96,7 +96,11 @@ impl NtHasher {
             reverse ^= h_rc.rotate_left((k - 1 - i) as u32);
         }
 
-        Some(Self { forward, reverse, k })
+        Some(Self {
+            forward,
+            reverse,
+            k,
+        })
     }
 
     /// Roll the hash to the next position in O(1) time.
@@ -120,16 +124,13 @@ impl NtHasher {
         // The old base was at position 0 (leftmost), contributed as h_out rotated by k-1
         // After rotation, we need to remove its contribution
         // Then add the new base at position k-1 (rightmost)
-        self.forward = self.forward.rotate_left(1)
-            ^ h_out.rotate_left(self.k as u32)
-            ^ h_in;
+        self.forward = self.forward.rotate_left(1) ^ h_out.rotate_left(self.k as u32) ^ h_in;
 
         // Update reverse complement hash:
         // Old base complement was at position k-1 in RC (rightmost)
         // New base complement should be at position 0 in RC (leftmost)
-        self.reverse = self.reverse.rotate_right(1)
-            ^ h_out_rc
-            ^ h_in_rc.rotate_left((self.k - 1) as u32);
+        self.reverse =
+            self.reverse.rotate_right(1) ^ h_out_rc ^ h_in_rc.rotate_left((self.k - 1) as u32);
 
         self.canonical()
     }
@@ -216,7 +217,9 @@ impl<'a> Iterator for NtHashIterator<'a> {
                 // Invalid base - need to restart from next valid k-mer
                 self.pos += 1;
                 while self.pos + self.k <= self.seq.len() {
-                    if let Some(new_hasher) = NtHasher::new(&self.seq[self.pos..self.pos + self.k], self.k) {
+                    if let Some(new_hasher) =
+                        NtHasher::new(&self.seq[self.pos..self.pos + self.k], self.k)
+                    {
                         *hasher = new_hasher;
                         let result_pos = self.pos;
                         self.pos += 1;
@@ -322,10 +325,10 @@ mod tests {
     #[test]
     fn test_different_kmers_different_hashes() {
         // Use longer k-mers to avoid canonical collisions
-        let h1 = nthash(b"AAAAAAAA").unwrap();
-        let h2 = nthash(b"CCCCCCCC").unwrap();
-        let h3 = nthash(b"ACGTACGT").unwrap();
-        let h4 = nthash(b"GTACGTAC").unwrap();
+        let _h1 = nthash(b"AAAAAAAA").unwrap();
+        let _h2 = nthash(b"CCCCCCCC").unwrap();
+        let _h3 = nthash(b"ACGTACGT").unwrap();
+        let _h4 = nthash(b"GTACGTAC").unwrap();
 
         // These should all be different (checking forward hashes)
         let hasher1 = NtHasher::new(b"AAAAAAAA", 8).unwrap();

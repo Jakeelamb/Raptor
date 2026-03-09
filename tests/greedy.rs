@@ -1,5 +1,6 @@
 #[allow(deprecated)]
 use raptor::graph::assembler::greedy_assembly;
+#[allow(deprecated)]
 use raptor::kmer::kmer::{canonical_kmer, decode_kmer};
 use std::collections::HashMap;
 
@@ -22,7 +23,9 @@ fn test_greedy_extension_builds_correct_contig() {
     println!("Generated {} contigs:", contigs.len());
     for (i, contig) in contigs.iter().enumerate() {
         println!("Contig {}: {}", i, contig.sequence);
-        let path_decoded: Vec<String> = contig.kmer_path.iter()
+        let path_decoded: Vec<String> = contig
+            .kmer_path
+            .iter()
             .map(|&k| decode_kmer(k, 5))
             .collect();
         println!("  Path: {:?}", path_decoded);

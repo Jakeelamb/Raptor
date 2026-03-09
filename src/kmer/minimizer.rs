@@ -81,7 +81,11 @@ pub fn get_minimizers(seq: &[u8], k: usize, w: usize) -> Vec<Minimizer> {
 /// Extract minimizers with their sequence context.
 ///
 /// Returns minimizers along with the actual k-mer sequence for verification.
-pub fn get_minimizers_with_seq<'a>(seq: &'a [u8], k: usize, w: usize) -> Vec<(Minimizer, &'a [u8])> {
+pub fn get_minimizers_with_seq<'a>(
+    seq: &'a [u8],
+    k: usize,
+    w: usize,
+) -> Vec<(Minimizer, &'a [u8])> {
     get_minimizers(seq, k, w)
         .into_iter()
         .filter(|m| m.position + k <= seq.len())
@@ -230,7 +234,7 @@ pub fn minimizer_density(seq: &[u8], k: usize, w: usize) -> f64 {
 /// Reference: Edgar, R. (2021). Syncmers are more sensitive than minimizers
 /// for selecting conserved k-mers in biological sequences. PeerJ, 9, e10805.
 pub fn get_syncmers(seq: &[u8], k: usize, s: usize, t: usize) -> Vec<Minimizer> {
-    if seq.len() < k || s > k || t >= k - s + 1 {
+    if seq.len() < k || s > k || t > k - s {
         return Vec::new();
     }
 

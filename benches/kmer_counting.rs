@@ -1,10 +1,9 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
-use raptor::accel::cpu_backend::CpuBackend;
-use raptor::accel::backend::ComputeBackend;
-use raptor::kmer::nthash::{nthash, NtHashIterator};
-use raptor::kmer::kmer::KmerU64;
-use ahash::AHashMap;
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::Rng;
+use raptor::accel::backend::ComputeBackend;
+use raptor::accel::cpu_backend::CpuBackend;
+use raptor::kmer::kmer::KmerU64;
+use raptor::kmer::nthash::{nthash, NtHashIterator};
 
 /// Generate random DNA sequences for benchmarking
 fn generate_sequences(num_seqs: usize, seq_len: usize) -> Vec<String> {
@@ -12,11 +11,7 @@ fn generate_sequences(num_seqs: usize, seq_len: usize) -> Vec<String> {
     let bases = ['A', 'C', 'G', 'T'];
 
     (0..num_seqs)
-        .map(|_| {
-            (0..seq_len)
-                .map(|_| bases[rng.gen_range(0..4)])
-                .collect()
-        })
+        .map(|_| (0..seq_len).map(|_| bases[rng.gen_range(0..4)]).collect())
         .collect()
 }
 
@@ -37,9 +32,7 @@ fn bench_kmer_counting(c: &mut Criterion) {
             &sequences,
             |b, seqs| {
                 let backend = CpuBackend::new();
-                b.iter(|| {
-                    black_box(backend.count_kmers_u64(seqs, 31))
-                });
+                b.iter(|| black_box(backend.count_kmers_u64(seqs, 31)));
             },
         );
 
@@ -49,9 +42,7 @@ fn bench_kmer_counting(c: &mut Criterion) {
             &sequences,
             |b, seqs| {
                 let backend = CpuBackend::new();
-                b.iter(|| {
-                    black_box(backend.count_kmers(seqs, 31))
-                });
+                b.iter(|| black_box(backend.count_kmers(seqs, 31)));
             },
         );
 
@@ -61,9 +52,7 @@ fn bench_kmer_counting(c: &mut Criterion) {
             &sequences,
             |b, seqs| {
                 let backend = CpuBackend::new();
-                b.iter(|| {
-                    black_box(backend.count_kmers_u64_filtered(seqs, 31, 2))
-                });
+                b.iter(|| black_box(backend.count_kmers_u64_filtered(seqs, 31, 2)));
             },
         );
     }
@@ -96,8 +85,8 @@ fn bench_hashing(c: &mut Criterion) {
             if bytes.len() >= k {
                 if let Some(mut kmer) = KmerU64::from_slice(&bytes[0..k]) {
                     count += 1;
-                    for i in k..bytes.len() {
-                        if let Some(next) = kmer.extend(bytes[i]) {
+                    for &base in bytes.iter().skip(k) {
+                        if let Some(next) = kmer.extend(base) {
                             kmer = next;
                             count += 1;
                         }
@@ -113,7 +102,7 @@ fn bench_hashing(c: &mut Criterion) {
         b.iter(|| {
             let mut count = 0usize;
             for i in 0..=bytes.len().saturating_sub(k) {
-                if let Some(_) = nthash(&bytes[i..i+k]) {
+                if nthash(&bytes[i..i + k]).is_some() {
                     count += 1;
                 }
             }
@@ -137,9 +126,7 @@ fn bench_adjacency(c: &mut Criterion) {
             BenchmarkId::new("build_adjacency_u64", num_seqs),
             &kmer_counts,
             |b, counts| {
-                b.iter(|| {
-                    black_box(backend.build_adjacency_u64(counts, 31))
-                });
+                b.iter(|| black_box(backend.build_adjacency_u64(counts, 31)));
             },
         );
     }

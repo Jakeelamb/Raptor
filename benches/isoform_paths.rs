@@ -1,14 +1,7 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use rand::Rng;
 use raptor::graph::isoform_filter::kmer_jaccard_similarity;
 use raptor::kmer::bloom::{BloomFilter, CountingBloomFilter};
-use rand::Rng;
-
-/// Generate random DNA sequences for benchmarking
-fn generate_sequence(len: usize) -> String {
-    let mut rng = rand::thread_rng();
-    let bases = ['A', 'C', 'G', 'T'];
-    (0..len).map(|_| bases[rng.gen_range(0..4)]).collect()
-}
 
 /// Generate similar sequences (for similarity testing)
 fn generate_similar_sequences(len: usize, similarity: f64) -> (String, String) {
@@ -44,9 +37,7 @@ fn bench_similarity(c: &mut Criterion) {
             BenchmarkId::new("kmer_jaccard", len),
             &(&seq1, &seq2),
             |b, (s1, s2)| {
-                b.iter(|| {
-                    black_box(kmer_jaccard_similarity(s1, s2, 11))
-                });
+                b.iter(|| black_box(kmer_jaccard_similarity(s1, s2, 11)));
             },
         );
     }
@@ -65,9 +56,7 @@ fn bench_bloom_filter(c: &mut Criterion) {
             BenchmarkId::new("create", num_items),
             &num_items,
             |b, &n| {
-                b.iter(|| {
-                    black_box(BloomFilter::with_fp_rate(n, 0.01))
-                });
+                b.iter(|| black_box(BloomFilter::with_fp_rate(n, 0.01)));
             },
         );
 
@@ -76,7 +65,7 @@ fn bench_bloom_filter(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("insert", num_items),
             &num_items,
-            |b, &n| {
+            |b, &_n| {
                 b.iter(|| {
                     for i in 0..1000 {
                         bloom.insert(i as u64 * 12345);
@@ -90,21 +79,17 @@ fn bench_bloom_filter(c: &mut Criterion) {
         for i in 0..10000 {
             bloom.insert(i as u64 * 12345);
         }
-        group.bench_with_input(
-            BenchmarkId::new("lookup", num_items),
-            &num_items,
-            |b, _| {
-                b.iter(|| {
-                    let mut found = 0;
-                    for i in 0..1000 {
-                        if bloom.may_contain(i as u64 * 12345) {
-                            found += 1;
-                        }
+        group.bench_with_input(BenchmarkId::new("lookup", num_items), &num_items, |b, _| {
+            b.iter(|| {
+                let mut found = 0;
+                for i in 0..1000 {
+                    if bloom.may_contain(i as u64 * 12345) {
+                        found += 1;
                     }
-                    black_box(found)
-                });
-            },
-        );
+                }
+                black_box(found)
+            });
+        });
     }
 
     group.finish();
@@ -158,5 +143,10 @@ fn bench_counting_bloom(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_similarity, bench_bloom_filter, bench_counting_bloom);
+criterion_group!(
+    benches,
+    bench_similarity,
+    bench_bloom_filter,
+    bench_counting_bloom
+);
 criterion_main!(benches);

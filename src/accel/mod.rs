@@ -1,12 +1,12 @@
-pub mod simd;
-pub mod gpu;
 pub mod backend;
 pub mod cpu_backend;
+pub mod gpu;
 pub mod gpu_backend;
+pub mod simd;
 
 // Public API exports - some may be unused internally but available for library users
 #[allow(unused_imports)]
-pub use backend::{ComputeBackend, AdjacencyTable, GPU_THRESHOLD_READS};
+pub use backend::{AdjacencyTable, ComputeBackend, GPU_THRESHOLD_READS};
 pub use cpu_backend::CpuBackend;
 #[allow(unused_imports)]
 pub use gpu_backend::GpuBackend;
@@ -23,8 +23,10 @@ pub use gpu_backend::GpuBackend;
 pub fn create_backend(
     use_gpu: bool,
     num_sequences: usize,
-    _max_contigs: usize,
+    max_contigs: usize,
 ) -> Box<dyn ComputeBackend> {
+    let _ = max_contigs;
+
     if use_gpu && num_sequences >= GPU_THRESHOLD_READS {
         #[cfg(feature = "gpu")]
         {

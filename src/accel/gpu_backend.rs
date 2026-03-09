@@ -111,20 +111,18 @@ impl ComputeBackend for GpuBackend {
     #[cfg(feature = "gpu")]
     fn count_kmers(&self, sequences: &[String], k: usize) -> HashMap<String, u32> {
         // Try GPU first
-        if let Some(ref counter) = self.kmer_counter {
+        if self.kmer_counter.is_some() {
             // Need to reinitialize counter with correct k if it differs
             match GpuKmerCounter::new(k, sequences.len(), self.table_size_bits) {
-                Ok(counter) => {
-                    match counter.count(sequences) {
-                        Ok(counts) => {
-                            tracing::debug!("GPU k-mer counting successful: {} k-mers", counts.len());
-                            return counts;
-                        }
-                        Err(e) => {
-                            tracing::warn!("GPU k-mer counting failed, falling back to CPU: {}", e);
-                        }
+                Ok(counter) => match counter.count(sequences) {
+                    Ok(counts) => {
+                        tracing::debug!("GPU k-mer counting successful: {} k-mers", counts.len());
+                        return counts;
                     }
-                }
+                    Err(e) => {
+                        tracing::warn!("GPU k-mer counting failed, falling back to CPU: {}", e);
+                    }
+                },
                 Err(e) => {
                     tracing::warn!("Failed to create GPU counter for k={}: {}", k, e);
                 }
@@ -152,7 +150,10 @@ impl ComputeBackend for GpuBackend {
         if let Some(ref finder) = self.overlap_finder {
             match finder.find_overlaps(contigs, min_overlap, max_mismatch) {
                 Ok(overlaps) => {
-                    tracing::debug!("GPU overlap detection successful: {} overlaps", overlaps.len());
+                    tracing::debug!(
+                        "GPU overlap detection successful: {} overlaps",
+                        overlaps.len()
+                    );
                     return overlaps;
                 }
                 Err(e) => {
