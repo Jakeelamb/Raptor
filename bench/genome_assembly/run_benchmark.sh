@@ -11,6 +11,7 @@ DATA_DIR="${SCRIPT_DIR}/data"
 RESULTS_DIR="${SCRIPT_DIR}/results"
 RAPTOR_BIN="${SCRIPT_DIR}/../../target/release/raptor"
 SUMMARY_SCRIPT="${SCRIPT_DIR}/summarize_results.py"
+TIME_BIN=""
 
 DATASET="${1:-simulated}"
 THREADS="${2:-8}"
@@ -39,6 +40,14 @@ check_dependencies() {
         QUAST_AVAILABLE=false
     else
         QUAST_AVAILABLE=true
+    fi
+
+    if command -v /usr/bin/time &> /dev/null; then
+        TIME_BIN="/usr/bin/time"
+    elif command -v gtime &> /dev/null; then
+        TIME_BIN="$(command -v gtime)"
+    else
+        TIME_BIN=""
     fi
 
     echo "Dependencies OK"
@@ -116,30 +125,83 @@ run_raptor() {
 
     local start_time=$(date +%s.%N)
 
-    # Run Raptor with /usr/bin/time for memory tracking
-    /usr/bin/time -v "${RAPTOR_BIN}" assemble-large \
-        -i "${reads1}" \
-        --input2 "${reads2}" \
-        -o "${output_dir}/contigs.fa" \
-        -t "${threads}" \
-        --min-count 2 \
-        --scaffold \
-        --polish \
-        --compress-buckets \
-        2>&1 | tee "${output_dir}/raptor.log"
+    local exit_code=0
+    local peak_mem="N/A"
 
-    local exit_code=${PIPESTATUS[0]}
+    if [ -n "${TIME_BIN}" ]; then
+        "${TIME_BIN}" -v "${RAPTOR_BIN}" assemble-large \
+            -i "${reads1}" \
+            --input2 "${reads2}" \
+            -o "${output_dir}/contigs.fa" \
+            -t "${threads}" \
+            --min-count 2 \
+            --scaffold \
+            --polish \
+            --compress-buckets \
+            2>&1 | tee "${output_dir}/raptor.log"
+        exit_code=${PIPESTATUS[0]}
+        peak_mem=$(grep "Maximum resident set size" "${output_dir}/raptor.log" | awk '{print $6}' | tail -1)
+        peak_mem=${peak_mem:-N/A}
+    else
+        (
+            SECONDS=0
+            "${RAPTOR_BIN}" assemble-large \
+                -i "${reads1}" \
+                --input2 "${reads2}" \
+                -o "${output_dir}/contigs.fa" \
+                -t "${threads}" \
+                --min-count 2 \
+                --scaffold \
+                --polish \
+                --compress-buckets \
+                2>&1 | tee "${output_dir}/raptor.log"
+            echo "ELAPSED_SECONDS=${SECONDS}" >> "${output_dir}/raptor.log"
+        )
+        exit_code=$?
+    fi
+
     local end_time=$(date +%s.%N)
     local elapsed=$(echo "$end_time - $start_time" | bc)
-
-    # Extract memory from time output
-    local peak_mem=$(grep "Maximum resident set size" "${output_dir}/raptor.log" | awk '{print $6}')
 
     echo "Raptor completed in ${elapsed}s"
     echo "${elapsed}" > "${output_dir}/time.txt"
     echo "${peak_mem}" > "${output_dir}/memory.txt"
 
     return $exit_code
+}
+
+parse_quast() {
+    local quast_dir=$1
+    local output_prefix=$2
+
+    if [ ! -f "${quast_dir}/report.tsv" ]; then
+        return 0
+    fi
+
+    python3 << EOF
+from pathlib import Path
+
+report = Path("${quast_dir}/report.tsv")
+rows = []
+for line in report.read_text().splitlines():
+    if line.strip():
+        rows.append(line.split("\t"))
+
+if len(rows) < 2:
+    raise SystemExit(0)
+
+header = rows[0]
+metrics = rows[1:]
+assemblies = header[1:]
+
+for idx, assembly in enumerate(assemblies, start=1):
+    name = assembly.strip().lower()
+    out = Path(f"${output_prefix}/{name}_quast.tsv")
+    with out.open("w") as handle:
+        for metric in metrics:
+            if idx < len(metric):
+                handle.write(f"{metric[0]}\t{metric[idx]}\n")
+EOF
 }
 
 # Calculate assembly statistics
@@ -405,6 +467,7 @@ run_benchmark() {
             "${run_dir}/spades/contigs.fasta" \
             "${run_dir}/raptor/contigs.fa" \
             "${run_dir}/quast"
+        parse_quast "${run_dir}/quast" "${run_dir}"
     fi
 
     # Generate report

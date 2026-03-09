@@ -12,36 +12,25 @@ if ! command -v conda &> /dev/null; then
     exit 1
 fi
 
-# Create conda environment for benchmarking
 ENV_NAME="raptor_bench"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_YML="${SCRIPT_DIR}/environment.yml"
+
+if [ ! -f "${ENV_YML}" ]; then
+    echo "ERROR: Missing environment file: ${ENV_YML}"
+    exit 1
+fi
 
 if conda env list | grep -q "^${ENV_NAME} "; then
-    echo "Environment ${ENV_NAME} already exists"
-    echo "Activating..."
+    echo "Updating existing environment ${ENV_NAME} from ${ENV_YML}"
+    conda env update -n "${ENV_NAME}" -f "${ENV_YML}" --prune
 else
-    echo "Creating conda environment: ${ENV_NAME}"
-    conda create -n "${ENV_NAME}" -y python=3.10
+    echo "Creating environment ${ENV_NAME} from ${ENV_YML}"
+    conda env create -f "${ENV_YML}"
 fi
 
-# Activate and install tools
-echo "Installing benchmark tools..."
 eval "$(conda shell.bash hook)"
 conda activate "${ENV_NAME}"
-
-# Install SPAdes
-if ! command -v spades.py &> /dev/null; then
-    echo "Installing SPAdes..."
-    conda install -c bioconda spades -y
-fi
-
-# Install QUAST for evaluation
-if ! command -v quast.py &> /dev/null; then
-    echo "Installing QUAST..."
-    conda install -c bioconda quast -y
-fi
-
-# Install other useful tools
-conda install -c bioconda seqkit samtools -y 2>/dev/null || true
 
 echo ""
 echo "=== Setup Complete ==="
@@ -51,6 +40,9 @@ echo "  conda activate ${ENV_NAME}"
 echo ""
 echo "Then run benchmarks with:"
 echo "  ./run_benchmark.sh simulated 8"
+echo ""
+echo "Environment file:"
+echo "  ${ENV_YML}"
 echo ""
 
 # Show versions

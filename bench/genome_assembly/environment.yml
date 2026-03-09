@@ -1,0 +1,10 @@
+name: raptor_bench
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.10
+  - spades
+  - quast
+  - seqkit
+  - samtools

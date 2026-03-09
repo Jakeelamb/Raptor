@@ -12,6 +12,7 @@ This directory contains the reproducible benchmark workflow for positioning Rapt
 ## Layout
 
 - `setup_environment.sh`: installs benchmark dependencies
+- `environment.yml`: pinned conda environment for benchmark tooling
 - `download_data.sh`: downloads public datasets or generates simulated data
 - `quick_benchmark.sh`: fast smoke benchmark on synthetic data
 - `run_benchmark.sh`: full benchmark run for one dataset
@@ -77,6 +78,13 @@ Strongly recommended:
 
 # 4. Aggregate all benchmark runs
 python3 ./bench/genome_assembly/summarize_results.py
+```
+
+You can also create the comparator environment directly:
+
+```bash
+conda env create -f ./bench/genome_assembly/environment.yml
+conda activate raptor_bench
 ```
 
 ## Publishing Guidance
