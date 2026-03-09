@@ -30,7 +30,7 @@ target/release/raptor assemble-large \
   -o artifacts/benchmarks/quick_test_20260309_raptor/contigs.fa \
   -t 8 \
   -k 31 \
-  --min-count 3 \
+  --min-count 0 \
   --scaffold \
   --polish
 ```
@@ -39,12 +39,13 @@ target/release/raptor assemble-large \
 
 ### Assembly
 
-- End-to-end runtime: 289 s
+- End-to-end runtime: 247.54 s
 - Disk used during k-mer bucketing: 0.64 GB
+- Adaptive min-count selected: 3
 - Total k-mers: 79,999,920
 - Unique k-mers: 20,298,322
 - Filtered k-mers: 1,841,744
-- Error-corrected k-mers: 14,981,045
+- Error-corrected k-mers: 14,981,404
 - Tips removed: 2,508
 - Bubbles popped: 2
 
@@ -53,20 +54,21 @@ target/release/raptor assemble-large \
 - Contigs: 24
 - Total assembled bases: 1,817,131 bp
 - Reference recovery by assembled length: 90.86%
-- N50: 120,054 bp
+- QUAST genome fraction: 90.651%
+- N50: 130,057 bp
 - Largest contig: 420,010 bp
 
 ### Scaffolds
 
 - Scaffolds: 21
-- Total scaffolded bases: 1,817,134 bp
+- Total scaffolded bases: 1,817,131 bp
 - Scaffold N50: 360,081 bp
 - Largest scaffold: 575,626 bp
 
 ### Polishing
 
-- Corrections made: 986
-- Correction types: 986 substitutions, 0 insertions, 0 deletions
+- Corrections made: 1,082
+- Correction types: 1,082 substitutions, 0 insertions, 0 deletions
 
 ## Interpretation
 
@@ -74,20 +76,20 @@ This run shows that the checked-in `assemble-large` pipeline is operational end-
 
 ## Comparator Run
 
-On 2026-03-09, the same `quick_test` dataset was also run through the benchmark harness against SPAdes 4.2.0 with QUAST 5.3.0 evaluation.
+On 2026-03-09, the same `quick_test` dataset was also compared against SPAdes 4.2.0 with QUAST 5.3.0 evaluation after enabling adaptive cutoff selection in `assemble-large`.
 
 ### Comparator Summary
 
 | Tool | Runtime (s) | Contigs | N50 | Genome Fraction (%) | NGA50 | Misassemblies |
 |------|-------------|---------|-----|---------------------|-------|---------------|
 | SPAdes | 232.424 | 37 | 130,153 | 88.601 | 120,152 | 0 |
-| Raptor | 259.361 | 1,681 | 1,518 | 81.649 | 1,371 | 0 |
+| Raptor | 247.54 | 24 | 130,057 | 90.651 | 111,000 | 2 |
 
 ### Comparator Interpretation
 
-This is the first real cross-tool evidence checked into the repo, and it is not yet competitive. On `quick_test`, SPAdes is both faster and far more contiguous than the current Raptor contig output.
+The large regression on `quick_test` turned out to be a cutoff-policy problem, not just a graph-traversal problem. With adaptive min-count selection enabled, Raptor recovers from 1,681 fragmented contigs to 24 contigs and reaches practical parity with SPAdes on raw contig N50 while exceeding SPAdes on genome fraction for this dataset.
 
-Raptor's scaffolder still adds meaningful continuity after assembly, reaching 102 scaffolds with scaffold N50 67,516 bp in the same run, but the underlying contig graph quality remains the main bottleneck.
+This is not a clean win yet. SPAdes is still faster, still has the better NGA50, and still avoids the two misassemblies QUAST reports for the current Raptor output.
 
 The current evidence is good enough for:
 
@@ -107,11 +109,11 @@ To support stronger external claims, the benchmark suite still needs:
 - at least one larger public real-world benchmark
 - peak RSS memory capture on the benchmark host
 - repeated runs or variance estimates
-- quality improvements that materially close the contiguity gap against established assemblers
+- alignment-aware improvements that reduce the remaining misassemblies and close the NGA50 gap
 
 ## Next Benchmark Priorities
 
-1. Improve graph cleaning and extension so the raw contig set does not fragment into thousands of pieces on `quick_test`.
+1. Improve branch resolution and polishing so the raw contigs keep this continuity while removing the two QUAST misassemblies.
 2. Add at least one larger public dataset beyond `quick_test`.
 3. Capture peak RSS memory reliably for both tools on this host.
 4. Repeat each benchmark enough times to report variance instead of a single run.

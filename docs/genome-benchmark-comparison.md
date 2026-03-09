@@ -25,7 +25,7 @@ Latest complete rows by tool: raptor, spades
 
 | Tool | Source Run | Time (s) | Peak RSS (KB) | Contigs | N50 | Genome Fraction % | Misassemblies | NGA50 | Duplication Ratio |
 |------|------------|----------|---------------|---------|-----|-------------------|---------------|-------|-------------------|
-| raptor | quick_test_20260309_140001 | 259.361 | N/A | 1681 | 1518 | 81.649 | 0 | 1371 | 1.010 |
+| raptor | quick_test_20260309_142740 | 247.54 | N/A | 24 | 130057 | 90.651 | 2 | 111000 | 1.002 |
 | spades | quick_test_20260309_140001 | 232.424 | N/A | 37 | 130153 | 88.601 | 0 | 120152 | 1.000 |
 
 Comparator metrics are present for this dataset.

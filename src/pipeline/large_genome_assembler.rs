@@ -27,7 +27,7 @@ use tracing::info;
 pub struct LargeGenomeConfig {
     /// K-mer size (recommend 31 for large genomes)
     pub k: usize,
-    /// Minimum k-mer count to use (filters errors)
+    /// Minimum k-mer count to use (filters errors). Use 0 for adaptive selection.
     pub min_count: u32,
     /// Minimum contig length to output
     pub min_contig_len: usize,
@@ -45,7 +45,7 @@ impl Default for LargeGenomeConfig {
     fn default() -> Self {
         Self {
             k: 31,
-            min_count: 2,
+            min_count: 0,
             min_contig_len: 200,
             num_buckets: None,
             temp_dir: None,
@@ -60,6 +60,7 @@ impl Default for LargeGenomeConfig {
 pub struct AssemblyStats {
     pub reads_processed: u64,
     pub bases_processed: u64,
+    pub effective_min_count: u32,
     pub kmers_total: u64,
     pub kmers_unique: u64,
     pub kmers_filtered: u64,
@@ -83,6 +84,7 @@ impl std::fmt::Display for AssemblyStats {
             self.bases_processed,
             self.bases_processed as f64 / 1e9
         )?;
+        writeln!(f, "Min count used: {}", self.effective_min_count)?;
         writeln!(
             f,
             "K-mers: {} total, {} unique, {} after filtering",
@@ -173,7 +175,7 @@ impl LargeGenomeAssembler {
 
         info!("=== Large Genome Assembler ===");
         info!("K-mer size: {}", k);
-        info!("Min count: {}", self.config.min_count);
+        info!("Min count request: {}", self.config.min_count);
 
         // Phase 1: Disk-based k-mer counting
         info!("Phase 1/6: Distributing k-mers to disk...");
@@ -205,9 +207,18 @@ impl LargeGenomeAssembler {
         stats.kmers_error_corrected = num_corrected;
         info!("Error-corrected {} k-mers", num_corrected);
 
+        let effective_min_count = self.select_min_count(&corrected_counts);
+        stats.effective_min_count = effective_min_count;
+        if self.config.min_count == 0 {
+            info!(
+                "Adaptive min count selected: {} (requested auto)",
+                effective_min_count
+            );
+        }
+
         let filtered: AHashMap<u64, u32> = corrected_counts
             .into_iter()
-            .filter(|(_, count)| *count >= self.config.min_count)
+            .filter(|(_, count)| *count >= effective_min_count)
             .collect();
         stats.kmers_filtered = filtered.len() as u64;
         info!(
@@ -222,7 +233,7 @@ impl LargeGenomeAssembler {
         info!("  Adjacency built for {} k-mers", adjacency.len());
 
         // Graph cleaning: remove tips and pop bubbles
-        let tips_removed = self.remove_tips(&mut adjacency, &filtered, k);
+        let tips_removed = self.remove_tips(&mut adjacency, &filtered, k, effective_min_count);
         stats.tips_removed = tips_removed;
         info!("  Removed {} tips", tips_removed);
 
@@ -258,7 +269,7 @@ impl LargeGenomeAssembler {
 
         info!("=== Large Genome Assembler (Paired-End Mode) ===");
         info!("K-mer size: {}", k);
-        info!("Min count: {}", self.config.min_count);
+        info!("Min count request: {}", self.config.min_count);
         info!("Input R1: {}", input1_path);
         info!("Input R2: {}", input2_path);
 
@@ -297,9 +308,18 @@ impl LargeGenomeAssembler {
         stats.kmers_error_corrected = num_corrected;
         info!("Error-corrected {} k-mers", num_corrected);
 
+        let effective_min_count = self.select_min_count(&corrected_counts);
+        stats.effective_min_count = effective_min_count;
+        if self.config.min_count == 0 {
+            info!(
+                "Adaptive min count selected: {} (requested auto)",
+                effective_min_count
+            );
+        }
+
         let filtered: AHashMap<u64, u32> = corrected_counts
             .into_iter()
-            .filter(|(_, count)| *count >= self.config.min_count)
+            .filter(|(_, count)| *count >= effective_min_count)
             .collect();
         stats.kmers_filtered = filtered.len() as u64;
         info!(
@@ -312,7 +332,7 @@ impl LargeGenomeAssembler {
         let mut adjacency = self.build_adjacency(&valid_kmers, k);
         info!("  Adjacency built for {} k-mers", adjacency.len());
 
-        let tips_removed = self.remove_tips(&mut adjacency, &filtered, k);
+        let tips_removed = self.remove_tips(&mut adjacency, &filtered, k, effective_min_count);
         stats.tips_removed = tips_removed;
         info!("  Removed {} tips", tips_removed);
 
@@ -603,6 +623,27 @@ impl LargeGenomeAssembler {
         None
     }
 
+    fn select_min_count(&self, kmer_counts: &AHashMap<u64, u32>) -> u32 {
+        if self.config.min_count > 0 {
+            return self.config.min_count;
+        }
+
+        let mut non_singleton_counts: Vec<u32> = kmer_counts
+            .values()
+            .copied()
+            .filter(|&count| count >= 2)
+            .collect();
+
+        if non_singleton_counts.is_empty() {
+            return 2;
+        }
+
+        non_singleton_counts.sort_unstable();
+        let median = non_singleton_counts[non_singleton_counts.len() / 2];
+
+        (median / 10).clamp(2, 5)
+    }
+
     /// Remove tips: dead-end paths shorter than max_tip_len
     ///
     /// Tips are typically caused by sequencing errors at read ends.
@@ -613,6 +654,7 @@ impl LargeGenomeAssembler {
         adjacency: &mut AHashMap<u64, ([bool; 4], [bool; 4])>,
         kmer_counts: &AHashMap<u64, u32>,
         k: usize,
+        min_count: u32,
     ) -> usize {
         let max_tip_len = self.config.max_tip_len;
         let bases = [b'A', b'C', b'G', b'T'];
@@ -648,7 +690,7 @@ impl LargeGenomeAssembler {
                         .unwrap_or(0);
 
                     // Only remove if low coverage (likely error)
-                    if tip_count <= self.config.min_count * 2 {
+                    if tip_count <= min_count.saturating_mul(2) {
                         to_remove.push(kmer);
                         tips_removed += 1;
                     }
@@ -1967,5 +2009,56 @@ mod tests {
             repeat_kmers.len() >= 5,
             "Should identify the high-coverage k-mers as repeats"
         );
+    }
+
+    #[test]
+    fn test_auto_min_count_scales_with_coverage() {
+        let mut counts = AHashMap::new();
+        for i in 0..500 {
+            counts.insert(i as u64, 35);
+        }
+        for i in 500..650 {
+            counts.insert(i as u64, 2);
+        }
+
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            min_count: 0,
+            ..Default::default()
+        });
+
+        assert_eq!(assembler.select_min_count(&counts), 3);
+    }
+
+    #[test]
+    fn test_auto_min_count_stays_lenient_for_low_coverage_data() {
+        let mut counts = AHashMap::new();
+        for i in 0..100 {
+            counts.insert(i as u64, 6);
+        }
+        for i in 100..180 {
+            counts.insert(i as u64, 2);
+        }
+
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            min_count: 0,
+            ..Default::default()
+        });
+
+        assert_eq!(assembler.select_min_count(&counts), 2);
+    }
+
+    #[test]
+    fn test_explicit_min_count_overrides_auto_selection() {
+        let mut counts = AHashMap::new();
+        for i in 0..500 {
+            counts.insert(i as u64, 40);
+        }
+
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            min_count: 4,
+            ..Default::default()
+        });
+
+        assert_eq!(assembler.select_min_count(&counts), 4);
     }
 }

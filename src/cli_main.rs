@@ -381,8 +381,8 @@ pub enum Commands {
         #[arg(short, long, default_value_t = 31)]
         kmer: usize,
 
-        /// Minimum k-mer count (filters sequencing errors)
-        #[arg(short = 'c', long, default_value_t = 2)]
+        /// Minimum k-mer count (filters sequencing errors, 0 = auto)
+        #[arg(short = 'c', long, default_value_t = 0)]
         min_count: u32,
 
         /// Minimum contig length to output

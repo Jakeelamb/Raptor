@@ -145,7 +145,7 @@ run_raptor() {
             --input2 "${reads2}" \
             -o "${output_dir}/contigs.fa" \
             -t "${threads}" \
-            --min-count 2 \
+            --min-count 0 \
             --scaffold \
             --polish \
             --compress-buckets \
@@ -161,7 +161,7 @@ run_raptor() {
                 --input2 "${reads2}" \
                 -o "${output_dir}/contigs.fa" \
                 -t "${threads}" \
-                --min-count 2 \
+                --min-count 0 \
                 --scaffold \
                 --polish \
                 --compress-buckets \
@@ -423,7 +423,7 @@ EOF
 set -e
 
 spades.py -1 "${DATA_DIR}/${dataset}/reads_1.fastq.gz" -2 "${DATA_DIR}/${dataset}/reads_2.fastq.gz" -o "${run_dir}/spades" -t "${threads}" --careful
-"${RAPTOR_BIN}" assemble-large -i "${DATA_DIR}/${dataset}/reads_1.fastq.gz" --input2 "${DATA_DIR}/${dataset}/reads_2.fastq.gz" -o "${run_dir}/raptor/contigs.fa" -t "${threads}" --min-count 2 --scaffold --polish --compress-buckets
+"${RAPTOR_BIN}" assemble-large -i "${DATA_DIR}/${dataset}/reads_1.fastq.gz" --input2 "${DATA_DIR}/${dataset}/reads_2.fastq.gz" -o "${run_dir}/raptor/contigs.fa" -t "${threads}" --min-count 0 --scaffold --polish --compress-buckets
 EOF
     chmod +x "${run_dir}/commands.sh"
 }

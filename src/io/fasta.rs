@@ -2,8 +2,9 @@
 use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Result, Write};
+use std::path::Path;
 
 use crate::graph::assembler::Contig;
 use crate::kmer::rle::rle_encode;
@@ -25,7 +26,11 @@ pub fn open_fasta(path: &str) -> Box<dyn BufRead> {
 
 impl FastaWriter {
     pub fn new(path: &str) -> Self {
-        let file = File::create(path).expect("Unable to create FASTA file");
+        let path_ref = Path::new(path);
+        if let Some(parent) = path_ref.parent().filter(|p| !p.as_os_str().is_empty()) {
+            fs::create_dir_all(parent).expect("Unable to create FASTA parent directory");
+        }
+        let file = File::create(path_ref).expect("Unable to create FASTA file");
         if path.ends_with(".gz") {
             let encoder = GzEncoder::new(file, Compression::default());
             FastaWriter::Compressed(BufWriter::new(encoder))
@@ -82,5 +87,25 @@ impl FastaWriter {
             }
         };
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FastaWriter;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_fasta_writer_creates_parent_directories() {
+        let temp_dir = TempDir::new().unwrap();
+        let output = temp_dir.path().join("nested/output/test.fa");
+
+        let mut writer = FastaWriter::new(output.to_str().unwrap());
+        writer.write_record("seq1", "ACGT").unwrap();
+        drop(writer);
+
+        assert!(output.exists());
+        assert!(fs::read_to_string(output).unwrap().contains(">seq1"));
     }
 }
