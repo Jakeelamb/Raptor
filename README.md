@@ -128,6 +128,8 @@ The current checked-in baseline report is in [docs/genome-benchmark-report.md](.
 
 The generated cross-tool comparison view is in [docs/genome-benchmark-comparison.md](./docs/genome-benchmark-comparison.md).
 
+The next-generation assembler redesign plan is in [docs/raptor-architecture-roadmap.md](./docs/raptor-architecture-roadmap.md).
+
 ## 🖥️ HPC Support
 
 Raptor includes scripts specifically designed for high-performance computing environments:

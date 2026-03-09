@@ -16,7 +16,7 @@ use crate::io::fastq::{open_fastq, stream_fastq_records, stream_paired_fastq_rec
 use crate::kmer::disk_counting_v2::{
     decode_kmer, extend_left, extend_right, DiskCounterConfig, DiskKmerCounterV2,
 };
-use crate::kmer::kmer::KmerU64;
+use crate::kmer::kmer::{reverse_complement, KmerU64};
 use ahash::{AHashMap, AHashSet};
 use rayon::prelude::*;
 use std::cmp::Reverse;
@@ -126,6 +126,21 @@ pub struct RepeatStats {
     pub repeat_threshold: u32,
     pub repeat_kmer_count: usize,
     pub total_kmer_count: usize,
+}
+
+#[derive(Debug, Clone)]
+struct WeightedGraphNode {
+    predecessors: Vec<(u64, u32)>,
+    successors: Vec<(u64, u32)>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct WeightedGraphDiagnostics {
+    nodes: usize,
+    oriented_edges: usize,
+    branching_nodes: usize,
+    source_nodes: usize,
+    sink_nodes: usize,
 }
 
 impl InsertSizeStats {
@@ -241,6 +256,17 @@ impl LargeGenomeAssembler {
         stats.bubbles_popped = bubbles_popped;
         info!("  Popped {} bubbles", bubbles_popped);
 
+        let weighted_graph = self.build_weighted_unitig_graph(&filtered, &adjacency, k);
+        let graph_diagnostics = self.analyze_weighted_graph(&weighted_graph);
+        info!(
+            "  Weighted graph: {} nodes, {} oriented edges, {} branching, {} sources, {} sinks",
+            graph_diagnostics.nodes,
+            graph_diagnostics.oriented_edges,
+            graph_diagnostics.branching_nodes,
+            graph_diagnostics.source_nodes,
+            graph_diagnostics.sink_nodes
+        );
+
         // Phase 5: Build contigs from cleaned graph
         info!("Phase 5/6: Building contigs from cleaned graph...");
         let contigs = self.build_contigs_from_graph(&filtered, &adjacency, k);
@@ -339,6 +365,17 @@ impl LargeGenomeAssembler {
         let bubbles_popped = self.pop_bubbles(&mut adjacency, &filtered, k);
         stats.bubbles_popped = bubbles_popped;
         info!("  Popped {} bubbles", bubbles_popped);
+
+        let weighted_graph = self.build_weighted_unitig_graph(&filtered, &adjacency, k);
+        let graph_diagnostics = self.analyze_weighted_graph(&weighted_graph);
+        info!(
+            "  Weighted graph: {} nodes, {} oriented edges, {} branching, {} sources, {} sinks",
+            graph_diagnostics.nodes,
+            graph_diagnostics.oriented_edges,
+            graph_diagnostics.branching_nodes,
+            graph_diagnostics.source_nodes,
+            graph_diagnostics.sink_nodes
+        );
 
         info!("Phase 5/6: Building contigs from cleaned graph...");
         let contigs = self.build_contigs_from_graph(&filtered, &adjacency, k);
@@ -1068,11 +1105,9 @@ impl LargeGenomeAssembler {
         let mut sorted: Vec<(u64, u32)> = kmer_counts
             .iter()
             .filter(|(&kmer, _)| {
-                // Skip repeat k-mers as seeds
                 if repeat_kmers.contains(&kmer) {
                     return false;
                 }
-                // Check both canonical and RC forms
                 if adjacency.contains_key(&kmer) {
                     return true;
                 }
@@ -1096,7 +1131,6 @@ impl LargeGenomeAssembler {
                 continue;
             }
 
-            // Extend bidirectionally with coverage-guided traversal
             let contig = self.extend_bidirectional_with_coverage(
                 seed,
                 k,
@@ -1122,6 +1156,334 @@ impl LargeGenomeAssembler {
         }
 
         contigs
+    }
+
+    fn build_weighted_unitig_graph(
+        &self,
+        kmer_counts: &AHashMap<u64, u32>,
+        adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+        k: usize,
+    ) -> AHashMap<u64, WeightedGraphNode> {
+        let bases = [b'A', b'C', b'G', b'T'];
+
+        adjacency
+            .iter()
+            .map(|(&node, &(left, right))| {
+                let predecessors =
+                    self.weighted_neighbors(node, &left, adjacency, kmer_counts, k, &bases, true);
+                let successors =
+                    self.weighted_neighbors(node, &right, adjacency, kmer_counts, k, &bases, false);
+                (
+                    node,
+                    WeightedGraphNode {
+                        predecessors,
+                        successors,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn analyze_weighted_graph(
+        &self,
+        graph: &AHashMap<u64, WeightedGraphNode>,
+    ) -> WeightedGraphDiagnostics {
+        let mut diagnostics = WeightedGraphDiagnostics {
+            nodes: graph.len(),
+            ..Default::default()
+        };
+
+        for node in graph.values() {
+            diagnostics.oriented_edges += node.successors.len();
+
+            if node.predecessors.len() > 1 || node.successors.len() > 1 {
+                diagnostics.branching_nodes += 1;
+            }
+            if node.predecessors.is_empty() && !node.successors.is_empty() {
+                diagnostics.source_nodes += 1;
+            }
+            if node.successors.is_empty() && !node.predecessors.is_empty() {
+                diagnostics.sink_nodes += 1;
+            }
+        }
+
+        diagnostics
+    }
+
+    fn weighted_neighbors(
+        &self,
+        node: u64,
+        extensions: &[bool; 4],
+        adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+        kmer_counts: &AHashMap<u64, u32>,
+        k: usize,
+        bases: &[u8; 4],
+        going_left: bool,
+    ) -> Vec<(u64, u32)> {
+        let mut neighbors = Vec::new();
+
+        for (idx, &valid) in extensions.iter().enumerate() {
+            if !valid {
+                continue;
+            }
+
+            let candidate = if going_left {
+                extend_left(node, bases[idx], k)
+            } else {
+                extend_right(node, bases[idx], k)
+            };
+
+            let Some(candidate) = candidate else {
+                continue;
+            };
+
+            let resolved = if adjacency.contains_key(&candidate) {
+                candidate
+            } else {
+                let canonical = KmerU64 {
+                    encoded: candidate,
+                    len: k as u8,
+                }
+                .canonical()
+                .encoded;
+                if adjacency.contains_key(&canonical) {
+                    canonical
+                } else {
+                    continue;
+                }
+            };
+
+            let support = kmer_counts
+                .get(
+                    &KmerU64 {
+                        encoded: resolved,
+                        len: k as u8,
+                    }
+                    .canonical()
+                    .encoded,
+                )
+                .copied()
+                .unwrap_or(0);
+
+            neighbors.push((resolved, support));
+        }
+
+        neighbors.sort_unstable_by_key(|(neighbor, _)| *neighbor);
+        neighbors.dedup_by_key(|(neighbor, _)| *neighbor);
+        neighbors
+    }
+
+    #[allow(dead_code)]
+    fn extract_maximal_unitigs(
+        &self,
+        graph: &AHashMap<u64, WeightedGraphNode>,
+        k: usize,
+    ) -> Vec<String> {
+        let mut nodes: Vec<u64> = graph.keys().copied().collect();
+        nodes.sort_unstable();
+
+        let mut used_edges: AHashSet<(u64, u64)> = AHashSet::new();
+        let mut covered_canonical: AHashSet<u64> = AHashSet::new();
+        let mut contigs = Vec::new();
+
+        for &node in &nodes {
+            let Some(node_info) = graph.get(&node) else {
+                continue;
+            };
+
+            if node_info.predecessors.len() == 1 && node_info.successors.len() == 1 {
+                continue;
+            }
+
+            for &(next, _) in &node_info.successors {
+                let edge_key = Self::canonical_edge_key(node, next, k);
+                if used_edges.contains(&edge_key) {
+                    continue;
+                }
+
+                let path = self.trace_unitig_path(node, next, graph, k, &mut used_edges);
+                if let Some(contig) = self.render_path(&path, k, &mut covered_canonical) {
+                    contigs.push(contig);
+                }
+            }
+        }
+
+        for &node in &nodes {
+            let Some(node_info) = graph.get(&node) else {
+                continue;
+            };
+
+            if node_info.predecessors.len() != 1 || node_info.successors.len() != 1 {
+                continue;
+            }
+
+            let next = node_info.successors[0].0;
+            let edge_key = Self::canonical_edge_key(node, next, k);
+            if used_edges.contains(&edge_key) {
+                continue;
+            }
+
+            let path = self.trace_unitig_cycle(node, graph, k, &mut used_edges);
+            if let Some(contig) = self.render_path(&path, k, &mut covered_canonical) {
+                contigs.push(contig);
+            }
+        }
+
+        for &node in &nodes {
+            let canonical = KmerU64 {
+                encoded: node,
+                len: k as u8,
+            }
+            .canonical()
+            .encoded;
+
+            if covered_canonical.insert(canonical) {
+                contigs.push(decode_kmer(canonical, k));
+            }
+        }
+
+        contigs
+    }
+
+    #[allow(dead_code)]
+    fn trace_unitig_path(
+        &self,
+        start: u64,
+        next: u64,
+        graph: &AHashMap<u64, WeightedGraphNode>,
+        k: usize,
+        used_edges: &mut AHashSet<(u64, u64)>,
+    ) -> Vec<u64> {
+        let mut path = vec![start];
+        let mut current = start;
+        let mut next_node = next;
+
+        loop {
+            let edge_key = Self::canonical_edge_key(current, next_node, k);
+            if !used_edges.insert(edge_key) {
+                break;
+            }
+
+            path.push(next_node);
+            current = next_node;
+
+            let Some(node_info) = graph.get(&current) else {
+                break;
+            };
+
+            if node_info.predecessors.len() != 1 || node_info.successors.len() != 1 {
+                break;
+            }
+
+            next_node = node_info.successors[0].0;
+        }
+
+        path
+    }
+
+    #[allow(dead_code)]
+    fn trace_unitig_cycle(
+        &self,
+        start: u64,
+        graph: &AHashMap<u64, WeightedGraphNode>,
+        k: usize,
+        used_edges: &mut AHashSet<(u64, u64)>,
+    ) -> Vec<u64> {
+        let mut path = vec![start];
+        let mut current = start;
+
+        loop {
+            let Some(node_info) = graph.get(&current) else {
+                break;
+            };
+            let next = node_info.successors[0].0;
+            let edge_key = Self::canonical_edge_key(current, next, k);
+            if !used_edges.insert(edge_key) {
+                break;
+            }
+            if next == start {
+                break;
+            }
+            path.push(next);
+            current = next;
+        }
+
+        path
+    }
+
+    #[allow(dead_code)]
+    fn render_path(
+        &self,
+        path: &[u64],
+        k: usize,
+        covered_canonical: &mut AHashSet<u64>,
+    ) -> Option<String> {
+        let (&first, rest) = path.split_first()?;
+
+        let mut sequence = decode_kmer(first, k).into_bytes();
+        covered_canonical.insert(
+            KmerU64 {
+                encoded: first,
+                len: k as u8,
+            }
+            .canonical()
+            .encoded,
+        );
+
+        for &node in rest {
+            covered_canonical.insert(
+                KmerU64 {
+                    encoded: node,
+                    len: k as u8,
+                }
+                .canonical()
+                .encoded,
+            );
+            sequence.push(Self::last_base(node));
+        }
+
+        let forward = String::from_utf8(sequence).ok()?;
+        let reverse = reverse_complement(&forward);
+        if reverse < forward {
+            Some(reverse)
+        } else {
+            Some(forward)
+        }
+    }
+
+    #[allow(dead_code)]
+    fn canonical_edge_key(from: u64, to: u64, k: usize) -> (u64, u64) {
+        let forward = (from, to);
+        let reverse = (
+            KmerU64 {
+                encoded: to,
+                len: k as u8,
+            }
+            .reverse_complement()
+            .encoded,
+            KmerU64 {
+                encoded: from,
+                len: k as u8,
+            }
+            .reverse_complement()
+            .encoded,
+        );
+
+        if reverse < forward {
+            reverse
+        } else {
+            forward
+        }
+    }
+
+    #[allow(dead_code)]
+    fn last_base(encoded: u64) -> u8 {
+        match encoded & 0b11 {
+            0 => b'A',
+            1 => b'C',
+            2 => b'G',
+            _ => b'T',
+        }
     }
 
     /// Extend a seed k-mer bidirectionally to form a contig
@@ -2060,5 +2422,38 @@ mod tests {
         });
 
         assert_eq!(assembler.select_min_count(&counts), 4);
+    }
+
+    #[test]
+    fn test_unitig_graph_compacts_linear_path() {
+        let sequence = "ACGTAC";
+        let k = 4;
+        let mut counts = AHashMap::new();
+        for i in 0..=sequence.len() - k {
+            let encoded = KmerU64::from_str(&sequence[i..i + k])
+                .unwrap()
+                .canonical()
+                .encoded;
+            counts.insert(encoded, 10);
+        }
+
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: 1,
+            ..Default::default()
+        });
+        let valid_kmers: AHashSet<u64> = counts.keys().copied().collect();
+        let adjacency = assembler.build_adjacency(&valid_kmers, k);
+        let graph = assembler.build_weighted_unitig_graph(&counts, &adjacency, k);
+        let diagnostics = assembler.analyze_weighted_graph(&graph);
+        let contigs = assembler.extract_maximal_unitigs(&graph, k);
+        let reverse = reverse_complement(sequence);
+
+        assert_eq!(diagnostics.branching_nodes, 0);
+        assert!(diagnostics.nodes >= counts.len());
+        assert!(diagnostics.oriented_edges >= counts.len().saturating_sub(1));
+        assert_eq!(contigs.len(), 1);
+        assert!(contigs[0] == sequence || contigs[0] == reverse);
     }
 }
