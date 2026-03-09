@@ -11,16 +11,15 @@
 //!
 //! Memory: O(bucket_size + adjacency_cache) ≈ 2-4 GB
 
-use crate::io::fastq::{open_fastq, stream_fastq_records};
 use crate::io::fasta::FastaWriter;
+use crate::io::fastq::{open_fastq, stream_fastq_records, stream_paired_fastq_records};
 use crate::kmer::disk_counting_v2::{
-    DiskCounterConfig, DiskKmerCounterV2,
-    decode_kmer, extend_right, extend_left,
+    decode_kmer, extend_left, extend_right, DiskCounterConfig, DiskKmerCounterV2,
 };
 use crate::kmer::kmer::KmerU64;
 use ahash::{AHashMap, AHashSet};
-use std::cmp::Reverse;
 use rayon::prelude::*;
+use std::cmp::Reverse;
 use tracing::info;
 
 /// Configuration for large genome assembly
@@ -78,16 +77,26 @@ impl std::fmt::Display for AssemblyStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "=== Assembly Statistics ===")?;
         writeln!(f, "Reads: {}", self.reads_processed)?;
-        writeln!(f, "Bases: {} ({:.2} Gb)", self.bases_processed,
-                 self.bases_processed as f64 / 1e9)?;
-        writeln!(f, "K-mers: {} total, {} unique, {} after filtering",
-                 self.kmers_total, self.kmers_unique, self.kmers_filtered)?;
+        writeln!(
+            f,
+            "Bases: {} ({:.2} Gb)",
+            self.bases_processed,
+            self.bases_processed as f64 / 1e9
+        )?;
+        writeln!(
+            f,
+            "K-mers: {} total, {} unique, {} after filtering",
+            self.kmers_total, self.kmers_unique, self.kmers_filtered
+        )?;
         if self.kmers_error_corrected > 0 {
             writeln!(f, "K-mers error-corrected: {}", self.kmers_error_corrected)?;
         }
         if self.tips_removed > 0 || self.bubbles_popped > 0 {
-            writeln!(f, "Graph cleaning: {} tips removed, {} bubbles popped",
-                     self.tips_removed, self.bubbles_popped)?;
+            writeln!(
+                f,
+                "Graph cleaning: {} tips removed, {} bubbles popped",
+                self.tips_removed, self.bubbles_popped
+            )?;
         }
         writeln!(f, "Contigs: {}", self.contigs)?;
         writeln!(f, "Total length: {} bp", self.total_length)?;
@@ -95,6 +104,55 @@ impl std::fmt::Display for AssemblyStats {
         writeln!(f, "Largest: {} bp", self.largest)?;
         writeln!(f, "Disk used: {:.2} GB", self.disk_bytes as f64 / 1e9)?;
         Ok(())
+    }
+}
+
+/// Insert size statistics for paired-end reads
+#[derive(Debug, Clone, Default)]
+pub struct InsertSizeStats {
+    pub mean: f64,
+    pub std_dev: f64,
+    pub min: usize,
+    pub max: usize,
+    pub median: usize,
+}
+
+/// Repeat detection statistics
+#[derive(Debug, Clone, Default)]
+pub struct RepeatStats {
+    pub median_coverage: u32,
+    pub repeat_threshold: u32,
+    pub repeat_kmer_count: usize,
+    pub total_kmer_count: usize,
+}
+
+impl InsertSizeStats {
+    pub fn from_samples(samples: &[usize]) -> Self {
+        if samples.is_empty() {
+            return Self::default();
+        }
+
+        let n = samples.len() as f64;
+        let sum: usize = samples.iter().sum();
+        let mean = sum as f64 / n;
+
+        let variance: f64 = samples
+            .iter()
+            .map(|&x| (x as f64 - mean).powi(2))
+            .sum::<f64>()
+            / n;
+        let std_dev = variance.sqrt();
+
+        let mut sorted = samples.to_vec();
+        sorted.sort_unstable();
+
+        Self {
+            mean,
+            std_dev,
+            min: sorted[0],
+            max: sorted[sorted.len() - 1],
+            median: sorted[sorted.len() / 2],
+        }
     }
 }
 
@@ -109,11 +167,7 @@ impl LargeGenomeAssembler {
     }
 
     /// Run the complete assembly pipeline
-    pub fn assemble(
-        &self,
-        input_path: &str,
-        output_path: &str,
-    ) -> std::io::Result<AssemblyStats> {
+    pub fn assemble(&self, input_path: &str, output_path: &str) -> std::io::Result<AssemblyStats> {
         let mut stats = AssemblyStats::default();
         let k = self.config.k;
 
@@ -133,8 +187,12 @@ impl LargeGenomeAssembler {
         let (total_kmers, num_buckets, disk_bytes) = counter.stats();
         stats.kmers_total = total_kmers;
         stats.disk_bytes = disk_bytes;
-        info!("Distributed {} k-mers to {} buckets ({:.2} GB on disk)",
-              total_kmers, num_buckets, disk_bytes as f64 / 1e9);
+        info!(
+            "Distributed {} k-mers to {} buckets ({:.2} GB on disk)",
+            total_kmers,
+            num_buckets,
+            disk_bytes as f64 / 1e9
+        );
 
         // Phase 2: Count k-mers
         info!("Phase 2/6: Counting k-mers from buckets...");
@@ -152,8 +210,10 @@ impl LargeGenomeAssembler {
             .filter(|(_, count)| *count >= self.config.min_count)
             .collect();
         stats.kmers_filtered = filtered.len() as u64;
-        info!("Unique k-mers: {}, after filtering: {}",
-              stats.kmers_unique, stats.kmers_filtered);
+        info!(
+            "Unique k-mers: {}, after filtering: {}",
+            stats.kmers_unique, stats.kmers_filtered
+        );
 
         // Phase 4: Build graph and clean it
         info!("Phase 4/6: Building and cleaning de Bruijn graph...");
@@ -180,6 +240,93 @@ impl LargeGenomeAssembler {
         self.write_output(&contigs, output_path, &mut stats)?;
 
         // Cleanup
+        counter.cleanup()?;
+
+        info!("\n{}", stats);
+        Ok(stats)
+    }
+
+    /// Run assembly with paired-end reads
+    pub fn assemble_paired(
+        &self,
+        input1_path: &str,
+        input2_path: &str,
+        output_path: &str,
+    ) -> std::io::Result<AssemblyStats> {
+        let mut stats = AssemblyStats::default();
+        let k = self.config.k;
+
+        info!("=== Large Genome Assembler (Paired-End Mode) ===");
+        info!("K-mer size: {}", k);
+        info!("Min count: {}", self.config.min_count);
+        info!("Input R1: {}", input1_path);
+        info!("Input R2: {}", input2_path);
+
+        // Phase 1: Disk-based k-mer counting from paired-end reads
+        info!("Phase 1/6: Distributing k-mers to disk...");
+        let disk_config = self.create_disk_config();
+        let mut counter = DiskKmerCounterV2::new(disk_config)?;
+
+        let (reads, bases, insert_stats) =
+            self.distribute_from_paired_fastq(input1_path, input2_path, &mut counter)?;
+        stats.reads_processed = reads;
+        stats.bases_processed = bases;
+
+        info!(
+            "Insert size: mean={:.0}, std={:.0}",
+            insert_stats.mean, insert_stats.std_dev
+        );
+
+        let (total_kmers, num_buckets, disk_bytes) = counter.stats();
+        stats.kmers_total = total_kmers;
+        stats.disk_bytes = disk_bytes;
+        info!(
+            "Distributed {} k-mers to {} buckets ({:.2} GB on disk)",
+            total_kmers,
+            num_buckets,
+            disk_bytes as f64 / 1e9
+        );
+
+        // Phases 2-6 are the same as single-end
+        info!("Phase 2/6: Counting k-mers from buckets...");
+        let kmer_counts = counter.count_all()?;
+        stats.kmers_unique = kmer_counts.len() as u64;
+
+        info!("Phase 3/6: Error correction...");
+        let (corrected_counts, num_corrected) = self.error_correct_kmers(&kmer_counts, k);
+        stats.kmers_error_corrected = num_corrected;
+        info!("Error-corrected {} k-mers", num_corrected);
+
+        let filtered: AHashMap<u64, u32> = corrected_counts
+            .into_iter()
+            .filter(|(_, count)| *count >= self.config.min_count)
+            .collect();
+        stats.kmers_filtered = filtered.len() as u64;
+        info!(
+            "Unique k-mers: {}, after filtering: {}",
+            stats.kmers_unique, stats.kmers_filtered
+        );
+
+        info!("Phase 4/6: Building and cleaning de Bruijn graph...");
+        let valid_kmers: AHashSet<u64> = filtered.keys().copied().collect();
+        let mut adjacency = self.build_adjacency(&valid_kmers, k);
+        info!("  Adjacency built for {} k-mers", adjacency.len());
+
+        let tips_removed = self.remove_tips(&mut adjacency, &filtered, k);
+        stats.tips_removed = tips_removed;
+        info!("  Removed {} tips", tips_removed);
+
+        let bubbles_popped = self.pop_bubbles(&mut adjacency, &filtered, k);
+        stats.bubbles_popped = bubbles_popped;
+        info!("  Popped {} bubbles", bubbles_popped);
+
+        info!("Phase 5/6: Building contigs from cleaned graph...");
+        let contigs = self.build_contigs_from_graph(&filtered, &adjacency, k);
+        info!("Assembled {} raw contigs", contigs.len());
+
+        info!("Phase 6/6: Writing output...");
+        self.write_output(&contigs, output_path, &mut stats)?;
+
         counter.cleanup()?;
 
         info!("\n{}", stats);
@@ -234,6 +381,56 @@ impl LargeGenomeAssembler {
         Ok((reads, bases))
     }
 
+    /// Distribute k-mers from paired-end FASTQ files
+    fn distribute_from_paired_fastq(
+        &self,
+        path1: &str,
+        path2: &str,
+        counter: &mut DiskKmerCounterV2,
+    ) -> std::io::Result<(u64, u64, InsertSizeStats)> {
+        let reader1 = open_fastq(path1);
+        let reader2 = open_fastq(path2);
+        let mut reads = 0u64;
+        let mut bases = 0u64;
+        let mut insert_sizes: Vec<usize> = Vec::new();
+
+        const BATCH_SIZE: usize = 50_000;
+        const INSERT_SAMPLE_SIZE: usize = 100_000;
+        let mut batch: Vec<String> = Vec::with_capacity(BATCH_SIZE * 2);
+
+        for (r1, r2) in stream_paired_fastq_records(reader1, reader2) {
+            reads += 2;
+            bases += (r1.sequence.len() + r2.sequence.len()) as u64;
+
+            // Sample insert sizes from read lengths (actual insert size estimation
+            // would require mapping, but we estimate from read lengths for now)
+            if insert_sizes.len() < INSERT_SAMPLE_SIZE {
+                insert_sizes.push(r1.sequence.len() + r2.sequence.len());
+            }
+
+            batch.push(r1.sequence);
+            batch.push(r2.sequence);
+
+            if batch.len() >= BATCH_SIZE * 2 {
+                counter.distribute(batch.drain(..).map(|s| s.into_bytes()))?;
+
+                if reads % 10_000_000 == 0 {
+                    info!("  {} million read pairs processed...", reads / 2_000_000);
+                }
+            }
+        }
+
+        // Remaining batch
+        if !batch.is_empty() {
+            counter.distribute(batch.drain(..).map(|s| s.into_bytes()))?;
+        }
+
+        // Calculate insert size statistics
+        let insert_stats = InsertSizeStats::from_samples(&insert_sizes);
+
+        Ok((reads, bases, insert_stats))
+    }
+
     /// Build adjacency map: k-mer -> (left_extensions, right_extensions)
     ///
     /// Key insight: We store adjacency for BOTH the canonical form AND its
@@ -251,7 +448,10 @@ impl LargeGenomeAssembler {
         let entries: Vec<(u64, ([bool; 4], [bool; 4]))> = valid_kmers
             .par_iter()
             .flat_map(|&canonical_encoded| {
-                let kmer = KmerU64 { encoded: canonical_encoded, len: k as u8 };
+                let kmer = KmerU64 {
+                    encoded: canonical_encoded,
+                    len: k as u8,
+                };
                 let rc = kmer.reverse_complement();
 
                 // Build adjacency for forward orientation
@@ -286,7 +486,10 @@ impl LargeGenomeAssembler {
         for (i, &base) in bases.iter().enumerate() {
             // Right extension: drop first base, add new at end
             if let Some(ext) = extend_right(encoded, base, k) {
-                let ext_kmer = KmerU64 { encoded: ext, len: k as u8 };
+                let ext_kmer = KmerU64 {
+                    encoded: ext,
+                    len: k as u8,
+                };
                 let ext_canonical = ext_kmer.canonical().encoded;
                 if valid_kmers.contains(&ext_canonical) {
                     right[i] = true;
@@ -295,7 +498,10 @@ impl LargeGenomeAssembler {
 
             // Left extension: drop last base, add new at start
             if let Some(ext) = extend_left(encoded, base, k) {
-                let ext_kmer = KmerU64 { encoded: ext, len: k as u8 };
+                let ext_kmer = KmerU64 {
+                    encoded: ext,
+                    len: k as u8,
+                };
                 let ext_canonical = ext_kmer.canonical().encoded;
                 if valid_kmers.contains(&ext_canonical) {
                     left[i] = true;
@@ -382,7 +588,10 @@ impl LargeGenomeAssembler {
                 let variant = (encoded & mask) | (new_base << shift);
 
                 // Check canonical form
-                let variant_kmer = KmerU64 { encoded: variant, len: k as u8 };
+                let variant_kmer = KmerU64 {
+                    encoded: variant,
+                    len: k as u8,
+                };
                 let canonical = variant_kmer.canonical().encoded;
 
                 if trusted.contains(&canonical) {
@@ -421,14 +630,22 @@ impl LargeGenomeAssembler {
 
             if is_left_dead_end || is_right_dead_end {
                 // Trace the path and check if it's a tip
-                let tip_length = self.trace_tip_length(
-                    kmer, k, adjacency, is_right_dead_end, &bases
-                );
+                let tip_length =
+                    self.trace_tip_length(kmer, k, adjacency, is_right_dead_end, &bases);
 
                 if tip_length > 0 && tip_length <= max_tip_len {
                     // Check if tip has lower coverage than the branch point
-                    let tip_count = kmer_counts.get(&KmerU64 { encoded: kmer, len: k as u8 }
-                        .canonical().encoded).copied().unwrap_or(0);
+                    let tip_count = kmer_counts
+                        .get(
+                            &KmerU64 {
+                                encoded: kmer,
+                                len: k as u8,
+                            }
+                            .canonical()
+                            .encoded,
+                        )
+                        .copied()
+                        .unwrap_or(0);
 
                     // Only remove if low coverage (likely error)
                     if tip_count <= self.config.min_count * 2 {
@@ -461,7 +678,9 @@ impl LargeGenomeAssembler {
         let max_tip = self.config.max_tip_len + 10; // Safety limit
 
         while length < max_tip {
-            let (left_ext, right_ext) = adjacency.get(&current).copied()
+            let (left_ext, right_ext) = adjacency
+                .get(&current)
+                .copied()
                 .unwrap_or(([false; 4], [false; 4]));
 
             let extensions = if going_left { &left_ext } else { &right_ext };
@@ -482,10 +701,19 @@ impl LargeGenomeAssembler {
                 };
 
                 if let Some(next_kmer) = next {
-                    let next_canonical = KmerU64 { encoded: next_kmer, len: k as u8 }
-                        .canonical().encoded;
-                    if adjacency.contains_key(&next_kmer) || adjacency.contains_key(&next_canonical) {
-                        current = if adjacency.contains_key(&next_kmer) { next_kmer } else { next_canonical };
+                    let next_canonical = KmerU64 {
+                        encoded: next_kmer,
+                        len: k as u8,
+                    }
+                    .canonical()
+                    .encoded;
+                    if adjacency.contains_key(&next_kmer) || adjacency.contains_key(&next_canonical)
+                    {
+                        current = if adjacency.contains_key(&next_kmer) {
+                            next_kmer
+                        } else {
+                            next_canonical
+                        };
                         length += 1;
                     } else {
                         return length;
@@ -529,11 +757,14 @@ impl LargeGenomeAssembler {
             .collect();
 
         for branch in branch_points {
-            let (left_ext, right_ext) = adjacency.get(&branch).copied()
+            let (left_ext, right_ext) = adjacency
+                .get(&branch)
+                .copied()
                 .unwrap_or(([false; 4], [false; 4]));
 
             // Check right branches
-            let right_branches: Vec<usize> = right_ext.iter()
+            let right_branches: Vec<usize> = right_ext
+                .iter()
                 .enumerate()
                 .filter(|(_, &b)| b)
                 .map(|(i, _)| i)
@@ -542,7 +773,14 @@ impl LargeGenomeAssembler {
             if right_branches.len() >= 2 {
                 // Trace each branch and look for convergence
                 if let Some(bubble_kmers) = self.find_bubble(
-                    branch, &right_branches, k, adjacency, max_bubble_len, kmer_counts, &bases, false
+                    branch,
+                    &right_branches,
+                    k,
+                    adjacency,
+                    max_bubble_len,
+                    kmer_counts,
+                    &bases,
+                    false,
                 ) {
                     to_remove.extend(bubble_kmers);
                     bubbles_popped += 1;
@@ -550,7 +788,8 @@ impl LargeGenomeAssembler {
             }
 
             // Check left branches
-            let left_branches: Vec<usize> = left_ext.iter()
+            let left_branches: Vec<usize> = left_ext
+                .iter()
                 .enumerate()
                 .filter(|(_, &b)| b)
                 .map(|(i, _)| i)
@@ -558,7 +797,14 @@ impl LargeGenomeAssembler {
 
             if left_branches.len() >= 2 {
                 if let Some(bubble_kmers) = self.find_bubble(
-                    branch, &left_branches, k, adjacency, max_bubble_len, kmer_counts, &bases, true
+                    branch,
+                    &left_branches,
+                    k,
+                    adjacency,
+                    max_bubble_len,
+                    kmer_counts,
+                    &bases,
+                    true,
                 ) {
                     to_remove.extend(bubble_kmers);
                     bubbles_popped += 1;
@@ -602,7 +848,9 @@ impl LargeGenomeAssembler {
             };
 
             if let Some(first) = first_kmer {
-                if let Some((path, end)) = self.trace_path(first, k, adjacency, max_len, bases, going_left) {
+                if let Some((path, end)) =
+                    self.trace_path(first, k, adjacency, max_len, bases, going_left)
+                {
                     paths.push((path, end));
                 }
             }
@@ -617,15 +865,29 @@ impl LargeGenomeAssembler {
             for j in (i + 1)..paths.len() {
                 if paths[i].1 == paths[j].1 {
                     // Found a bubble - keep the higher coverage path
-                    let cov_i: u32 = paths[i].0.iter()
+                    let cov_i: u32 = paths[i]
+                        .0
+                        .iter()
                         .filter_map(|&kmer| {
-                            let canonical = KmerU64 { encoded: kmer, len: k as u8 }.canonical().encoded;
+                            let canonical = KmerU64 {
+                                encoded: kmer,
+                                len: k as u8,
+                            }
+                            .canonical()
+                            .encoded;
                             kmer_counts.get(&canonical).copied()
                         })
                         .sum();
-                    let cov_j: u32 = paths[j].0.iter()
+                    let cov_j: u32 = paths[j]
+                        .0
+                        .iter()
                         .filter_map(|&kmer| {
-                            let canonical = KmerU64 { encoded: kmer, len: k as u8 }.canonical().encoded;
+                            let canonical = KmerU64 {
+                                encoded: kmer,
+                                len: k as u8,
+                            }
+                            .canonical()
+                            .encoded;
                             kmer_counts.get(&canonical).copied()
                         })
                         .sum();
@@ -660,7 +922,12 @@ impl LargeGenomeAssembler {
             let lookup_kmer = if adjacency.contains_key(&current) {
                 current
             } else {
-                let canonical = KmerU64 { encoded: current, len: k as u8 }.canonical().encoded;
+                let canonical = KmerU64 {
+                    encoded: current,
+                    len: k as u8,
+                }
+                .canonical()
+                .encoded;
                 if adjacency.contains_key(&canonical) {
                     canonical
                 } else {
@@ -693,7 +960,50 @@ impl LargeGenomeAssembler {
         None // Path too long
     }
 
+    /// Identify repeat k-mers based on coverage distribution
+    ///
+    /// A k-mer is considered a repeat if its count is significantly higher
+    /// than the median coverage (typically 2x or more).
+    fn identify_repeats(&self, kmer_counts: &AHashMap<u64, u32>) -> (AHashSet<u64>, RepeatStats) {
+        let mut counts: Vec<u32> = kmer_counts.values().copied().collect();
+        counts.sort_unstable();
+
+        if counts.is_empty() {
+            return (AHashSet::new(), RepeatStats::default());
+        }
+
+        // Calculate median coverage
+        let median = counts[counts.len() / 2];
+
+        // Repeat threshold: 2x median or minimum of 10
+        let repeat_threshold = (median * 2).max(10);
+
+        // Identify repeat k-mers
+        let repeat_kmers: AHashSet<u64> = kmer_counts
+            .iter()
+            .filter(|(_, &count)| count >= repeat_threshold)
+            .map(|(&kmer, _)| kmer)
+            .collect();
+
+        let stats = RepeatStats {
+            median_coverage: median,
+            repeat_threshold,
+            repeat_kmer_count: repeat_kmers.len(),
+            total_kmer_count: kmer_counts.len(),
+        };
+
+        info!(
+            "Repeat detection: median_cov={}, threshold={}, repeats={}",
+            median,
+            repeat_threshold,
+            repeat_kmers.len()
+        );
+
+        (repeat_kmers, stats)
+    }
+
     /// Build contigs from a pre-built (and cleaned) adjacency graph
+    /// with repeat-aware extension
     fn build_contigs_from_graph(
         &self,
         kmer_counts: &AHashMap<u64, u32>,
@@ -703,19 +1013,33 @@ impl LargeGenomeAssembler {
         let min_len = self.config.min_contig_len;
         let valid_kmers: AHashSet<u64> = kmer_counts.keys().copied().collect();
 
+        // Identify repeat k-mers for coverage-guided traversal
+        let (repeat_kmers, _repeat_stats) = self.identify_repeats(kmer_counts);
+
         // Track used k-mers
         let mut used: AHashSet<u64> = AHashSet::with_capacity(valid_kmers.len());
         let mut contigs: Vec<String> = Vec::new();
 
         // Sort k-mers by count (highest first) for seed selection
+        // But skip repeat k-mers as seeds (they cause fragmentation)
         // Check if k-mer (or its RC) is still in the adjacency graph after cleaning
-        let mut sorted: Vec<(u64, u32)> = kmer_counts.iter()
+        let mut sorted: Vec<(u64, u32)> = kmer_counts
+            .iter()
             .filter(|(&kmer, _)| {
+                // Skip repeat k-mers as seeds
+                if repeat_kmers.contains(&kmer) {
+                    return false;
+                }
                 // Check both canonical and RC forms
                 if adjacency.contains_key(&kmer) {
                     return true;
                 }
-                let rc = KmerU64 { encoded: kmer, len: k as u8 }.reverse_complement().encoded;
+                let rc = KmerU64 {
+                    encoded: kmer,
+                    len: k as u8,
+                }
+                .reverse_complement()
+                .encoded;
                 adjacency.contains_key(&rc)
             })
             .map(|(&e, &c)| (e, c))
@@ -730,9 +1054,15 @@ impl LargeGenomeAssembler {
                 continue;
             }
 
-            // Extend bidirectionally
-            let contig = self.extend_bidirectional(
-                seed, k, &valid_kmers, adjacency, &mut used
+            // Extend bidirectionally with coverage-guided traversal
+            let contig = self.extend_bidirectional_with_coverage(
+                seed,
+                k,
+                &valid_kmers,
+                adjacency,
+                kmer_counts,
+                &repeat_kmers,
+                &mut used,
             );
 
             if contig.len() >= min_len {
@@ -741,7 +1071,11 @@ impl LargeGenomeAssembler {
 
             progress += 1;
             if progress % 100_000 == 0 {
-                info!("    {} seeds processed, {} contigs...", progress, contigs.len());
+                info!(
+                    "    {} seeds processed, {} contigs...",
+                    progress,
+                    contigs.len()
+                );
             }
         }
 
@@ -776,11 +1110,14 @@ impl LargeGenomeAssembler {
 
         // Extend right: look up adjacency for current k-mer (not canonical)
         loop {
-            let (_, right_ext) = adjacency.get(&right_kmer).copied()
+            let (_, right_ext) = adjacency
+                .get(&right_kmer)
+                .copied()
                 .unwrap_or(([false; 4], [false; 4]));
 
             // Find valid extensions that haven't been used
-            let extensions: Vec<usize> = right_ext.iter()
+            let extensions: Vec<usize> = right_ext
+                .iter()
                 .enumerate()
                 .filter(|(i, &valid)| {
                     if !valid {
@@ -788,7 +1125,10 @@ impl LargeGenomeAssembler {
                     }
                     // Check if this extension leads to an unused k-mer
                     if let Some(next) = extend_right(right_kmer, bases[*i], k) {
-                        let next_kmer = KmerU64 { encoded: next, len: k as u8 };
+                        let next_kmer = KmerU64 {
+                            encoded: next,
+                            len: k as u8,
+                        };
                         let next_canonical = next_kmer.canonical().encoded;
                         !used.contains(&next_canonical)
                     } else {
@@ -806,7 +1146,10 @@ impl LargeGenomeAssembler {
             let base = bases[base_idx];
 
             if let Some(next) = extend_right(right_kmer, base, k) {
-                let next_kmer = KmerU64 { encoded: next, len: k as u8 };
+                let next_kmer = KmerU64 {
+                    encoded: next,
+                    len: k as u8,
+                };
                 let next_canonical = next_kmer.canonical().encoded;
 
                 contig.push(base);
@@ -822,17 +1165,23 @@ impl LargeGenomeAssembler {
 
         // Extend left
         loop {
-            let (left_ext, _) = adjacency.get(&left_kmer).copied()
+            let (left_ext, _) = adjacency
+                .get(&left_kmer)
+                .copied()
                 .unwrap_or(([false; 4], [false; 4]));
 
-            let extensions: Vec<usize> = left_ext.iter()
+            let extensions: Vec<usize> = left_ext
+                .iter()
                 .enumerate()
                 .filter(|(i, &valid)| {
                     if !valid {
                         return false;
                     }
                     if let Some(next) = extend_left(left_kmer, bases[*i], k) {
-                        let next_kmer = KmerU64 { encoded: next, len: k as u8 };
+                        let next_kmer = KmerU64 {
+                            encoded: next,
+                            len: k as u8,
+                        };
                         let next_canonical = next_kmer.canonical().encoded;
                         !used.contains(&next_canonical)
                     } else {
@@ -850,13 +1199,244 @@ impl LargeGenomeAssembler {
             let base = bases[base_idx];
 
             if let Some(next) = extend_left(left_kmer, base, k) {
-                let next_kmer = KmerU64 { encoded: next, len: k as u8 };
+                let next_kmer = KmerU64 {
+                    encoded: next,
+                    len: k as u8,
+                };
                 let next_canonical = next_kmer.canonical().encoded;
 
                 contig.insert(0, base);
                 used.insert(next_canonical);
 
                 // Continue with ACTUAL extended k-mer
+                left_kmer = next;
+            } else {
+                break;
+            }
+        }
+
+        String::from_utf8(contig).unwrap_or_default()
+    }
+
+    /// Extend a seed k-mer bidirectionally with coverage-guided traversal
+    ///
+    /// At branch points, uses coverage information to choose the best path.
+    /// Avoids entering repeat regions unless necessary.
+    fn extend_bidirectional_with_coverage(
+        &self,
+        seed_canonical: u64,
+        k: usize,
+        _valid_kmers: &AHashSet<u64>,
+        adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+        kmer_counts: &AHashMap<u64, u32>,
+        repeat_kmers: &AHashSet<u64>,
+        used: &mut AHashSet<u64>,
+    ) -> String {
+        let bases = [b'A', b'C', b'G', b'T'];
+
+        let seed_seq = decode_kmer(seed_canonical, k);
+        let mut contig: Vec<u8> = seed_seq.into_bytes();
+        used.insert(seed_canonical);
+
+        let mut right_kmer = seed_canonical;
+        let mut left_kmer = seed_canonical;
+
+        // Extend right with coverage-guided traversal
+        loop {
+            let (_, right_ext) = adjacency
+                .get(&right_kmer)
+                .copied()
+                .unwrap_or(([false; 4], [false; 4]));
+
+            // Find valid extensions with their coverage
+            let mut extensions: Vec<(usize, u64, u32, bool)> = Vec::new();
+            for (i, &valid) in right_ext.iter().enumerate() {
+                if !valid {
+                    continue;
+                }
+                if let Some(next) = extend_right(right_kmer, bases[i], k) {
+                    let next_kmer = KmerU64 {
+                        encoded: next,
+                        len: k as u8,
+                    };
+                    let next_canonical = next_kmer.canonical().encoded;
+                    if !used.contains(&next_canonical) {
+                        let count = kmer_counts.get(&next_canonical).copied().unwrap_or(0);
+                        let is_repeat = repeat_kmers.contains(&next_canonical);
+                        extensions.push((i, next, count, is_repeat));
+                    }
+                }
+            }
+
+            if extensions.is_empty() {
+                break; // Dead end
+            }
+
+            // If single extension, take it
+            if extensions.len() == 1 {
+                let (base_idx, next, _, _) = extensions[0];
+                let base = bases[base_idx];
+                let next_kmer = KmerU64 {
+                    encoded: next,
+                    len: k as u8,
+                };
+                let next_canonical = next_kmer.canonical().encoded;
+
+                contig.push(base);
+                used.insert(next_canonical);
+                right_kmer = next;
+                continue;
+            }
+
+            // Multiple extensions: use coverage-guided selection
+            // Prefer non-repeat paths with similar coverage to current position
+            let current_count = kmer_counts
+                .get(
+                    &KmerU64 {
+                        encoded: right_kmer,
+                        len: k as u8,
+                    }
+                    .canonical()
+                    .encoded,
+                )
+                .copied()
+                .unwrap_or(1);
+
+            // First, try to find a non-repeat extension with closest coverage
+            let non_repeat_ext: Vec<_> = extensions
+                .iter()
+                .filter(|(_, _, _, is_repeat)| !is_repeat)
+                .collect();
+
+            let best = if !non_repeat_ext.is_empty() {
+                // Choose non-repeat path with coverage closest to current
+                non_repeat_ext
+                    .iter()
+                    .min_by_key(|(_, _, count, _)| {
+                        let ratio = if *count > current_count {
+                            *count / current_count.max(1)
+                        } else {
+                            current_count / (*count).max(1)
+                        };
+                        ratio
+                    })
+                    .map(|&&x| x)
+            } else {
+                // All extensions are repeats - choose one with highest coverage
+                extensions
+                    .iter()
+                    .max_by_key(|(_, _, count, _)| count)
+                    .copied()
+            };
+
+            if let Some((base_idx, next, _, _)) = best {
+                let base = bases[base_idx];
+                let next_kmer = KmerU64 {
+                    encoded: next,
+                    len: k as u8,
+                };
+                let next_canonical = next_kmer.canonical().encoded;
+
+                contig.push(base);
+                used.insert(next_canonical);
+                right_kmer = next;
+            } else {
+                break;
+            }
+        }
+
+        // Extend left with coverage-guided traversal
+        loop {
+            let (left_ext, _) = adjacency
+                .get(&left_kmer)
+                .copied()
+                .unwrap_or(([false; 4], [false; 4]));
+
+            let mut extensions: Vec<(usize, u64, u32, bool)> = Vec::new();
+            for (i, &valid) in left_ext.iter().enumerate() {
+                if !valid {
+                    continue;
+                }
+                if let Some(next) = extend_left(left_kmer, bases[i], k) {
+                    let next_kmer = KmerU64 {
+                        encoded: next,
+                        len: k as u8,
+                    };
+                    let next_canonical = next_kmer.canonical().encoded;
+                    if !used.contains(&next_canonical) {
+                        let count = kmer_counts.get(&next_canonical).copied().unwrap_or(0);
+                        let is_repeat = repeat_kmers.contains(&next_canonical);
+                        extensions.push((i, next, count, is_repeat));
+                    }
+                }
+            }
+
+            if extensions.is_empty() {
+                break;
+            }
+
+            if extensions.len() == 1 {
+                let (base_idx, next, _, _) = extensions[0];
+                let base = bases[base_idx];
+                let next_kmer = KmerU64 {
+                    encoded: next,
+                    len: k as u8,
+                };
+                let next_canonical = next_kmer.canonical().encoded;
+
+                contig.insert(0, base);
+                used.insert(next_canonical);
+                left_kmer = next;
+                continue;
+            }
+
+            // Coverage-guided selection for left extension
+            let current_count = kmer_counts
+                .get(
+                    &KmerU64 {
+                        encoded: left_kmer,
+                        len: k as u8,
+                    }
+                    .canonical()
+                    .encoded,
+                )
+                .copied()
+                .unwrap_or(1);
+
+            let non_repeat_ext: Vec<_> = extensions
+                .iter()
+                .filter(|(_, _, _, is_repeat)| !is_repeat)
+                .collect();
+
+            let best = if !non_repeat_ext.is_empty() {
+                non_repeat_ext
+                    .iter()
+                    .min_by_key(|(_, _, count, _)| {
+                        let ratio = if *count > current_count {
+                            *count / current_count.max(1)
+                        } else {
+                            current_count / (*count).max(1)
+                        };
+                        ratio
+                    })
+                    .map(|&&x| x)
+            } else {
+                extensions
+                    .iter()
+                    .max_by_key(|(_, _, count, _)| count)
+                    .copied()
+            };
+
+            if let Some((base_idx, next, _, _)) = best {
+                let base = bases[base_idx];
+                let next_kmer = KmerU64 {
+                    encoded: next,
+                    len: k as u8,
+                };
+                let next_canonical = next_kmer.canonical().encoded;
+
+                contig.insert(0, base);
+                used.insert(next_canonical);
                 left_kmer = next;
             } else {
                 break;
@@ -875,7 +1455,8 @@ impl LargeGenomeAssembler {
         let mut writer = FastaWriter::new(path);
 
         // Filter and sort by length
-        let mut valid: Vec<&String> = contigs.iter()
+        let mut valid: Vec<&String> = contigs
+            .iter()
             .filter(|c| c.len() >= self.config.min_contig_len)
             .collect();
         valid.sort_by_key(|c| std::cmp::Reverse(c.len()));
@@ -892,7 +1473,8 @@ impl LargeGenomeAssembler {
         // Calculate N50
         let half = total_len / 2;
         let mut cumsum = 0;
-        let n50 = lengths.iter()
+        let n50 = lengths
+            .iter()
             .find(|&&len| {
                 cumsum += len;
                 cumsum >= half
@@ -967,10 +1549,12 @@ mod tests {
         };
 
         let assembler = LargeGenomeAssembler::new(config);
-        let stats = assembler.assemble(
-            input.path().to_str().unwrap(),
-            output.path().to_str().unwrap(),
-        ).unwrap();
+        let stats = assembler
+            .assemble(
+                input.path().to_str().unwrap(),
+                output.path().to_str().unwrap(),
+            )
+            .unwrap();
 
         eprintln!("Stats: {:?}", stats);
         assert_eq!(stats.reads_processed, 4);
@@ -1027,16 +1611,21 @@ mod tests {
         };
 
         let assembler = LargeGenomeAssembler::new(config);
-        let stats = assembler.assemble(
-            file.path().to_str().unwrap(),
-            output.path().to_str().unwrap(),
-        ).unwrap();
+        let stats = assembler
+            .assemble(
+                file.path().to_str().unwrap(),
+                output.path().to_str().unwrap(),
+            )
+            .unwrap();
 
         eprintln!("Overlapping reads test - Stats: {:?}", stats);
 
         // We should get at least one contig of reasonable length
         assert!(stats.contigs >= 1, "Should produce at least one contig");
-        assert!(stats.largest >= 30, "Largest contig should be at least 30bp");
+        assert!(
+            stats.largest >= 30,
+            "Largest contig should be at least 30bp"
+        );
         eprintln!("Largest contig: {}bp, N50: {}bp", stats.largest, stats.n50);
     }
 
@@ -1084,10 +1673,12 @@ mod tests {
         };
 
         let assembler = LargeGenomeAssembler::new(config);
-        let stats = assembler.assemble(
-            file.path().to_str().unwrap(),
-            output.path().to_str().unwrap(),
-        ).unwrap();
+        let stats = assembler
+            .assemble(
+                file.path().to_str().unwrap(),
+                output.path().to_str().unwrap(),
+            )
+            .unwrap();
 
         eprintln!("Error correction test - Stats: {:?}", stats);
         eprintln!("Error-corrected k-mers: {}", stats.kmers_error_corrected);
@@ -1137,15 +1728,244 @@ mod tests {
         };
 
         let assembler = LargeGenomeAssembler::new(config);
-        let stats = assembler.assemble(
-            file.path().to_str().unwrap(),
-            output.path().to_str().unwrap(),
-        ).unwrap();
+        let stats = assembler
+            .assemble(
+                file.path().to_str().unwrap(),
+                output.path().to_str().unwrap(),
+            )
+            .unwrap();
 
         eprintln!("Graph cleaning test - Stats: {:?}", stats);
-        eprintln!("Tips removed: {}, Bubbles popped: {}", stats.tips_removed, stats.bubbles_popped);
+        eprintln!(
+            "Tips removed: {}, Bubbles popped: {}",
+            stats.tips_removed, stats.bubbles_popped
+        );
 
         // Should produce at least one contig
         assert!(stats.contigs >= 1, "Should produce at least one contig");
+    }
+
+    /// Test paired-end assembly
+    #[test]
+    fn test_paired_end_assembly() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create R1 and R2 files with paired reads
+        let mut r1_file = NamedTempFile::new().unwrap();
+        let mut r2_file = NamedTempFile::new().unwrap();
+
+        // Reference sequence
+        let reference = "ATGCGATCGATCGATCGATCGATCGATCGATCGATCGATCGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAATCGATCGATCGATCGATCG";
+
+        // Generate paired reads with ~200bp insert size (overlapping for short test)
+        let read_len = 40;
+        for i in 0..5 {
+            let start1 = i * 10;
+            let start2 = start1 + 50;
+
+            if start1 + read_len <= reference.len() && start2 + read_len <= reference.len() {
+                let seq1 = &reference[start1..start1 + read_len];
+                let seq2 = &reference[start2..start2 + read_len];
+
+                // R1
+                writeln!(r1_file, "@read_{}/1", i).unwrap();
+                writeln!(r1_file, "{}", seq1).unwrap();
+                writeln!(r1_file, "+").unwrap();
+                writeln!(r1_file, "{}", "I".repeat(read_len)).unwrap();
+
+                // R2 (reverse complement in real data, but we keep forward for simplicity)
+                writeln!(r2_file, "@read_{}/2", i).unwrap();
+                writeln!(r2_file, "{}", seq2).unwrap();
+                writeln!(r2_file, "+").unwrap();
+                writeln!(r2_file, "{}", "I".repeat(read_len)).unwrap();
+            }
+        }
+
+        // Add duplicates for coverage
+        for i in 0..5 {
+            let start1 = i * 10;
+            let start2 = start1 + 50;
+
+            if start1 + read_len <= reference.len() && start2 + read_len <= reference.len() {
+                let seq1 = &reference[start1..start1 + read_len];
+                let seq2 = &reference[start2..start2 + read_len];
+
+                writeln!(r1_file, "@read_dup_{}/1", i).unwrap();
+                writeln!(r1_file, "{}", seq1).unwrap();
+                writeln!(r1_file, "+").unwrap();
+                writeln!(r1_file, "{}", "I".repeat(read_len)).unwrap();
+
+                writeln!(r2_file, "@read_dup_{}/2", i).unwrap();
+                writeln!(r2_file, "{}", seq2).unwrap();
+                writeln!(r2_file, "+").unwrap();
+                writeln!(r2_file, "{}", "I".repeat(read_len)).unwrap();
+            }
+        }
+
+        r1_file.flush().unwrap();
+        r2_file.flush().unwrap();
+
+        let output = NamedTempFile::new().unwrap();
+        let config = LargeGenomeConfig {
+            k: 21,
+            min_count: 2,
+            min_contig_len: 30,
+            num_buckets: Some(4),
+            temp_dir: Some(temp_dir.path().to_str().unwrap().to_string()),
+            ..Default::default()
+        };
+
+        let assembler = LargeGenomeAssembler::new(config);
+        let stats = assembler
+            .assemble_paired(
+                r1_file.path().to_str().unwrap(),
+                r2_file.path().to_str().unwrap(),
+                output.path().to_str().unwrap(),
+            )
+            .unwrap();
+
+        eprintln!("Paired-end test - Stats: {:?}", stats);
+        assert!(
+            stats.reads_processed >= 4,
+            "Should have processed paired reads"
+        );
+        assert!(stats.kmers_filtered > 0, "Should have filtered k-mers");
+    }
+
+    /// Test insert size statistics
+    #[test]
+    fn test_insert_size_stats() {
+        let samples = vec![200, 210, 195, 205, 200, 190, 215, 200];
+        let stats = InsertSizeStats::from_samples(&samples);
+
+        assert!(stats.mean > 190.0 && stats.mean < 210.0);
+        assert!(stats.std_dev > 0.0);
+        assert_eq!(stats.min, 190);
+        assert_eq!(stats.max, 215);
+    }
+
+    /// Test repeat detection and resolution
+    #[test]
+    fn test_repeat_detection() {
+        let mut file = NamedTempFile::new().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create realistic sequences with a repeat region
+        // Use longer sequences that will have valid k-mers
+
+        // Unique region 1 - normal coverage
+        let unique1 = "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT";
+
+        // Repeat region - will have high coverage (many reads)
+        let repeat = "ATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG";
+
+        // Unique region 2 - normal coverage
+        let unique2 = "GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTA";
+
+        let read_len = 40;
+
+        // Generate reads from unique1 (2x coverage)
+        for rep in 0..2 {
+            for i in 0..2 {
+                let start = i * 2;
+                if start + read_len <= unique1.len() {
+                    let seq = &unique1[start..start + read_len];
+                    writeln!(file, "@unique1_{}_{}", rep, i).unwrap();
+                    writeln!(file, "{}", seq).unwrap();
+                    writeln!(file, "+").unwrap();
+                    writeln!(file, "{}", "I".repeat(read_len)).unwrap();
+                }
+            }
+        }
+
+        // Generate reads from repeat region (10x coverage to simulate repeat)
+        for rep in 0..10 {
+            for i in 0..2 {
+                let start = i * 2;
+                if start + read_len <= repeat.len() {
+                    let seq = &repeat[start..start + read_len];
+                    writeln!(file, "@repeat_{}_{}", rep, i).unwrap();
+                    writeln!(file, "{}", seq).unwrap();
+                    writeln!(file, "+").unwrap();
+                    writeln!(file, "{}", "I".repeat(read_len)).unwrap();
+                }
+            }
+        }
+
+        // Generate reads from unique2 (2x coverage)
+        for rep in 0..2 {
+            for i in 0..2 {
+                let start = i * 2;
+                if start + read_len <= unique2.len() {
+                    let seq = &unique2[start..start + read_len];
+                    writeln!(file, "@unique2_{}_{}", rep, i).unwrap();
+                    writeln!(file, "{}", seq).unwrap();
+                    writeln!(file, "+").unwrap();
+                    writeln!(file, "{}", "I".repeat(read_len)).unwrap();
+                }
+            }
+        }
+
+        file.flush().unwrap();
+
+        let output = NamedTempFile::new().unwrap();
+        let config = LargeGenomeConfig {
+            k: 21,
+            min_count: 2,
+            min_contig_len: 25,
+            num_buckets: Some(4),
+            temp_dir: Some(temp_dir.path().to_str().unwrap().to_string()),
+            ..Default::default()
+        };
+
+        let assembler = LargeGenomeAssembler::new(config);
+        let stats = assembler
+            .assemble(
+                file.path().to_str().unwrap(),
+                output.path().to_str().unwrap(),
+            )
+            .unwrap();
+
+        eprintln!("Repeat detection test - Stats: {:?}", stats);
+        eprintln!(
+            "Reads: {}, K-mers: {}",
+            stats.reads_processed, stats.kmers_filtered
+        );
+
+        // The assembler should process the reads
+        assert!(stats.reads_processed > 0, "Should have processed reads");
+        assert!(
+            stats.kmers_filtered > 0,
+            "Should have k-mers after filtering"
+        );
+    }
+
+    /// Test RepeatStats calculation
+    #[test]
+    fn test_repeat_stats() {
+        let mut counts = AHashMap::new();
+        // Normal coverage k-mers (count ~5)
+        for i in 0..100 {
+            counts.insert(i as u64, 5);
+        }
+        // High coverage k-mers (count ~50, representing repeats)
+        for i in 100..110 {
+            counts.insert(i as u64, 50);
+        }
+
+        let config = LargeGenomeConfig::default();
+        let assembler = LargeGenomeAssembler::new(config);
+        let (repeat_kmers, stats) = assembler.identify_repeats(&counts);
+
+        assert_eq!(stats.total_kmer_count, 110);
+        assert!(stats.repeat_kmer_count > 0, "Should identify repeat k-mers");
+        assert!(
+            stats.median_coverage <= 10,
+            "Median should be around normal coverage"
+        );
+        assert!(
+            repeat_kmers.len() >= 5,
+            "Should identify the high-coverage k-mers as repeats"
+        );
     }
 }

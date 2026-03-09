@@ -30,7 +30,7 @@ pub enum Commands {
         /// Number of threads to use
         #[arg(long, default_value_t = num_cpus::get())]
         threads: usize,
-        
+
         /// Enable streaming mode for large datasets
         #[arg(long)]
         streaming: bool,
@@ -174,7 +174,7 @@ pub enum Commands {
         #[arg(long)]
         polish_reads: Option<String>,
     },
-    
+
     /// Calculate statistics for assembly output
     Stats {
         /// Input file (FASTA or GFA)
@@ -184,7 +184,7 @@ pub enum Commands {
         /// Output format (json or tsv)
         #[arg(long, default_value = "json")]
         format: String,
-        
+
         /// Enable graph stats (branchiness, bubbles)
         #[arg(long)]
         graph: bool,
@@ -204,162 +204,237 @@ pub enum Commands {
         #[arg(long, default_value_t = num_cpus::get())]
         threads: usize,
     },
-    
+
     /// Reconstruct isoforms from GFA graph and expression data
     Isoform {
         /// Input GFA file containing contigs and overlaps
         #[arg(short, long)]
         input: String,
-        
+
         /// Expression data file (TSV format with contig_id, coverage)
         #[arg(short, long)]
         expression: String,
-        
+
         /// Output prefix for generated files
         #[arg(short, long)]
         output: String,
-        
+
         /// Minimum confidence score for transcript paths (0.0-1.0)
         #[arg(long, default_value_t = 0.25)]
         min_confidence: f64,
-        
+
         /// Maximum depth for graph traversal
         #[arg(long, default_value_t = 50)]
         max_depth: usize,
-        
+
         /// Output format options: fasta,gfa,gtf (comma-separated)
         #[arg(long, default_value = "fasta,gfa")]
         formats: String,
-        
+
         /// Number of threads to use
         #[arg(long, default_value_t = num_cpus::get())]
         threads: usize,
-        
+
         /// Output transcript statistics
         #[arg(long)]
         stats: bool,
-        
+
         /// Enable similarity filtering to remove redundant transcripts
         #[arg(long)]
         filter_similar: bool,
-        
+
         /// Similarity threshold for filtering (0.0-1.0)
         #[arg(long, default_value_t = 0.8)]
         similarity_threshold: f64,
-        
+
         /// Merge similar transcripts instead of filtering them
         #[arg(long)]
         merge_similar: bool,
     },
-    
+
     /// Perform differential expression analysis on transcript counts matrix
     DiffExp {
         /// Input counts matrix file (e.g., output_isoform.counts.matrix)
         #[arg(short, long)]
         matrix: String,
-        
+
         /// Comma-separated list of sample names for group A
         #[arg(long)]
         group_a: String,
-        
+
         /// Comma-separated list of sample names for group B
         #[arg(long)]
         group_b: String,
-        
+
         /// Output file for differential expression results
         #[arg(short, long)]
         output: String,
-        
+
         /// P-value threshold for significance (default: 0.05)
         #[arg(long, default_value_t = 0.05)]
         p_value: f64,
-        
+
         /// Log2 fold-change threshold for significance (default: 1.0)
         #[arg(long, default_value_t = 1.0)]
         fold_change: f64,
     },
-    
+
     /// Compare predicted and truth GTF files to evaluate transcript accuracy
     GtfCompare {
         /// Truth/reference GTF file
         #[arg(short, long)]
         truth: String,
-        
+
         /// Predicted GTF file
         #[arg(short, long)]
         predicted: String,
-        
+
         /// Output file for comparison metrics (optional)
         #[arg(short, long)]
         output: Option<String>,
     },
-    
+
     /// Evaluate assembly results against ground truth
     Eval {
         /// Truth/reference GTF file
         #[arg(long)]
         truth: String,
-        
+
         /// Predicted GTF file
         #[arg(long)]
         pred: String,
-        
+
         /// Output file for evaluation metrics (optional)
         #[arg(long)]
         output: Option<String>,
     },
-    
+
     /// Visualize TPM matrix with PCA plot and heatmap
     Visualize {
         /// Path to TPM matrix
         #[arg(long)]
         matrix: String,
-        
+
         /// Output PCA plot file (SVG or PNG)
         #[arg(long)]
         output: String,
-        
+
         /// Output heatmap file (PNG)
         #[arg(long)]
         heatmap: Option<String>,
-        
+
         /// Output PCA file (PNG)
         #[arg(long)]
         pca: Option<String>,
-        
+
         /// Number of components for PCA (default: 2)
         #[arg(long, default_value_t = 2)]
         components: usize,
     },
-    
+
     /// Traverse paths in a GFA file and export sequences
     Traverse {
         /// Input GFA file with path definitions
         #[arg(short, long)]
         input: String,
-        
+
         /// Segments sequence file (TSV format: segment_id\tsequence)
         #[arg(short, long)]
         segments: String,
-        
+
         /// Output file prefix
         #[arg(short, long)]
         output: String,
-        
+
         /// Export formats (comma-separated, e.g., "fasta,dot,json")
         #[arg(long, default_value = "fasta")]
         formats: String,
-        
+
         /// Include edge information in path
         #[arg(long, default_value_t = false)]
         include_edges: bool,
-        
+
         /// Generate DOT graph visualization
         #[arg(long, default_value_t = false)]
         visualize: bool,
-        
+
         /// Export path metadata
         #[arg(long, default_value_t = false)]
         metadata: bool,
+    },
+
+    /// Assemble large genomes (100+ Gb) using disk-based k-mer counting
+    AssembleLarge {
+        /// Input FASTQ file(s) - use comma-separated paths for paired-end
+        #[arg(short, long)]
+        input: String,
+
+        /// Second input FASTQ for paired-end reads (optional)
+        #[arg(long)]
+        input2: Option<String>,
+
+        /// Output FASTA file
+        #[arg(short, long)]
+        output: String,
+
+        /// K-mer size (recommend 31 for large genomes)
+        #[arg(short, long, default_value_t = 31)]
+        kmer: usize,
+
+        /// Minimum k-mer count (filters sequencing errors)
+        #[arg(short = 'c', long, default_value_t = 2)]
+        min_count: u32,
+
+        /// Minimum contig length to output
+        #[arg(long, default_value_t = 200)]
+        min_contig: usize,
+
+        /// Number of threads
+        #[arg(short, long, default_value_t = num_cpus::get())]
+        threads: usize,
+
+        /// Temporary directory for disk buckets
+        #[arg(long)]
+        temp_dir: Option<String>,
+
+        /// Number of disk buckets (default: auto based on k-mer size)
+        #[arg(long)]
+        num_buckets: Option<usize>,
+
+        /// Maximum tip length to remove during graph cleaning
+        #[arg(long, default_value_t = 100)]
+        max_tip_len: usize,
+
+        /// Maximum bubble length to pop during graph cleaning
+        #[arg(long, default_value_t = 50)]
+        max_bubble_len: usize,
+
+        /// Enable scaffolding using paired-end information
+        #[arg(long)]
+        scaffold: bool,
+
+        /// Minimum number of read pairs to support a scaffold link
+        #[arg(long, default_value_t = 3)]
+        min_scaffold_links: usize,
+
+        /// Enable contig polishing
+        #[arg(long)]
+        polish: bool,
+
+        /// Number of polishing iterations
+        #[arg(long, default_value_t = 1)]
+        polish_iterations: usize,
+
+        /// Long reads file (FASTQ) for hybrid assembly
+        #[arg(long)]
+        long_reads: Option<String>,
+
+        /// Minimum long read length to use
+        #[arg(long, default_value_t = 1000)]
+        min_long_read_len: usize,
+
+        /// Enable LZ4 compression for disk buckets (faster I/O)
+        #[arg(long)]
+        compress_buckets: bool,
     },
 }

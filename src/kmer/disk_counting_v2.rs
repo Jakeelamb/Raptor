@@ -90,6 +90,16 @@ impl KmerBucket {
         })
     }
 
+    fn open_append(path: PathBuf, buffer_size: usize) -> std::io::Result<Self> {
+        let existing_count = fs::metadata(&path).map(|m| m.len() / 8).unwrap_or(0);
+        let file = fs::OpenOptions::new().append(true).open(&path)?;
+        Ok(Self {
+            path,
+            writer: BufWriter::with_capacity(buffer_size, file),
+            count: existing_count,
+        })
+    }
+
     fn add(&mut self, encoded: u64) -> std::io::Result<()> {
         self.writer.write_all(&encoded.to_le_bytes())?;
         self.count += 1;
@@ -123,7 +133,8 @@ impl DiskKmerCounterV2 {
         })
     }
 
-    /// Pass 1: Distribute encoded k-mers to disk buckets
+    /// Pass 1: Distribute encoded k-mers to disk buckets.
+    /// Can be called multiple times — appends to existing bucket files.
     pub fn distribute<I, S>(&mut self, sequences: I) -> std::io::Result<()>
     where
         I: Iterator<Item = S>,
@@ -133,15 +144,20 @@ impl DiskKmerCounterV2 {
         let num_buckets = self.config.num_buckets;
         let mask = (num_buckets - 1) as u64;
 
-        // Create buckets
+        // Create buckets on first call, append on subsequent calls
+        let first_call = self.bucket_paths.is_empty();
         let mut buckets: Vec<KmerBucket> = (0..num_buckets)
             .map(|i| {
                 let path = self.config.temp_dir.join(format!("bucket_{:05}.bin", i));
-                KmerBucket::new(path, self.config.write_buffer_size)
+                if first_call {
+                    KmerBucket::new(path, self.config.write_buffer_size)
+                } else {
+                    KmerBucket::open_append(path, self.config.write_buffer_size)
+                }
             })
             .collect::<std::io::Result<Vec<_>>>()?;
 
-        let mut total = 0u64;
+        let mut batch_total = 0u64;
 
         for seq in sequences {
             let bytes = seq.as_ref();
@@ -159,12 +175,12 @@ impl DiskKmerCounterV2 {
                     // Bucket by lower bits of encoded value
                     let bucket_id = (encoded & mask) as usize;
                     buckets[bucket_id].add(encoded)?;
-                    total += 1;
+                    batch_total += 1;
                 }
             }
         }
 
-        // Finalize buckets
+        // Finalize buckets — accumulate counts
         let results: Vec<(PathBuf, u64)> = buckets
             .into_iter()
             .map(|b| b.finalize())
@@ -172,7 +188,7 @@ impl DiskKmerCounterV2 {
 
         self.bucket_paths = results.iter().map(|(p, _)| p.clone()).collect();
         self.bucket_counts = results.iter().map(|(_, c)| *c).collect();
-        self.total_kmers = total;
+        self.total_kmers += batch_total;
 
         Ok(())
     }
@@ -182,7 +198,8 @@ impl DiskKmerCounterV2 {
         let min_count = self.config.min_count;
 
         // Process buckets in parallel
-        let bucket_results: Vec<AHashMap<u64, u32>> = self.bucket_paths
+        let bucket_results: Vec<AHashMap<u64, u32>> = self
+            .bucket_paths
             .par_iter()
             .enumerate()
             .filter(|(i, _)| self.bucket_counts[*i] > 0)
@@ -250,7 +267,8 @@ impl DiskKmerCounterV2 {
 
     /// Get statistics
     pub fn stats(&self) -> (u64, usize, u64) {
-        let disk_bytes: u64 = self.bucket_paths
+        let disk_bytes: u64 = self
+            .bucket_paths
             .iter()
             .filter_map(|p| fs::metadata(p).ok())
             .map(|m| m.len())
@@ -276,7 +294,11 @@ impl Drop for DiskKmerCounterV2 {
 
 /// Decode a u64-encoded k-mer back to a string
 pub fn decode_kmer(encoded: u64, k: usize) -> String {
-    KmerU64 { encoded, len: k as u8 }.decode()
+    KmerU64 {
+        encoded,
+        len: k as u8,
+    }
+    .decode()
 }
 
 /// Get the suffix of an encoded k-mer (last k-1 bases)
@@ -319,7 +341,10 @@ pub fn extend_left(encoded: u64, base: u8, k: usize) -> Option<u64> {
 
 /// Get canonical form of encoded k-mer
 pub fn canonical(encoded: u64, k: usize) -> u64 {
-    let kmer = KmerU64 { encoded, len: k as u8 };
+    let kmer = KmerU64 {
+        encoded,
+        len: k as u8,
+    };
     kmer.canonical().encoded
 }
 
@@ -339,7 +364,10 @@ mod tests {
     fn test_extend_right() {
         let kmer = KmerU64::from_str("ACGT").unwrap();
         let extended = extend_right(kmer.encoded, b'A', 4).unwrap();
-        let result = KmerU64 { encoded: extended, len: 4 };
+        let result = KmerU64 {
+            encoded: extended,
+            len: 4,
+        };
         assert_eq!(result.decode(), "CGTA");
     }
 
@@ -361,7 +389,9 @@ mod tests {
             "TGCATGCATGCATGCA",
         ];
 
-        counter.distribute(seqs.iter().map(|s| s.as_bytes())).unwrap();
+        counter
+            .distribute(seqs.iter().map(|s| s.as_bytes()))
+            .unwrap();
 
         let (total, buckets, _) = counter.stats();
         assert!(total > 0);
