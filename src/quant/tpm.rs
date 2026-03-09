@@ -3,9 +3,15 @@ use crate::io::fastq::FastqRecord;
 
 /// Naïve count of exact matches to transcript sequence
 pub fn count_reads(transcripts: &[Transcript], reads: &[FastqRecord]) -> Vec<usize> {
-    transcripts.iter().map(|t| {
-        reads.iter().filter(|r| t.sequence.contains(&r.sequence)).count()
-    }).collect()
+    transcripts
+        .iter()
+        .map(|t| {
+            reads
+                .iter()
+                .filter(|r| t.sequence.contains(&r.sequence))
+                .count()
+        })
+        .collect()
 }
 
 /// Compute TPM values from raw counts and transcript lengths
@@ -17,7 +23,10 @@ pub fn compute_tpm(counts: &[usize], transcripts: &[Transcript]) -> Vec<f64> {
     }
 
     let sum: f64 = norm_counts.iter().sum();
-    norm_counts.into_iter().map(|x| (x / sum) * 1_000_000.0).collect()
+    norm_counts
+        .into_iter()
+        .map(|x| (x / sum) * 1_000_000.0)
+        .collect()
 }
 
 /// Write TPM output table
@@ -47,4 +56,4 @@ pub fn filter_by_tpm(
     }
 
     (kept_tx, kept_tpms)
-} 
+}

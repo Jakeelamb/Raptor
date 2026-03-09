@@ -15,7 +15,7 @@ pub fn export_paths_to_fasta(
 
     for (id, sequence) in isoforms {
         writeln!(writer, ">{}", id)?;
-        
+
         // Write sequence in lines of 80 characters
         for chunk in sequence.as_bytes().chunks(80) {
             if let Ok(line) = std::str::from_utf8(chunk) {
@@ -28,10 +28,7 @@ pub fn export_paths_to_fasta(
 }
 
 /// Export path metadata to a TSV file for analysis
-pub fn export_path_metadata(
-    metadata: &[PathMetadata],
-    output_path: &str,
-) -> io::Result<()> {
+pub fn export_path_metadata(metadata: &[PathMetadata], output_path: &str) -> io::Result<()> {
     let path = Path::new(output_path);
     let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
@@ -47,10 +44,7 @@ pub fn export_path_metadata(
         writeln!(
             writer,
             "{}\t{}\t{}\t{}",
-            path.id,
-            path.segment_count,
-            path.unique_segment_count,
-            path.has_inversions
+            path.id, path.segment_count, path.unique_segment_count, path.has_inversions
         )?;
     }
 
@@ -71,7 +65,7 @@ pub fn export_odgi_paths(
             .iter()
             .map(|(seg, dir)| format!("{}{}", seg, dir))
             .collect();
-        
+
         writeln!(writer, "P\t{}\t{}\t*", id, segment_str.join(","))?;
     }
 
@@ -89,35 +83,27 @@ pub fn export_dot_graph(
 
     writeln!(writer, "digraph G {{")?;
     writeln!(writer, "  node [shape=box];")?;
-    
+
     // Create subgraphs for each path
     for (id, segments) in path_map {
         writeln!(writer, "  subgraph cluster_{} {{", id.replace("-", "_"))?;
         writeln!(writer, "    label=\"{}\";", id)?;
-        
+
         // Add path nodes
         for (i, (seg, dir)) in segments.iter().enumerate() {
             let node_id = format!("{}_{}", id.replace("-", "_"), i);
-            writeln!(
-                writer,
-                "    {} [label=\"{}{}\"];",
-                node_id, seg, dir
-            )?;
-            
+            writeln!(writer, "    {} [label=\"{}{}\"];", node_id, seg, dir)?;
+
             // Add edges between consecutive nodes
             if i > 0 {
-                let prev_node = format!("{}_{}", id.replace("-", "_"), i-1);
-                writeln!(
-                    writer,
-                    "    {} -> {};",
-                    prev_node, node_id
-                )?;
+                let prev_node = format!("{}_{}", id.replace("-", "_"), i - 1);
+                writeln!(writer, "    {} -> {};", prev_node, node_id)?;
             }
         }
-        
+
         writeln!(writer, "  }}")?;
     }
-    
+
     writeln!(writer, "}}")?;
     Ok(())
 }
@@ -133,22 +119,22 @@ mod tests {
         let mut isoforms = HashMap::new();
         isoforms.insert("iso1".to_string(), "ACGTACGTACGT".to_string());
         isoforms.insert("iso2".to_string(), "TTTTGGGGCCCCAAAA".to_string());
-        
+
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_str().unwrap();
-        
+
         export_paths_to_fasta(&isoforms, path).unwrap();
-        
+
         let mut file = File::open(path).unwrap();
         let mut contents = String::new();
         file.read_to_string(&mut contents).unwrap();
-        
+
         assert!(contents.contains(">iso1"));
         assert!(contents.contains("ACGTACGTACGT"));
         assert!(contents.contains(">iso2"));
         assert!(contents.contains("TTTTGGGGCCCCAAAA"));
     }
-    
+
     #[test]
     fn test_export_path_metadata() {
         let metadata = vec![
@@ -165,18 +151,18 @@ mod tests {
                 has_inversions: true,
             },
         ];
-        
+
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_str().unwrap();
-        
+
         export_path_metadata(&metadata, path).unwrap();
-        
+
         let mut file = File::open(path).unwrap();
         let mut contents = String::new();
         file.read_to_string(&mut contents).unwrap();
-        
+
         assert!(contents.contains("path_id\tsegment_count\tunique_segment_count\thas_inversions"));
         assert!(contents.contains("path1\t3\t3\tfalse"));
         assert!(contents.contains("path2\t2\t2\ttrue"));
     }
-} 
+}

@@ -10,8 +10,8 @@
 //! 2. Pass 2: Only count k-mers that appear in the Bloom filter twice
 //!            (singleton k-mers from errors will only appear once)
 
-use std::hash::{Hash, Hasher};
 use ahash::AHasher;
+use std::hash::{Hash, Hasher};
 
 /// A space-efficient probabilistic data structure for membership testing.
 ///
@@ -46,8 +46,8 @@ impl BloomFilter {
         let num_bits = (-(expected_items as f64) * fp_rate.ln() / ln2_sq).ceil() as usize;
 
         // Optimal number of hash functions: k = (m/n) * ln(2)
-        let num_hashes = ((num_bits as f64 / expected_items as f64) * std::f64::consts::LN_2)
-            .ceil() as usize;
+        let num_hashes =
+            ((num_bits as f64 / expected_items as f64) * std::f64::consts::LN_2).ceil() as usize;
 
         Self::new(num_bits, num_hashes)
     }
@@ -179,8 +179,14 @@ impl BloomFilter {
     ///
     /// Both filters must have the same size.
     pub fn merge(&mut self, other: &BloomFilter) {
-        assert_eq!(self.num_bits, other.num_bits, "Bloom filters must have same size");
-        assert_eq!(self.num_hashes, other.num_hashes, "Bloom filters must have same num_hashes");
+        assert_eq!(
+            self.num_bits, other.num_bits,
+            "Bloom filters must have same size"
+        );
+        assert_eq!(
+            self.num_hashes, other.num_hashes,
+            "Bloom filters must have same num_hashes"
+        );
 
         for (a, b) in self.bits.iter_mut().zip(other.bits.iter()) {
             *a |= *b;
@@ -330,7 +336,11 @@ mod tests {
         }
 
         // With 1% FP rate, we expect roughly 10 false positives out of 1000
-        assert!(false_positives < 50, "Too many false positives: {}", false_positives);
+        assert!(
+            false_positives < 50,
+            "Too many false positives: {}",
+            false_positives
+        );
     }
 
     #[test]

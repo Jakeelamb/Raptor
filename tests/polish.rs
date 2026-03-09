@@ -71,4 +71,4 @@ fn test_polish_multiple_errors() {
     // Multiple errors should be corrected
     let result = polish_contig("ACTTACTTACTT", &reads, 5);
     assert_eq!(result, "ACGTACGTACGT");
-} 
+}

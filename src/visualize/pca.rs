@@ -7,7 +7,7 @@ pub fn compute_pca(matrix: &Array2<f64>, n_components: usize) -> Array2<f64> {
     // Center the data
     let n_samples = matrix.shape()[0];
     let n_features = matrix.shape()[1];
-    
+
     // Calculate the mean of each column
     let mut means = vec![0.0; n_features];
     for i in 0..n_features {
@@ -17,7 +17,7 @@ pub fn compute_pca(matrix: &Array2<f64>, n_components: usize) -> Array2<f64> {
         }
         means[i] = sum / n_samples as f64;
     }
-    
+
     // Center the data
     let mut centered = Array2::zeros((n_samples, n_features));
     for i in 0..n_samples {
@@ -25,7 +25,7 @@ pub fn compute_pca(matrix: &Array2<f64>, n_components: usize) -> Array2<f64> {
             centered[[i, j]] = matrix[[i, j]] - means[j];
         }
     }
-    
+
     // Calculate covariance matrix
     let mut cov = Array2::zeros((n_features, n_features));
     for i in 0..n_features {
@@ -37,16 +37,16 @@ pub fn compute_pca(matrix: &Array2<f64>, n_components: usize) -> Array2<f64> {
             cov[[i, j]] = sum / (n_samples as f64 - 1.0);
         }
     }
-    
+
     // For simplicity, just project onto the first two components
     // In a real implementation, we would compute eigenvectors here
-    
+
     // Create a simple projection matrix (2 dimensions)
     let mut projection = Array2::zeros((n_features, n_components.min(2)));
     for i in 0..n_features.min(2) {
         projection[[i, i]] = 1.0;
     }
-    
+
     // Project the data
     let mut result = Array2::zeros((n_samples, n_components.min(2)));
     for i in 0..n_samples {
@@ -58,7 +58,7 @@ pub fn compute_pca(matrix: &Array2<f64>, n_components: usize) -> Array2<f64> {
             result[[i, j]] = sum;
         }
     }
-    
+
     result
 }
 
@@ -71,17 +71,17 @@ pub fn plot_pca(
     let n_samples = sample_names.len();
     let first_sample = &samples[&sample_names[0]];
     let n_features = first_sample.len();
-    
+
     let mut matrix = Array2::zeros((n_samples, n_features));
     for (i, name) in sample_names.iter().enumerate() {
         for (j, val) in samples[name].iter().enumerate() {
             matrix[[i, j]] = *val;
         }
     }
-    
+
     // Compute PCA
     let pca_result = compute_pca(&matrix, 2);
-    
+
     // Create plot
     let root = SVGBackend::new(output, (800, 600)).into_drawing_area();
     root.fill(&WHITE)?;
@@ -91,7 +91,7 @@ pub fn plot_pca(
     let mut max_x = f64::MIN;
     let mut min_y = f64::MAX;
     let mut max_y = f64::MIN;
-    
+
     for i in 0..pca_result.nrows() {
         min_x = min_x.min(pca_result[[i, 0]]);
         max_x = max_x.max(pca_result[[i, 0]]);
@@ -109,15 +109,18 @@ pub fn plot_pca(
     chart.configure_mesh().draw()?;
 
     for i in 0..pca_result.nrows() {
-        chart.draw_series(PointSeries::of_element(
-            [(pca_result[[i, 0]], pca_result[[i, 1]])],
-            5,
-            &BLUE,
-            &|c, s, st| EmptyElement::at(c) + Circle::new((0, 0), s, st),
-        ))?.label(&sample_names[i]);
+        chart
+            .draw_series(PointSeries::of_element(
+                [(pca_result[[i, 0]], pca_result[[i, 1]])],
+                5,
+                &BLUE,
+                &|c, s, st| EmptyElement::at(c) + Circle::new((0, 0), s, st),
+            ))?
+            .label(&sample_names[i]);
     }
 
-    chart.configure_series_labels()
+    chart
+        .configure_series_labels()
         .background_style(&WHITE.mix(0.8))
         .border_style(&BLACK)
         .draw()?;
@@ -125,7 +128,10 @@ pub fn plot_pca(
     Ok(())
 }
 
-pub fn plot_pca_simple(pca_result: &Array2<f64>, output: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn plot_pca_simple(
+    pca_result: &Array2<f64>,
+    output: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(output, (800, 600)).into_drawing_area();
     root.fill(&WHITE)?;
 
@@ -134,7 +140,7 @@ pub fn plot_pca_simple(pca_result: &Array2<f64>, output: &str) -> Result<(), Box
     let mut max_x = f64::MIN;
     let mut min_y = f64::MAX;
     let mut max_y = f64::MIN;
-    
+
     for i in 0..pca_result.nrows() {
         min_x = min_x.min(pca_result[[i, 0]]);
         max_x = max_x.max(pca_result[[i, 0]]);
@@ -161,4 +167,4 @@ pub fn plot_pca_simple(pca_result: &Array2<f64>, output: &str) -> Result<(), Box
     }
 
     Ok(())
-} 
+}

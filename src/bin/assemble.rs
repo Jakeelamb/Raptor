@@ -1,12 +1,12 @@
-use raptor::io::fastq::{open_fastq, stream_fastq_records, FastqRecord};
-use raptor::io::fasta::FastaWriter;
-use raptor::kmer::kmer::{KmerU64, decode_kmer};
-use raptor::graph::assembler::Contig;
-use rayon::ThreadPoolBuilder;
 use ahash::{AHashMap, AHashSet};
-use std::path::Path;
+use raptor::graph::assembler::Contig;
+use raptor::io::fasta::FastaWriter;
+use raptor::io::fastq::{open_fastq, stream_fastq_records, FastqRecord};
+use raptor::kmer::kmer::{decode_kmer, KmerU64};
+use rayon::ThreadPoolBuilder;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::path::Path;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -19,9 +19,9 @@ fn main() {
     let output_path = &args[2];
 
     // Default parameters - modified for better results with low-coverage data
-    let k = 25;  // K-mer size set to 25
-    let min_coverage = 2;  // Lower coverage threshold
-    let min_length = 50;   // Shorter minimum contig length
+    let k = 25; // K-mer size set to 25
+    let min_coverage = 2; // Lower coverage threshold
+    let min_length = 50; // Shorter minimum contig length
     let threads = num_cpus::get();
     let dev_mode = args.contains(&"--dev-mode".to_string());
 
@@ -29,8 +29,10 @@ fn main() {
         println!("DEV MODE ENABLED: Will output additional debug information and skip filtering thresholds");
     }
 
-    println!("Assembling with k={}, min_coverage={}, threads={}, min_length={}",
-             k, min_coverage, threads, min_length);
+    println!(
+        "Assembling with k={}, min_coverage={}, threads={}, min_length={}",
+        k, min_coverage, threads, min_length
+    );
 
     // Initialize thread pool
     ThreadPoolBuilder::new()
@@ -43,7 +45,7 @@ fn main() {
     let reader = open_fastq(input_path);
     let records: Vec<FastqRecord> = stream_fastq_records(reader).collect();
     println!("Read {} records", records.len());
-    
+
     // Build k-mer map from reads using u64 encoding for memory efficiency
     println!("Building k-mer map with ntHash...");
     let mut kmer_map: AHashMap<u64, u32> = AHashMap::new();
@@ -70,12 +72,12 @@ fn main() {
             }
         }
     }
-    
+
     // Filter low-coverage k-mers
     println!("Filtering k-mers with coverage < {}...", min_coverage);
-    
+
     let original_kmer_count = kmer_map.len();
-    
+
     if dev_mode {
         let debug_dir = Path::new(output_path).parent().unwrap_or(Path::new("."));
         let debug_file = debug_dir.join("debug_kmers.tsv");
@@ -97,29 +99,36 @@ fn main() {
             writeln!(&mut file, "{}\t{}", kmer_str, count).unwrap();
         }
     }
-    
+
     // Only filter in non-dev mode
     if !dev_mode {
         kmer_map.retain(|_, &mut count| count >= min_coverage);
     }
-    
-    println!("Retained {} k-mers ({}%)", kmer_map.len(), 
-             (kmer_map.len() as f32 / original_kmer_count as f32 * 100.0).round());
-    
+
+    println!(
+        "Retained {} k-mers ({}%)",
+        kmer_map.len(),
+        (kmer_map.len() as f32 / original_kmer_count as f32 * 100.0).round()
+    );
+
     // Assemble contigs using greedy algorithm with u64 encoding
     println!("Assembling contigs...");
     let mut contigs = assemble_contigs_u64(k, &kmer_map, min_length);
-    
+
     // Filter short contigs (unless in dev mode)
     if !dev_mode {
         let pre_filter_count = contigs.len();
         contigs.retain(|c| c.sequence.len() >= min_length);
-        println!("Filtered {} short contigs, retained {}", pre_filter_count - contigs.len(), contigs.len());
+        println!(
+            "Filtered {} short contigs, retained {}",
+            pre_filter_count - contigs.len(),
+            contigs.len()
+        );
     } else if !contigs.is_empty() {
         // In dev mode, write all contigs regardless of length
         let debug_dir = Path::new(output_path).parent().unwrap_or(Path::new("."));
         let debug_file = debug_dir.join("debug_contigs.fasta");
-        
+
         let mut debug_writer = FastaWriter::new(debug_file.to_str().unwrap());
         for (i, contig) in contigs.iter().enumerate() {
             if let Err(e) = debug_writer.write_contig(contig, i + 1) {
@@ -127,19 +136,19 @@ fn main() {
             }
         }
     }
-    
+
     println!("Assembled {} contigs", contigs.len());
-    
+
     // Write output FASTA file
     println!("Writing output file {}...", output_path);
     let mut writer = FastaWriter::new(output_path);
-    
+
     for (i, contig) in contigs.iter().enumerate() {
         if let Err(e) = writer.write_contig(contig, i + 1) {
             eprintln!("Error writing contig {}: {}", i + 1, e);
         }
     }
-    
+
     println!("Done!");
 }
 

@@ -1,9 +1,9 @@
 // src/io/fasta.rs
-use std::fs::File;
-use std::io::{BufWriter, Write, Result, BufReader, BufRead};
-use flate2::write::GzEncoder;
 use flate2::read::MultiGzDecoder;
+use flate2::write::GzEncoder;
 use flate2::Compression;
+use std::fs::File;
+use std::io::{BufRead, BufReader, BufWriter, Result, Write};
 
 use crate::graph::assembler::Contig;
 use crate::kmer::rle::rle_encode;
@@ -39,33 +39,34 @@ impl FastaWriter {
             FastaWriter::Plain(writer) => {
                 writeln!(writer, ">{}", header.trim_start_matches('@'))?;
                 writeln!(writer, "{}", sequence)?;
-            },
+            }
             FastaWriter::Compressed(writer) => {
                 writeln!(writer, ">{}", header.trim_start_matches('@'))?;
                 writeln!(writer, "{}", sequence)?;
-            },
+            }
         };
         Ok(())
     }
-    
+
     pub fn write_contig(&mut self, contig: &Contig, id: usize) -> Result<()> {
         match self {
             FastaWriter::Plain(writer) => {
                 writeln!(writer, ">contig_{}", id)?;
                 writeln!(writer, "{}", contig.sequence)?;
-            },
+            }
             FastaWriter::Compressed(writer) => {
                 writeln!(writer, ">contig_{}", id)?;
                 writeln!(writer, "{}", contig.sequence)?;
-            },
+            }
         };
         Ok(())
     }
-    
+
     /// Write contig with RLE-encoded sequence in comment or custom format
     pub fn write_rle_contig(&mut self, contig: &Contig, id: usize) -> Result<()> {
         let rle = rle_encode(&contig.sequence);
-        let encoded = rle.iter()
+        let encoded = rle
+            .iter()
             .map(|(b, c)| format!("{}{}", *b as char, c))
             .collect::<Vec<_>>()
             .join("");
@@ -74,11 +75,11 @@ impl FastaWriter {
             FastaWriter::Plain(writer) => {
                 writeln!(writer, ">contig_{}_RLE", id)?;
                 writeln!(writer, "{}", encoded)?;
-            },
+            }
             FastaWriter::Compressed(writer) => {
                 writeln!(writer, ">contig_{}_RLE", id)?;
                 writeln!(writer, "{}", encoded)?;
-            },
+            }
         };
         Ok(())
     }

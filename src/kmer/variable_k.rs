@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use ahash::AHashSet;
 use crate::kmer::nthash::NtHashIterator;
+use ahash::AHashSet;
+use std::collections::HashMap;
 
 /// Generate a histogram of unique k-mer counts for different k values.
 /// Uses ntHash for fast O(1) rolling hash computation.
@@ -13,7 +13,10 @@ pub fn kmer_coverage_histogram(sequences: &[String], max_k: usize) -> HashMap<us
     } else if max_k <= 31 {
         vec![21, 25, 27, 31]
     } else {
-        vec![21, 25, 31, 35, 41].into_iter().filter(|&k| k <= max_k).collect()
+        vec![21, 25, 31, 35, 41]
+            .into_iter()
+            .filter(|&k| k <= max_k)
+            .collect()
     };
 
     for &k in &k_values {
@@ -40,9 +43,10 @@ pub fn select_best_k(hist: &HashMap<usize, usize>) -> usize {
     if hist.is_empty() {
         return 31; // Default if no data
     }
-    
+
     // Apply a simple heuristic: maximize uniqueness but penalize very large k values
-    let best_k = hist.iter()
+    let best_k = hist
+        .iter()
         .max_by_key(|(&k, &count)| {
             // Balance between uniqueness and reasonable k-size
             // For very large k, uniqueness might go up but utility goes down
@@ -54,7 +58,7 @@ pub fn select_best_k(hist: &HashMap<usize, usize>) -> usize {
         })
         .map(|(&k, _)| k)
         .unwrap_or(31);
-    
+
     best_k
 }
 

@@ -1,17 +1,17 @@
-use crate::io::fastq::{open_fastq, stream_fastq_records, FastqRecord};
-use crate::io::fasta::FastaWriter;
-use crate::io::gfa::GfaWriter;
-use crate::io::gfa2::Gfa2Writer;
-use crate::kmer::variable_k::{optimal_k, kmer_coverage_histogram, select_best_k};
+use crate::accel::{create_backend, CpuBackend};
+use crate::eval::metrics::evaluate_lengths;
 use crate::graph::assembler::greedy_assembly_u64;
 use crate::graph::overlap::find_overlaps;
 use crate::graph::stitch::OverlapGraphBuilder;
-use crate::accel::{create_backend, CpuBackend};
+use crate::io::fasta::FastaWriter;
+use crate::io::fastq::{open_fastq, stream_fastq_records, FastqRecord};
+use crate::io::gfa::GfaWriter;
+use crate::io::gfa2::Gfa2Writer;
+use crate::kmer::variable_k::{kmer_coverage_histogram, optimal_k, select_best_k};
 use std::collections::HashMap;
-use tracing::{info, warn};
 use std::fs;
 use std::io::Write;
-use crate::eval::metrics::evaluate_lengths;
+use tracing::{info, warn};
 
 pub fn assemble_reads(
     input_path: &str,
@@ -43,13 +43,33 @@ pub fn assemble_reads(
 ) {
     // Default to CPU backend for backwards compatibility
     assemble_reads_with_gpu(
-        input_path, output_path, min_len, _output_gfa, _output_gfa2,
-        _adaptive_k, _use_rle, collapse_repeats, min_repeat_len,
-        polish, polish_window, streaming, export_metadata,
-        json_metadata, tsv_metadata, isoforms, gtf_path, gff3_path,
-        max_path_depth, min_confidence, compute_tpm, polish_isoforms,
-        samples_path, min_tpm, long_reads, counts_matrix,
-        false  // use_gpu = false by default
+        input_path,
+        output_path,
+        min_len,
+        _output_gfa,
+        _output_gfa2,
+        _adaptive_k,
+        _use_rle,
+        collapse_repeats,
+        min_repeat_len,
+        polish,
+        polish_window,
+        streaming,
+        export_metadata,
+        json_metadata,
+        tsv_metadata,
+        isoforms,
+        gtf_path,
+        gff3_path,
+        max_path_depth,
+        min_confidence,
+        compute_tpm,
+        polish_isoforms,
+        samples_path,
+        min_tpm,
+        long_reads,
+        counts_matrix,
+        false, // use_gpu = false by default
     );
 }
 
@@ -146,23 +166,36 @@ pub fn assemble_reads_with_gpu(
 
     // Count k-mers using optimized u64 path with Bloom filter pre-filtering
     // This filters singleton k-mers (sequencing errors) for 30-50% memory reduction
-    info!("Counting k-mers with k={} using optimized u64 encoding with Bloom filter", k);
+    info!(
+        "Counting k-mers with k={} using optimized u64 encoding with Bloom filter",
+        k
+    );
     let min_kmer_count = 2; // Filter k-mers appearing only once
     let kmer_counts_u64 = cpu_backend.count_kmers_u64_filtered(&sequences, k, min_kmer_count);
-    info!("Found {} unique k-mers (after filtering singletons)", kmer_counts_u64.len());
+    info!(
+        "Found {} unique k-mers (after filtering singletons)",
+        kmer_counts_u64.len()
+    );
 
     // Build adjacency table for assembly
     info!("Building adjacency table...");
     let mut adjacency = cpu_backend.build_adjacency_u64(&kmer_counts_u64, k);
-    info!("Adjacency table built with {} forward edges", adjacency.forward.len());
+    info!(
+        "Adjacency table built with {} forward edges",
+        adjacency.forward.len()
+    );
 
     // Clean up graph: remove tips and collapse bubbles
     // This reduces noise from sequencing errors and improves assembly quality
     {
         use crate::graph::assembler::cleanup_graph;
         info!("Cleaning up assembly graph (removing tips and bubbles)...");
-        let (tips_removed, bubbles_collapsed) = cleanup_graph(&mut adjacency, &kmer_counts_u64, k, min_kmer_count);
-        info!("Graph cleanup: removed {} tips, collapsed {} bubbles", tips_removed, bubbles_collapsed);
+        let (tips_removed, bubbles_collapsed) =
+            cleanup_graph(&mut adjacency, &kmer_counts_u64, k, min_kmer_count);
+        info!(
+            "Graph cleanup: removed {} tips, collapsed {} bubbles",
+            tips_removed, bubbles_collapsed
+        );
     }
 
     // Keep records for polishing if needed
@@ -187,18 +220,26 @@ pub fn assemble_reads_with_gpu(
         use crate::graph::simplify::collapse_repeats;
         let before_count = contigs.len();
         contigs = collapse_repeats(contigs, min_repeat_len);
-        info!("Collapsed repeats: {} -> {} contigs (removed {})",
-              before_count, contigs.len(), before_count - contigs.len());
+        info!(
+            "Collapsed repeats: {} -> {} contigs (removed {})",
+            before_count,
+            contigs.len(),
+            before_count - contigs.len()
+        );
     }
 
     // Polish contigs if requested (using parallel implementation for 4-8x speedup)
     if polish {
         use crate::graph::polish::polish_contig_parallel;
-        info!("Polishing contigs using aligned reads (window size: {}, parallel)", polish_window);
+        info!(
+            "Polishing contigs using aligned reads (window size: {}, parallel)",
+            polish_window
+        );
 
         let chunk_size = 10000; // Process 10kb chunks in parallel
         for contig in &mut contigs {
-            contig.sequence = polish_contig_parallel(&contig.sequence, &records, polish_window, chunk_size);
+            contig.sequence =
+                polish_contig_parallel(&contig.sequence, &records, polish_window, chunk_size);
         }
 
         info!("Completed contig polishing");
@@ -207,15 +248,23 @@ pub fn assemble_reads_with_gpu(
     // Write FASTA output
     let mut writer = FastaWriter::new(output_path);
     for (i, contig) in contigs.iter().enumerate() {
-        writer.write_contig(contig, i + 1).expect("Failed to write contig");
+        writer
+            .write_contig(contig, i + 1)
+            .expect("Failed to write contig");
 
         // Write RLE version if requested
         if _use_rle {
-            writer.write_rle_contig(contig, i + 1).expect("Failed to write RLE contig");
+            writer
+                .write_rle_contig(contig, i + 1)
+                .expect("Failed to write RLE contig");
         }
     }
 
-    info!("Assembly complete: {} contigs written to {}", contigs.len(), output_path);
+    info!(
+        "Assembly complete: {} contigs written to {}",
+        contigs.len(),
+        output_path
+    );
 
     // Export metadata if requested
     if export_metadata || json_metadata.is_some() || tsv_metadata.is_some() {
@@ -245,8 +294,12 @@ pub fn assemble_reads_with_gpu(
             let mut file = std::fs::File::create(path).expect("Failed to create TSV metadata file");
             writeln!(file, "contig_id\tlength\trle_compression\tgc_content").unwrap();
             for m in &meta {
-                writeln!(file, "{}\t{}\t{:.4}\t{:.4}",
-                    m.id, m.length, m.rle_compression, m.gc_content).unwrap();
+                writeln!(
+                    file,
+                    "{}\t{}\t{:.4}\t{:.4}",
+                    m.id, m.length, m.rle_compression, m.gc_content
+                )
+                .unwrap();
             }
         }
     }
@@ -312,8 +365,9 @@ pub fn assemble_reads_with_gpu(
                 strand_aware_value,
                 bam_path_value,
                 long_reads_value,
-                get_output_filename_fn
-            ).unwrap_or_else(|e| {
+                get_output_filename_fn,
+            )
+            .unwrap_or_else(|e| {
                 warn!("Error processing isoforms: {}", e);
                 Vec::new()
             });
@@ -324,7 +378,10 @@ pub fn assemble_reads_with_gpu(
             if counts_matrix {
                 info!("Writing isoform counts matrix");
                 let counts_matrix_path = format!("{}_isoform.counts.matrix", output_path);
-                if let Err(e) = crate::quant::matrix::write_isoform_counts_matrix(&transcripts, &counts_matrix_path) {
+                if let Err(e) = crate::quant::matrix::write_isoform_counts_matrix(
+                    &transcripts,
+                    &counts_matrix_path,
+                ) {
                     warn!("Failed to write counts matrix: {}", e);
                 } else {
                     info!("Counts matrix written to: {}", counts_matrix_path);
@@ -338,7 +395,10 @@ pub fn assemble_reads_with_gpu(
                 if let Err(e) = write_gtf(&transcripts, gtf_path) {
                     warn!("Failed to write GTF file: {}", e);
                 } else {
-                    info!("GTF output complete: {} transcripts written", transcripts.len());
+                    info!(
+                        "GTF output complete: {} transcripts written",
+                        transcripts.len()
+                    );
                 }
             }
 
@@ -349,7 +409,10 @@ pub fn assemble_reads_with_gpu(
                 if let Err(e) = write_gff3(&transcripts, gff3_path) {
                     warn!("Failed to write GFF3 file: {}", e);
                 } else {
-                    info!("GFF3 output complete: {} transcripts written", transcripts.len());
+                    info!(
+                        "GFF3 output complete: {} transcripts written",
+                        transcripts.len()
+                    );
                 }
             }
 
@@ -366,7 +429,7 @@ pub fn assemble_reads_with_gpu(
             // Compute TPM values if requested
             if compute_tpm {
                 info!("Computing TPM expression values for transcripts");
-                use crate::quant::tpm::{count_reads, compute_tpm, write_tpm_table, filter_by_tpm};
+                use crate::quant::tpm::{compute_tpm, count_reads, filter_by_tpm, write_tpm_table};
 
                 let counts = count_reads(&transcripts, &records);
                 let tpms = compute_tpm(&counts, &transcripts);
@@ -374,9 +437,13 @@ pub fn assemble_reads_with_gpu(
                 // Filter transcripts by TPM if requested
                 if min_tpm > 0.0 {
                     info!("Filtering transcripts with TPM < {}", min_tpm);
-                    let (filtered_transcripts, filtered_tpms) = filter_by_tpm(&transcripts, &tpms, min_tpm);
+                    let (filtered_transcripts, filtered_tpms) =
+                        filter_by_tpm(&transcripts, &tpms, min_tpm);
                     let filtered_count = transcripts.len() - filtered_transcripts.len();
-                    info!("Filtered out {} transcripts with low expression", filtered_count);
+                    info!(
+                        "Filtered out {} transcripts with low expression",
+                        filtered_count
+                    );
 
                     // Replace transcripts with filtered set
                     transcripts = filtered_transcripts;
@@ -390,7 +457,9 @@ pub fn assemble_reads_with_gpu(
                     if let Some(json_path) = &json_metadata {
                         info!("Writing transcript metrics to JSON: {}", json_path);
                         use crate::io::metadata::write_transcript_metrics;
-                        if let Err(e) = write_transcript_metrics(&transcripts, &filtered_tpms, json_path) {
+                        if let Err(e) =
+                            write_transcript_metrics(&transcripts, &filtered_tpms, json_path)
+                        {
                             warn!("Failed to write transcript metrics to JSON: {}", e);
                         } else {
                             info!("Transcript metrics written to {}", json_path);
@@ -415,13 +484,13 @@ pub fn assemble_reads_with_gpu(
 
                 // Process multiple samples if provided
                 if let Some(sample_file) = &samples_path {
-                    use std::collections::HashMap;
                     use crate::io::sam::parse_sam_transcript_hits;
                     use crate::quant::matrix::write_counts_matrix;
+                    use std::collections::HashMap;
 
                     info!("Processing multi-sample data from {}", sample_file);
-                    let sample_content = std::fs::read_to_string(sample_file)
-                        .expect("Failed to read sample file");
+                    let sample_content =
+                        std::fs::read_to_string(sample_file).expect("Failed to read sample file");
 
                     let mut sample_tpms: HashMap<String, Vec<f64>> = HashMap::new();
 
@@ -440,7 +509,10 @@ pub fn assemble_reads_with_gpu(
                         let sample_name = parts[0].trim().to_string();
                         let sam_path = parts[1].trim();
 
-                        info!("Processing sample: {} from alignment {}", sample_name, sam_path);
+                        info!(
+                            "Processing sample: {} from alignment {}",
+                            sample_name, sam_path
+                        );
 
                         // Parse SAM file for transcript hits
                         let hits = match parse_sam_transcript_hits(sam_path) {
@@ -452,9 +524,10 @@ pub fn assemble_reads_with_gpu(
                         };
 
                         // Count hits per transcript
-                        let sam_counts: Vec<usize> = transcripts.iter().map(|t| {
-                            *hits.get(&format!("transcript_{}", t.id)).unwrap_or(&0)
-                        }).collect();
+                        let sam_counts: Vec<usize> = transcripts
+                            .iter()
+                            .map(|t| *hits.get(&format!("transcript_{}", t.id)).unwrap_or(&0))
+                            .collect();
 
                         // Compute TPM values
                         let sam_tpms = compute_tpm(&sam_counts, &transcripts);
@@ -474,13 +547,16 @@ pub fn assemble_reads_with_gpu(
 
             // Apply transcript polishing with long reads if requested
             if let Some(polish_sam_path) = &long_reads {
-                info!("Polishing transcript sequences with long read alignments from {}", polish_sam_path);
+                info!(
+                    "Polishing transcript sequences with long read alignments from {}",
+                    polish_sam_path
+                );
                 use crate::polish::longread::polish_transcripts;
 
                 match polish_transcripts(&mut transcripts, polish_sam_path) {
                     Ok(count) => {
                         info!("Successfully polished {} transcripts", count);
-                    },
+                    }
                     Err(e) => {
                         warn!("Error during transcript polishing: {}", e);
                     }
@@ -488,9 +564,8 @@ pub fn assemble_reads_with_gpu(
             }
 
             // Display transcript evaluation metrics
-            let transcript_lengths: Vec<usize> = transcripts.iter()
-                .map(|t| t.sequence.len())
-                .collect();
+            let transcript_lengths: Vec<usize> =
+                transcripts.iter().map(|t| t.sequence.len()).collect();
             let stats = evaluate_lengths(&transcript_lengths);
             info!(
                 "Transcript statistics: {} transcripts, Avg length: {:.1} bp, N50: {} bp",
@@ -506,16 +581,28 @@ pub fn assemble_reads_with_gpu(
             let mut gfa_writer = GfaWriter::new(&gfa_path);
 
             if _use_rle {
-                gfa_writer.write_rle_segments(&contigs).expect("Failed to write RLE GFA segments");
+                gfa_writer
+                    .write_rle_segments(&contigs)
+                    .expect("Failed to write RLE GFA segments");
             } else {
-                gfa_writer.write_segments(&contigs).expect("Failed to write GFA segments");
+                gfa_writer
+                    .write_segments(&contigs)
+                    .expect("Failed to write GFA segments");
             }
 
-            gfa_writer.write_links(&links).expect("Failed to write GFA links");
-            gfa_writer.write_assembly_paths(&paths).expect("Failed to write GFA paths");
+            gfa_writer
+                .write_links(&links)
+                .expect("Failed to write GFA links");
+            gfa_writer
+                .write_assembly_paths(&paths)
+                .expect("Failed to write GFA paths");
 
-            info!("GFA output complete: {} segments, {} links, {} paths written",
-                  contigs.len(), links.len(), paths.len());
+            info!(
+                "GFA output complete: {} segments, {} links, {} paths written",
+                contigs.len(),
+                links.len(),
+                paths.len()
+            );
         }
 
         // Output GFA2 if requested
@@ -525,12 +612,22 @@ pub fn assemble_reads_with_gpu(
 
             // Write GFA2 output
             let mut gfa2_writer = Gfa2Writer::new(&gfa2_path);
-            gfa2_writer.write_segments(&contigs).expect("Failed to write GFA2 segments");
-            gfa2_writer.write_links(&links).expect("Failed to write GFA2 links");
-            gfa2_writer.write_paths(&paths).expect("Failed to write GFA2 paths");
+            gfa2_writer
+                .write_segments(&contigs)
+                .expect("Failed to write GFA2 segments");
+            gfa2_writer
+                .write_links(&links)
+                .expect("Failed to write GFA2 links");
+            gfa2_writer
+                .write_paths(&paths)
+                .expect("Failed to write GFA2 paths");
 
-            info!("GFA2 output complete: {} segments, {} links, {} paths written",
-                   contigs.len(), links.len(), paths.len());
+            info!(
+                "GFA2 output complete: {} segments, {} links, {} paths written",
+                contigs.len(),
+                links.len(),
+                paths.len()
+            );
         }
     }
 }
@@ -542,10 +639,14 @@ fn get_output_filename(output_path: &str, extension: &str) -> String {
     } else {
         output_path
     };
-    
+
     if path.ends_with(".fasta") || path.ends_with(".fa") {
-        format!("{}.{}", &path[..path.rfind('.').unwrap_or(path.len())], extension)
+        format!(
+            "{}.{}",
+            &path[..path.rfind('.').unwrap_or(path.len())],
+            extension
+        )
     } else {
         format!("{}.{}", path, extension)
     }
-} 
+}

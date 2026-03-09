@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 #[cfg(feature = "gpu")]
-use ocl::{Buffer, ProQue, flags};
+use ocl::{flags, Buffer, ProQue};
 use std::collections::HashMap;
 
 #[cfg(feature = "gpu")]
@@ -40,7 +40,11 @@ impl GpuKmerCounter {
             .build()
             .map_err(|e| format!("Failed to build OpenCL program: {}", e))?;
 
-        Ok(GpuKmerCounter { pro_que, table_size, k })
+        Ok(GpuKmerCounter {
+            pro_que,
+            table_size,
+            k,
+        })
     }
 
     /// Count k-mers in the given reads
@@ -100,7 +104,8 @@ impl GpuKmerCounter {
         let table_mask = (self.table_size - 1) as u32;
 
         // Build and execute kernel
-        let kernel = self.pro_que
+        let kernel = self
+            .pro_que
             .kernel_builder("count_kmers_v2")
             .arg(&sequences_buf)
             .arg(&offsets_buf)
@@ -114,18 +119,22 @@ impl GpuKmerCounter {
             .map_err(|e| format!("Failed to build kernel: {}", e))?;
 
         unsafe {
-            kernel.enq().map_err(|e| format!("Failed to execute kernel: {}", e))?;
+            kernel
+                .enq()
+                .map_err(|e| format!("Failed to execute kernel: {}", e))?;
         }
 
         // Read back results
         let mut counts = vec![0u32; self.table_size];
         let mut kmers = vec![0u64; self.table_size];
 
-        counts_buf.read(&mut counts)
+        counts_buf
+            .read(&mut counts)
             .enq()
             .map_err(|e| format!("Failed to read counts: {}", e))?;
 
-        kmers_buf.read(&mut kmers)
+        kmers_buf
+            .read(&mut kmers)
             .enq()
             .map_err(|e| format!("Failed to read k-mers: {}", e))?;
 
@@ -183,7 +192,8 @@ impl GpuKmerCounter {
 
         let table_mask = (self.table_size - 1) as u32;
 
-        let kernel = self.pro_que
+        let kernel = self
+            .pro_que
             .kernel_builder("count_kmers_simple")
             .arg(&sequences_buf)
             .arg(&offsets_buf)
@@ -196,11 +206,14 @@ impl GpuKmerCounter {
             .map_err(|e| format!("Failed to build kernel: {}", e))?;
 
         unsafe {
-            kernel.enq().map_err(|e| format!("Failed to execute kernel: {}", e))?;
+            kernel
+                .enq()
+                .map_err(|e| format!("Failed to execute kernel: {}", e))?;
         }
 
         let mut result = vec![0u32; self.table_size];
-        counts_buf.read(&mut result)
+        counts_buf
+            .read(&mut result)
             .enq()
             .map_err(|e| format!("Failed to read counts: {}", e))?;
 
@@ -215,7 +228,9 @@ pub fn is_gpu_available() -> bool {
         platforms if !platforms.is_empty() => {
             // Check if any platform has devices
             platforms.iter().any(|p| {
-                ocl::Device::list_all(p).map(|d| !d.is_empty()).unwrap_or(false)
+                ocl::Device::list_all(p)
+                    .map(|d| !d.is_empty())
+                    .unwrap_or(false)
             })
         }
         _ => false,
@@ -264,7 +279,7 @@ pub fn get_gpu_info() -> Option<String> {
 /// CPU fallback for k-mer counting (used when GPU is not available).
 /// Uses KmerU64 for efficient sliding window encoding.
 pub fn count_kmers_cpu(sequences: &[String], k: usize) -> HashMap<String, u32> {
-    use crate::kmer::kmer::{KmerU64, decode_kmer};
+    use crate::kmer::kmer::{decode_kmer, KmerU64};
 
     let mut counts: HashMap<u64, u32> = HashMap::new();
     for seq in sequences {
@@ -335,7 +350,7 @@ impl GpuKmerCounterNtHash {
 
         let table_size = 1usize << table_size_bits;
         let bloom_size = if use_bloom_filter {
-            1usize << (table_size_bits + 2)  // 4x more counters for Bloom
+            1usize << (table_size_bits + 2) // 4x more counters for Bloom
         } else {
             0
         };
@@ -427,7 +442,8 @@ impl GpuKmerCounterNtHash {
             .build()
             .map_err(|e| format!("Failed to create k-mers buffer: {}", e))?;
 
-        let kernel = self.pro_que
+        let kernel = self
+            .pro_que
             .kernel_builder("count_kmers_nthash")
             .arg(sequences_buf)
             .arg(offsets_buf)
@@ -441,18 +457,22 @@ impl GpuKmerCounterNtHash {
             .map_err(|e| format!("Failed to build ntHash kernel: {}", e))?;
 
         unsafe {
-            kernel.enq().map_err(|e| format!("Failed to execute ntHash kernel: {}", e))?;
+            kernel
+                .enq()
+                .map_err(|e| format!("Failed to execute ntHash kernel: {}", e))?;
         }
 
         // Read results
         let mut counts = vec![0u32; self.table_size];
         let mut kmers = vec![0u64; self.table_size];
 
-        counts_buf.read(&mut counts)
+        counts_buf
+            .read(&mut counts)
             .enq()
             .map_err(|e| format!("Failed to read counts: {}", e))?;
 
-        kmers_buf.read(&mut kmers)
+        kmers_buf
+            .read(&mut kmers)
             .enq()
             .map_err(|e| format!("Failed to read k-mers: {}", e))?;
 
@@ -479,7 +499,7 @@ impl GpuKmerCounterNtHash {
         table_mask: u32,
     ) -> Result<HashMap<String, u32>, String> {
         let bloom_mask = (self.bloom_size - 1) as u32;
-        let bloom_words = self.bloom_size / 16;  // 16 counters per u64
+        let bloom_words = self.bloom_size / 16; // 16 counters per u64
 
         // Bloom filter buffer (4-bit counters packed in u64)
         let bloom_buf = Buffer::<u64>::builder()
@@ -491,7 +511,8 @@ impl GpuKmerCounterNtHash {
             .map_err(|e| format!("Failed to create Bloom buffer: {}", e))?;
 
         // Pass 1: Populate Bloom filter
-        let pass1_kernel = self.pro_que
+        let pass1_kernel = self
+            .pro_que
             .kernel_builder("bloom_filter_pass1")
             .arg(sequences_buf)
             .arg(offsets_buf)
@@ -504,7 +525,9 @@ impl GpuKmerCounterNtHash {
             .map_err(|e| format!("Failed to build Bloom pass1 kernel: {}", e))?;
 
         unsafe {
-            pass1_kernel.enq().map_err(|e| format!("Failed to execute Bloom pass1: {}", e))?;
+            pass1_kernel
+                .enq()
+                .map_err(|e| format!("Failed to execute Bloom pass1: {}", e))?;
         }
 
         // Hash table buffers for pass 2
@@ -525,7 +548,8 @@ impl GpuKmerCounterNtHash {
             .map_err(|e| format!("Failed to create k-mers buffer: {}", e))?;
 
         // Pass 2: Count only k-mers with Bloom count >= 2
-        let pass2_kernel = self.pro_que
+        let pass2_kernel = self
+            .pro_que
             .kernel_builder("bloom_filter_pass2")
             .arg(sequences_buf)
             .arg(offsets_buf)
@@ -538,23 +562,27 @@ impl GpuKmerCounterNtHash {
             .arg(bloom_mask)
             .arg(self.table_size as u32)
             .arg(table_mask)
-            .arg(2u32)  // min_bloom_count
+            .arg(2u32) // min_bloom_count
             .build()
             .map_err(|e| format!("Failed to build Bloom pass2 kernel: {}", e))?;
 
         unsafe {
-            pass2_kernel.enq().map_err(|e| format!("Failed to execute Bloom pass2: {}", e))?;
+            pass2_kernel
+                .enq()
+                .map_err(|e| format!("Failed to execute Bloom pass2: {}", e))?;
         }
 
         // Read results
         let mut counts = vec![0u32; self.table_size];
         let mut kmers = vec![0u64; self.table_size];
 
-        counts_buf.read(&mut counts)
+        counts_buf
+            .read(&mut counts)
             .enq()
             .map_err(|e| format!("Failed to read counts: {}", e))?;
 
-        kmers_buf.read(&mut kmers)
+        kmers_buf
+            .read(&mut kmers)
             .enq()
             .map_err(|e| format!("Failed to read k-mers: {}", e))?;
 
@@ -572,8 +600,8 @@ impl GpuKmerCounterNtHash {
 
 /// Count k-mers using ntHash on CPU (optimized fallback)
 pub fn count_kmers_nthash_cpu(sequences: &[String], k: usize) -> HashMap<String, u32> {
-    use crate::kmer::nthash::NtHashIterator;
     use crate::gpu::kmer_encode::decode_kmer;
+    use crate::kmer::nthash::NtHashIterator;
 
     let mut counts: HashMap<u64, u32> = HashMap::new();
 
@@ -591,7 +619,8 @@ pub fn count_kmers_nthash_cpu(sequences: &[String], k: usize) -> HashMap<String,
     // Note: This returns hash-based counts, not string-decoded
     // For compatibility with existing code, we'd need to decode
     // For now, return as-is for performance
-    counts.into_iter()
+    counts
+        .into_iter()
         .map(|(hash, count)| (decode_kmer(hash, k), count))
         .collect()
 }
@@ -602,10 +631,7 @@ mod tests {
 
     #[test]
     fn test_cpu_fallback() {
-        let sequences = vec![
-            "ACGTACGT".to_string(),
-            "CGTACGTA".to_string(),
-        ];
+        let sequences = vec!["ACGTACGT".to_string(), "CGTACGTA".to_string()];
 
         let counts = count_kmers_cpu(&sequences, 4);
         assert!(!counts.is_empty());

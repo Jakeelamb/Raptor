@@ -1,9 +1,9 @@
 //! SIMD-accelerated k-mer operations
 #![allow(dead_code)]
 
+use rayon::prelude::*;
 use std::arch::x86_64::*;
 use std::cmp;
-use rayon::prelude::*;
 
 /// Check if AVX2 is available at runtime
 #[inline]
@@ -122,7 +122,7 @@ pub fn hamming_distance_simd(a: &[u8], b: &[u8]) -> usize {
 pub fn reverse_complement_simd(seq: &str) -> String {
     let bytes = seq.as_bytes();
     let mut result = Vec::with_capacity(bytes.len());
-    
+
     // Process the sequence in reverse order
     for i in (0..bytes.len()).rev() {
         // Get the complement of the current nucleotide
@@ -133,10 +133,10 @@ pub fn reverse_complement_simd(seq: &str) -> String {
             b'G' | b'g' => b'C',
             _ => b'N', // Non-standard bases are replaced with N
         };
-        
+
         result.push(complement);
     }
-    
+
     // Convert back to a UTF-8 string
     String::from_utf8(result).unwrap()
 }
@@ -146,13 +146,18 @@ pub fn match_kmers_simd(a: &[u8], b: &[u8], max_mismatches: usize) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    
+
     let dist = hamming_distance_simd(a, b);
     dist <= max_mismatches
 }
 
 /// Find overlap between sequences with a maximum allowed distance
-pub fn match_kmers_with_overlap(query: &str, target: &str, min_overlap: usize, max_distance: usize) -> Option<(usize, usize)> {
+pub fn match_kmers_with_overlap(
+    query: &str,
+    target: &str,
+    min_overlap: usize,
+    max_distance: usize,
+) -> Option<(usize, usize)> {
     let q = query.as_bytes();
     let t = target.as_bytes();
 
@@ -161,11 +166,11 @@ pub fn match_kmers_with_overlap(query: &str, target: &str, min_overlap: usize, m
     for shift in 0..=max_shift {
         let q_sub = &q[shift..];
         let t_sub = &t[..cmp::min(q_sub.len(), t.len())];
-        
+
         if t_sub.len() < min_overlap {
             continue;
         }
-        
+
         let overlap_len = cmp::min(q_sub.len(), t_sub.len());
         let q_overlap = &q_sub[..overlap_len];
         let t_overlap = &t_sub[..overlap_len];
@@ -188,7 +193,8 @@ pub fn batch_match_kmers_simd<'a>(
     max_mismatch: usize,
 ) -> Vec<(Option<(usize, usize)>, usize)> {
     // Process candidates in parallel for better performance
-    candidates.par_iter()
+    candidates
+        .par_iter()
         .map(|candidate| {
             // Find the best overlap between query and this candidate
             find_best_overlap(query, candidate, min_overlap, max_mismatch)
@@ -199,7 +205,12 @@ pub fn batch_match_kmers_simd<'a>(
 /// Find the best overlap between two sequences (as byte arrays)
 /// Returns the best overlap position, length, and mismatch count
 #[inline]
-fn find_best_overlap(query: &[u8], target: &[u8], min_overlap: usize, max_distance: usize) -> (Option<(usize, usize)>, usize) {
+fn find_best_overlap(
+    query: &[u8],
+    target: &[u8],
+    min_overlap: usize,
+    max_distance: usize,
+) -> (Option<(usize, usize)>, usize) {
     // If either sequence is shorter than min_overlap, no match is possible
     if query.len() < min_overlap || target.len() < min_overlap {
         return (None, 0);
@@ -213,11 +224,11 @@ fn find_best_overlap(query: &[u8], target: &[u8], min_overlap: usize, max_distan
     for shift in 0..=max_shift {
         let query_sub = &query[..cmp::min(query.len(), target.len() - shift)];
         let target_sub = &target[shift..shift + query_sub.len()];
-        
+
         if query_sub.len() < min_overlap {
             continue;
         }
-        
+
         let dist = hamming_distance_simd(query_sub, target_sub);
         if dist <= max_distance && (best_overlap.is_none() || dist < best_distance) {
             best_overlap = Some((query_sub.len(), shift));
@@ -229,14 +240,14 @@ fn find_best_overlap(query: &[u8], target: &[u8], min_overlap: usize, max_distan
     for shift in 1..=max_shift {
         let query_sub = &query[shift..];
         let target_sub = &target[..cmp::min(target.len(), query_sub.len())];
-        
+
         if target_sub.len() < min_overlap {
             continue;
         }
-        
+
         let dist = hamming_distance_simd(query_sub, target_sub);
         if dist <= max_distance && (best_overlap.is_none() || dist < best_distance) {
-            best_overlap = Some((target_sub.len(), shift + target.len()));  // Encode that this is a different type of overlap
+            best_overlap = Some((target_sub.len(), shift + target.len())); // Encode that this is a different type of overlap
             best_distance = dist;
         }
     }
@@ -247,7 +258,9 @@ fn find_best_overlap(query: &[u8], target: &[u8], min_overlap: usize, max_distan
 /// Bit-parallel edit distance (Myers' algorithm)
 pub fn edit_distance_bp(a: &str, b: &str, max_dist: usize) -> Option<usize> {
     let m = a.len();
-    if m > 64 { return None; } // Limited to 64-bit
+    if m > 64 {
+        return None;
+    } // Limited to 64-bit
 
     let mut pv = !0u64;
     let mut mv = 0u64;
@@ -266,12 +279,20 @@ pub fn edit_distance_bp(a: &str, b: &str, max_dist: usize) -> Option<usize> {
         let ph = mv | !(xh | pv);
         let mh = pv & xh;
 
-        if (ph & (1 << (m - 1))) != 0 { score += 1; }
-        if (mh & (1 << (m - 1))) != 0 { score -= 1; }
+        if (ph & (1 << (m - 1))) != 0 {
+            score += 1;
+        }
+        if (mh & (1 << (m - 1))) != 0 {
+            score -= 1;
+        }
 
         pv = (mh << 1) | 1;
         mv = ph << 1;
     }
 
-    if score <= max_dist { Some(score) } else { None }
+    if score <= max_dist {
+        Some(score)
+    } else {
+        None
+    }
 }

@@ -11,8 +11,8 @@
 //!
 //! Memory usage: O(bucket_size) ≈ 2-4 GB regardless of genome size
 
-use crate::io::fastq::{open_fastq, stream_fastq_records};
 use crate::io::fasta::FastaWriter;
+use crate::io::fastq::{open_fastq, stream_fastq_records};
 use crate::kmer::disk_counting::{DiskCounterConfig, DiskKmerCounter};
 use ahash::{AHashMap, AHashSet};
 use std::path::Path;
@@ -74,7 +74,11 @@ impl StreamingAssembler {
     }
 
     /// Run the complete streaming assembly pipeline
-    pub fn assemble(&self, input_path: &str, output_path: &str) -> std::io::Result<StreamingAssemblyStats> {
+    pub fn assemble(
+        &self,
+        input_path: &str,
+        output_path: &str,
+    ) -> std::io::Result<StreamingAssemblyStats> {
         let k = self.config.k;
         let min_count = self.config.min_kmer_count;
 
@@ -87,7 +91,8 @@ impl StreamingAssembler {
         let mut disk_counter = DiskKmerCounter::new(disk_config)?;
 
         // Stream sequences directly to disk counter
-        let (total_reads, total_bases) = self.stream_to_disk_counter(input_path, &mut disk_counter)?;
+        let (total_reads, total_bases) =
+            self.stream_to_disk_counter(input_path, &mut disk_counter)?;
 
         let dist_stats = disk_counter.stats();
         info!("Distribution complete: {}", dist_stats);
@@ -99,8 +104,10 @@ impl StreamingAssembler {
 
         let unique_kmers = kmer_counts.len() as u64;
         let filtered_kmers = kmer_counts.values().filter(|&&c| c >= min_count).count() as u64;
-        info!("Unique k-mers: {}, After filtering (count >= {}): {}",
-              unique_kmers, min_count, filtered_kmers);
+        info!(
+            "Unique k-mers: {}, After filtering (count >= {}): {}",
+            unique_kmers, min_count, filtered_kmers
+        );
 
         // Phase 3: Build assembly graph and extract contigs
         info!("Phase 3: Building assembly graph and extracting contigs...");
@@ -108,7 +115,8 @@ impl StreamingAssembler {
 
         // Phase 4: Write output
         info!("Phase 4: Writing contigs...");
-        let (contigs_produced, total_contig_length, n50) = self.write_contigs(&contigs, output_path)?;
+        let (contigs_produced, total_contig_length, n50) =
+            self.write_contigs(&contigs, output_path)?;
 
         // Cleanup
         disk_counter.cleanup()?;
@@ -123,7 +131,7 @@ impl StreamingAssembler {
             total_contig_length,
             n50,
             disk_usage_bytes: dist_stats.total_disk_bytes,
-            peak_memory_bytes: 0,  // TODO: track actual peak
+            peak_memory_bytes: 0, // TODO: track actual peak
         })
     }
 
@@ -274,10 +282,14 @@ impl StreamingAssembler {
         lengths.sort_unstable_by(|a, b| b.cmp(a));
         let mut cumsum = 0;
         let half_total = total_length / 2;
-        let n50 = lengths.iter().find(|&&len| {
-            cumsum += len;
-            cumsum >= half_total
-        }).copied().unwrap_or(0);
+        let n50 = lengths
+            .iter()
+            .find(|&&len| {
+                cumsum += len;
+                cumsum >= half_total
+            })
+            .copied()
+            .unwrap_or(0);
 
         Ok((contigs.len(), total_length, n50))
     }
@@ -315,7 +327,11 @@ mod tests {
             writeln!(file, "@read_{}", i).unwrap();
             writeln!(file, "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT").unwrap();
             writeln!(file, "+").unwrap();
-            writeln!(file, "IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII").unwrap();
+            writeln!(
+                file,
+                "IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII"
+            )
+            .unwrap();
         }
         file.flush().unwrap();
         file

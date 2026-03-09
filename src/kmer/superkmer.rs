@@ -101,7 +101,7 @@ impl SuperKmer {
 /// Extract super-k-mers from a sequence
 pub struct SuperKmerExtractor {
     k: usize,
-    w: usize,  // Minimizer window size
+    w: usize, // Minimizer window size
 }
 
 impl SuperKmerExtractor {
@@ -119,9 +119,7 @@ impl SuperKmerExtractor {
         let mut current: Option<SuperKmer> = None;
 
         // Use ntHash for fast minimizer computation
-        let hashes: Vec<u64> = NtHashIterator::new(seq, self.w)
-            .map(|(_, h)| h)
-            .collect();
+        let hashes: Vec<u64> = NtHashIterator::new(seq, self.w).map(|(_, h)| h).collect();
 
         if hashes.is_empty() {
             return Vec::new();
@@ -203,11 +201,11 @@ impl TwoBitEncoder {
                 b'C' | b'c' => 0b01,
                 b'G' | b'g' => 0b10,
                 b'T' | b't' => 0b11,
-                _ => return None,  // Invalid base
+                _ => return None, // Invalid base
             };
 
             let byte_idx = i / 4;
-            let bit_offset = (3 - (i % 4)) * 2;  // MSB first
+            let bit_offset = (3 - (i % 4)) * 2; // MSB first
             encoded[byte_idx] |= bits << bit_offset;
         }
 
@@ -322,7 +320,11 @@ mod tests {
         // Repetitive sequence should compress well
         let repetitive = b"ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT";
         let ratio = extractor.compression_ratio(repetitive);
-        assert!(ratio > 1.5, "Expected compression ratio > 1.5, got {}", ratio);
+        assert!(
+            ratio > 1.5,
+            "Expected compression ratio > 1.5, got {}",
+            ratio
+        );
     }
 
     #[test]

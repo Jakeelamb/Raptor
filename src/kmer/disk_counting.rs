@@ -38,11 +38,11 @@ impl Default for DiskCounterConfig {
     fn default() -> Self {
         Self {
             k: 31,
-            num_buckets: 1024,  // Good default for most genomes
-            min_count: 2,       // Filter singletons (likely errors)
+            num_buckets: 1024, // Good default for most genomes
+            min_count: 2,      // Filter singletons (likely errors)
             temp_dir: std::env::temp_dir().join("raptor_kmer"),
-            write_buffer_size: 4 * 1024 * 1024,  // 4 MB buffers
-            max_bucket_ram: 4 * 1024 * 1024 * 1024,  // 4 GB per bucket
+            write_buffer_size: 4 * 1024 * 1024,     // 4 MB buffers
+            max_bucket_ram: 4 * 1024 * 1024 * 1024, // 4 GB per bucket
             compress_buckets: true,
         }
     }
@@ -57,19 +57,19 @@ impl DiskCounterConfig {
         // Each k-mer entry in sorting: 8 bytes (u64 hash)
         // Want each bucket to fit comfortably in usable_ram
         // For 100B k-mers, need enough buckets
-        let bucket_target_size = usable_ram / 2;  // Leave room for sorting overhead
+        let bucket_target_size = usable_ram / 2; // Leave room for sorting overhead
 
         // Estimate buckets needed for large genomes
         // Assume worst case: 100B k-mers, 8 bytes each = 800 GB raw
         // With num_buckets, each bucket is 800GB / num_buckets
         let num_buckets = if bucket_target_size >= 4 * 1024 * 1024 * 1024 {
-            256   // Large RAM: fewer buckets
+            256 // Large RAM: fewer buckets
         } else if bucket_target_size >= 1024 * 1024 * 1024 {
-            1024  // Medium RAM
+            1024 // Medium RAM
         } else if bucket_target_size >= 256 * 1024 * 1024 {
-            4096  // Small RAM
+            4096 // Small RAM
         } else {
-            8192  // Very limited RAM
+            8192 // Very limited RAM
         };
 
         Self {
@@ -94,7 +94,7 @@ impl DiskCounterConfig {
                 if line.starts_with("MemTotal:") {
                     if let Some(kb_str) = line.split_whitespace().nth(1) {
                         if let Ok(kb) = kb_str.parse::<usize>() {
-                            return kb * 1024;  // Convert KB to bytes
+                            return kb * 1024; // Convert KB to bytes
                         }
                     }
                 }
@@ -118,7 +118,7 @@ impl KmerBucket {
     fn new(path: PathBuf, buffer_size: usize) -> std::io::Result<Self> {
         let file = File::create(&path)?;
         let writer = BufWriter::with_capacity(buffer_size, file);
-        let buffer_capacity = buffer_size / 8;  // u64 = 8 bytes
+        let buffer_capacity = buffer_size / 8; // u64 = 8 bytes
 
         Ok(Self {
             path,
@@ -184,7 +184,7 @@ impl DiskKmerCounter {
     {
         let k = self.config.k;
         let num_buckets = self.config.num_buckets;
-        let bucket_mask = (num_buckets - 1) as u64;  // Assumes power of 2
+        let bucket_mask = (num_buckets - 1) as u64; // Assumes power of 2
 
         // Create bucket files
         let mut buckets: Vec<KmerBucket> = (0..num_buckets)
@@ -230,7 +230,8 @@ impl DiskKmerCounter {
         let min_count = self.config.min_count;
 
         // Process buckets in parallel, merge results
-        let bucket_counts: Vec<AHashMap<u64, u32>> = self.bucket_paths
+        let bucket_counts: Vec<AHashMap<u64, u32>> = self
+            .bucket_paths
             .par_iter()
             .map(|path| Self::count_single_bucket(path, min_count))
             .collect::<std::io::Result<Vec<_>>>()?;
@@ -269,7 +270,7 @@ impl DiskKmerCounter {
         kmers.sort_unstable();
 
         // Count consecutive identical k-mers
-        let mut counts = AHashMap::with_capacity(num_kmers / 10);  // Estimate unique
+        let mut counts = AHashMap::with_capacity(num_kmers / 10); // Estimate unique
 
         if kmers.is_empty() {
             return Ok(counts);
@@ -314,7 +315,8 @@ impl DiskKmerCounter {
 
     /// Get statistics about the distribution
     pub fn stats(&self) -> DiskCounterStats {
-        let bucket_sizes: Vec<u64> = self.bucket_paths
+        let bucket_sizes: Vec<u64> = self
+            .bucket_paths
             .iter()
             .filter_map(|p| fs::metadata(p).ok())
             .map(|m| m.len())
@@ -437,11 +439,13 @@ mod tests {
         // Test sequences with repeated k-mers
         let sequences = vec![
             "ACGTACGTACGTACGT",
-            "ACGTACGTACGTACGT",  // Duplicate
+            "ACGTACGTACGTACGT", // Duplicate
             "TGCATGCATGCATGCA",
         ];
 
-        counter.distribute_kmers(sequences.iter().map(|s| s.as_bytes())).unwrap();
+        counter
+            .distribute_kmers(sequences.iter().map(|s| s.as_bytes()))
+            .unwrap();
 
         let stats = counter.stats();
         assert!(stats.total_kmers > 0);

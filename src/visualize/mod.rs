@@ -2,4 +2,4 @@
 #![allow(dead_code)]
 
 pub mod pca;
-pub mod plot; 
+pub mod plot;

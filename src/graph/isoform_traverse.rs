@@ -35,7 +35,10 @@ pub fn find_directed_paths(
     for &start in start_nodes {
         // Check if we've hit the path limit
         if raw_paths.len() >= MAX_PATHS {
-            debug!("Reached maximum path limit ({}), stopping enumeration", MAX_PATHS);
+            debug!(
+                "Reached maximum path limit ({}), stopping enumeration",
+                MAX_PATHS
+            );
             break;
         }
 
@@ -186,21 +189,21 @@ fn calculate_path_confidence(graph: &IsoformGraph, path: &[usize]) -> f32 {
     if path.len() <= 1 {
         return 1.0; // Single node path has perfect confidence
     }
-    
+
     let mut sum_weight = 0.0;
     let mut count = 0;
-    
+
     for i in 0..path.len() - 1 {
         if let Some(&weight) = graph.edge_weight(path[i], path[i + 1]) {
             sum_weight += weight;
             count += 1;
         }
     }
-    
+
     if count == 0 {
         return 0.0;
     }
-    
+
     sum_weight / count as f32
 }
 
@@ -209,9 +212,10 @@ pub fn filter_paths_by_confidence(
     paths: &[TranscriptPath],
     min_confidence: f32,
     min_path_len: usize,
-    high_confidence_threshold: Option<f32>
+    high_confidence_threshold: Option<f32>,
 ) -> Vec<TranscriptPath> {
-    paths.iter()
+    paths
+        .iter()
         .filter(|path| {
             // Standard confidence check
             if path.confidence >= min_confidence {
@@ -219,7 +223,7 @@ pub fn filter_paths_by_confidence(
                 if path.length >= min_path_len {
                     return true;
                 }
-                
+
                 // Short paths can pass if they have high confidence
                 if let Some(high_threshold) = high_confidence_threshold {
                     if path.confidence >= high_threshold {
@@ -227,7 +231,7 @@ pub fn filter_paths_by_confidence(
                     }
                 }
             }
-            
+
             false
         })
         .cloned()
@@ -238,45 +242,43 @@ pub fn filter_paths_by_confidence(
 mod tests {
     use super::*;
     use petgraph::graphmap::DiGraphMap;
-    
+
     #[test]
     fn test_find_directed_paths() {
         // Create a test graph with multiple paths
         let mut graph = DiGraphMap::new();
-        
+
         // Add nodes and edges
         for i in 0..5 {
             graph.add_node(i);
         }
-        
+
         // Path 1: 0 -> 1 -> 3 -> 4
         graph.add_edge(0, 1, 0.9);
         graph.add_edge(1, 3, 0.8);
         graph.add_edge(3, 4, 0.7);
-        
+
         // Path 2: 0 -> 2 -> 4
         graph.add_edge(0, 2, 0.6);
         graph.add_edge(2, 4, 0.5);
-        
+
         // Find paths from 0 to 4
         let paths = find_directed_paths(&graph, &[0], &[4], 5);
-        
+
         // Should find two paths
         assert_eq!(paths.len(), 2);
-        
+
         // Check path contents
-        let path_strings: Vec<String> = paths.iter()
-            .map(|p| format!("{:?}", p.nodes))
-            .collect();
-            
+        let path_strings: Vec<String> = paths.iter().map(|p| format!("{:?}", p.nodes)).collect();
+
         assert!(path_strings.contains(&"[0, 1, 3, 4]".to_string()));
         assert!(path_strings.contains(&"[0, 2, 4]".to_string()));
-        
+
         // Check confidence scores
         let path1 = paths.iter().find(|p| p.nodes == vec![0, 1, 3, 4]).unwrap();
         let path2 = paths.iter().find(|p| p.nodes == vec![0, 2, 4]).unwrap();
-        
+
         assert!((path1.confidence - 0.8).abs() < 0.01); // Average of 0.9, 0.8, 0.7
         assert!((path2.confidence - 0.55).abs() < 0.01); // Average of 0.6 and 0.5
     }
-} 
+}

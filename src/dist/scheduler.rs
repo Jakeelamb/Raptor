@@ -1,6 +1,6 @@
-use std::process::Command;
-use std::path::Path;
 use rayon::prelude::*;
+use std::path::Path;
+use std::process::Command;
 use tracing::info;
 
 /// Configuration for distributed job scheduling
@@ -36,8 +36,11 @@ pub fn run_parallel_assembly(
     min_len: usize,
     threads_per_job: usize,
 ) -> Vec<String> {
-    info!("Running parallel assembly on {} partitions", partition_files.len());
-    
+    info!(
+        "Running parallel assembly on {} partitions",
+        partition_files.len()
+    );
+
     let outputs: Vec<String> = partition_files
         .par_iter()
         .map(|input_file| {
@@ -45,32 +48,41 @@ pub fn run_parallel_assembly(
                 .file_stem()
                 .unwrap_or_default()
                 .to_string_lossy();
-                
+
             let output_file = format!("{}/{}.fasta", output_dir, file_stem);
             let _output_gfa = format!("{}/{}.gfa", output_dir, file_stem);
-            
+
             // Run the assembly for this partition
             let status = Command::new("cargo")
                 .args(&[
-                    "run", "--release", "--",
+                    "run",
+                    "--release",
+                    "--",
                     "assemble",
-                    "-i", input_file,
-                    "-o", &output_file,
-                    "--min-len", &min_len.to_string(),
-                    "--threads", &threads_per_job.to_string(),
+                    "-i",
+                    input_file,
+                    "-o",
+                    &output_file,
+                    "--min-len",
+                    &min_len.to_string(),
+                    "--threads",
+                    &threads_per_job.to_string(),
                     "--gfa",
                 ])
                 .status()
                 .expect("Failed to execute assembly command");
-                
+
             if !status.success() {
-                eprintln!("Warning: Assembly of {} failed with status: {}", input_file, status);
+                eprintln!(
+                    "Warning: Assembly of {} failed with status: {}",
+                    input_file, status
+                );
             }
-            
+
             output_file
         })
         .collect();
-        
+
     outputs
 }
 
@@ -111,20 +123,20 @@ pub fn submit_slurm_jobs(
     config: &DistributedConfig,
 ) -> Vec<String> {
     info!("Submitting {} Slurm jobs", partition_files.len());
-    
+
     let mut job_ids = Vec::new();
     let mut output_files = Vec::new();
-    
+
     for (i, input_file) in partition_files.iter().enumerate() {
         let job_name = format!("assemble_{}", i);
         let file_stem = Path::new(input_file)
             .file_stem()
             .unwrap_or_default()
             .to_string_lossy();
-            
+
         let output_file = format!("{}/{}.fasta", output_dir, file_stem);
         output_files.push(output_file.clone());
-        
+
         let script = generate_slurm_script(
             &job_name,
             input_file,
@@ -134,17 +146,17 @@ pub fn submit_slurm_jobs(
             config.max_runtime,
             config.memory_per_job,
         );
-        
+
         // Write the job script to a file
         let script_file = format!("{}/job_{}.sh", output_dir, i);
         std::fs::write(&script_file, script).expect("Failed to write job script");
-        
+
         // Submit the job
         let output = Command::new("sbatch")
             .arg(&script_file)
             .output()
             .expect("Failed to submit Slurm job");
-            
+
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if let Some(job_id) = stdout.trim().split_whitespace().last() {
@@ -154,8 +166,12 @@ pub fn submit_slurm_jobs(
             eprintln!("Failed to submit job for {}: {:?}", input_file, output);
         }
     }
-    
-    info!("Submitted {} Slurm jobs with IDs: {:?}", job_ids.len(), job_ids);
+
+    info!(
+        "Submitted {} Slurm jobs with IDs: {:?}",
+        job_ids.len(),
+        job_ids
+    );
     output_files
 }
 
@@ -168,28 +184,30 @@ pub fn run_distributed_assembly(
 ) -> Vec<String> {
     // Create the output directory
     std::fs::create_dir_all(output_dir).expect("Failed to create output directory");
-    
+
     // Partition the sequences
     let partitions = crate::dist::partition::partition_by_minimizer(
-        input_sequences, 
+        input_sequences,
         21, // k-mer size for partitioning
-        config.buckets
+        config.buckets,
     );
-    
+
     // Save partitions to files
     let partition_dir = format!("{}/partitions", output_dir);
-    let partition_files = crate::dist::partition::save_partitions(
-        &partitions,
-        &partition_dir,
-        "part"
-    );
-    
+    let partition_files =
+        crate::dist::partition::save_partitions(&partitions, &partition_dir, "part");
+
     // Run the assemblies
     let output_files = if config.use_slurm {
         submit_slurm_jobs(&partition_files, output_dir, min_len, config)
     } else {
-        run_parallel_assembly(&partition_files, output_dir, min_len, config.threads_per_job)
+        run_parallel_assembly(
+            &partition_files,
+            output_dir,
+            min_len,
+            config.threads_per_job,
+        )
     };
-    
+
     output_files
 }

@@ -1,7 +1,7 @@
-use std::time::Instant;
 use crate::io::fastq::{open_fastq, stream_fastq_records};
 use crate::kmer::nthash::NtHashIterator;
 use ahash::AHashMap;
+use std::time::Instant;
 
 /// Benchmark k-mer counting using ntHash for fast rolling updates.
 pub fn benchmark_kmer_counting(input: &str, k: usize) {
@@ -11,7 +11,10 @@ pub fn benchmark_kmer_counting(input: &str, k: usize) {
     let reader = open_fastq(input);
     let records = stream_fastq_records(reader);
 
-    println!("Starting k-mer counting benchmark with k={} (using ntHash)", k);
+    println!(
+        "Starting k-mer counting benchmark with k={} (using ntHash)",
+        k
+    );
 
     for record in records {
         // Use ntHash for O(1) rolling hash per k-mer
@@ -41,5 +44,8 @@ pub fn benchmark_kmer_counting(input: &str, k: usize) {
 
     println!("Total k-mers processed: {}", total_kmers);
     println!("Max k-mer frequency: {}", max_count);
-    println!("Average k-mer frequency: {:.2}", total_kmers as f64 / counts.len() as f64);
-} 
+    println!(
+        "Average k-mer frequency: {:.2}",
+        total_kmers as f64 / counts.len() as f64
+    );
+}

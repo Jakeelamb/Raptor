@@ -89,8 +89,8 @@ pub fn should_keep_read_pair(
     min_abund: u16,
 ) -> bool {
     // Keep a pair only if both reads should be kept
-    should_keep_read(r1, cms, k, target, min_abund) && 
-    should_keep_read(r2, cms, k, target, min_abund)
+    should_keep_read(r1, cms, k, target, min_abund)
+        && should_keep_read(r2, cms, k, target, min_abund)
 }
 
 fn median(values: &mut [u16]) -> u16 {

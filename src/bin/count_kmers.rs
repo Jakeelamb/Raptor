@@ -1,7 +1,7 @@
 use raptor::io::fastq::{open_fastq, stream_fastq_records};
 use raptor::kmer::cms::CountMinSketch;
-use raptor::kmer::nthash::NtHashIterator;
 use raptor::kmer::kmer::KmerU64;
+use raptor::kmer::nthash::NtHashIterator;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -59,31 +59,31 @@ fn main() {
             total_kmers += 1;
         }
     }
-    
+
     // Record the elapsed time
     let elapsed = start.elapsed();
-    
+
     // Extract and update the histogram from exact counts
     for &count in exact_counts.values() {
         *kmer_histogram.entry(count).or_insert(0) += 1;
     }
-    
+
     // Print statistics
     println!("\nStatistics:");
     println!("  Total reads processed: {}", total_reads);
     println!("  Total k-mers processed: {}", total_kmers);
     println!("  Unique k-mers tracked: {}", exact_counts.len());
     println!("  Processing time: {:.2?}", elapsed);
-    
+
     // Print histogram (top 10 frequencies)
     println!("\nK-mer frequency histogram (from exact counts):");
     let mut hist_entries: Vec<_> = kmer_histogram.into_iter().collect();
     hist_entries.sort_by_key(|&(count, _)| count);
-    
+
     for (count, occurrences) in hist_entries.iter().take(10) {
         println!("  Count {}: {} k-mers", count, occurrences);
     }
-    
+
     // Print top k-mers by frequency
     println!("\nTop 5 most frequent k-mers:");
     let mut top_kmers: Vec<_> = exact_counts.into_iter().collect();
@@ -94,6 +94,6 @@ fn main() {
         let kmer_str = raptor::kmer::kmer::decode_kmer(*kmer_encoded, k);
         println!("  {}: {} occurrences", kmer_str, count);
     }
-    
+
     println!("\nComplete.");
 }

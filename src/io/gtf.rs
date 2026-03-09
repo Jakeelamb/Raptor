@@ -1,6 +1,6 @@
 use crate::graph::transcript::Transcript;
 use std::fs::File;
-use std::io::{BufWriter, Write, Result};
+use std::io::{BufWriter, Result, Write};
 
 /// Write transcripts to GTF format
 ///
@@ -56,7 +56,7 @@ pub fn write_gtf(transcripts: &[Transcript], out_path: &str) -> Result<()> {
 pub fn write_detailed_gtf(
     transcripts: &[Transcript],
     out_path: &str,
-    exon_coords: Option<&Vec<Vec<(usize, usize)>>>
+    exon_coords: Option<&Vec<Vec<(usize, usize)>>>,
 ) -> Result<()> {
     let file = File::create(out_path)?;
     let mut writer = BufWriter::new(file);

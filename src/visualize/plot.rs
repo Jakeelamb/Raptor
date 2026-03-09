@@ -1,5 +1,5 @@
-use plotters::prelude::*;
 use ndarray::Array2;
+use plotters::prelude::*;
 
 /// Plot a heatmap visualization of the TPM matrix
 pub fn plot_heatmap(matrix: &Array2<f64>, output: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -30,10 +30,10 @@ pub fn plot_heatmap(matrix: &Array2<f64>, output: &str) -> Result<(), Box<dyn st
 
 /// Enhanced heatmap with row and column labels
 pub fn plot_heatmap_with_labels(
-    matrix: &Array2<f64>, 
-    row_labels: &[String], 
-    col_labels: &[String], 
-    output: &str
+    matrix: &Array2<f64>,
+    row_labels: &[String],
+    col_labels: &[String],
+    output: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(output, (1024, 768)).into_drawing_area();
     root.fill(&WHITE)?;
@@ -42,14 +42,15 @@ pub fn plot_heatmap_with_labels(
     let min_val = matrix.iter().cloned().fold(f64::MAX, f64::min);
 
     let drawing_area = root.margin(40, 40, 60, 120);
-    
+
     let mut chart = ChartBuilder::on(&drawing_area)
         .caption("TPM Heatmap", ("sans-serif", 30))
         .x_label_area_size(40)
         .y_label_area_size(60)
         .build_cartesian_2d(0..matrix.ncols(), 0..matrix.nrows())?;
 
-    chart.configure_mesh()
+    chart
+        .configure_mesh()
         .disable_mesh()
         .x_labels(matrix.ncols())
         .y_labels(matrix.nrows())
@@ -67,7 +68,11 @@ pub fn plot_heatmap_with_labels(
                 String::new()
             }
         })
-        .x_label_style(("sans-serif", 8).into_font().transform(FontTransform::Rotate90))
+        .x_label_style(
+            ("sans-serif", 8)
+                .into_font()
+                .transform(FontTransform::Rotate90),
+        )
         .draw()?;
 
     for (i, row) in matrix.axis_iter(ndarray::Axis(0)).enumerate() {
@@ -101,7 +106,7 @@ pub fn plot_heatmap_with_labels(
         (45, 30),
         ("sans-serif", 10).into_font(),
     ))?;
-    
+
     root.draw(&Text::new(
         format!("{:.1}", max_val),
         (135, 30),
@@ -109,4 +114,4 @@ pub fn plot_heatmap_with_labels(
     ))?;
 
     Ok(())
-} 
+}

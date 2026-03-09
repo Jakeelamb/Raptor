@@ -1,7 +1,7 @@
+use crate::graph::transcript::Transcript;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use crate::graph::transcript::Transcript;
 
 /// Generate matrix from isoform -> TPM mapping per sample
 pub fn write_counts_matrix(
@@ -33,33 +33,42 @@ pub fn read_tpm_matrix(path: &str) -> std::io::Result<HashMap<String, Vec<f64>>>
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let mut lines = reader.lines();
-    
+
     // Read header to get sample names
     let header = match lines.next() {
         Some(Ok(line)) => line,
-        _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Empty or invalid matrix file")),
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Empty or invalid matrix file",
+            ))
+        }
     };
-    
+
     let headers: Vec<&str> = header.split('\t').collect();
     if headers.len() < 2 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid matrix format - no sample columns found"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Invalid matrix format - no sample columns found",
+        ));
     }
-    
+
     // Initialize result map
     let mut result: HashMap<String, Vec<f64>> = HashMap::new();
-    for &h in headers.iter().skip(1) { // Skip transcript_id column
+    for &h in headers.iter().skip(1) {
+        // Skip transcript_id column
         result.insert(h.to_string(), Vec::new());
     }
-    
+
     // Process each data row
     for line in lines {
         let line = line?;
         let fields: Vec<&str> = line.split('\t').collect();
-        
+
         if fields.len() < headers.len() {
             continue; // Skip invalid lines
         }
-        
+
         // Parse each sample's TPM value
         for (idx, &sample) in headers.iter().skip(1).enumerate() {
             let col_idx = idx + 1; // +1 because we skipped the first column
@@ -73,7 +82,7 @@ pub fn read_tpm_matrix(path: &str) -> std::io::Result<HashMap<String, Vec<f64>>>
             }
         }
     }
-    
+
     Ok(result)
 }
 
@@ -85,7 +94,10 @@ pub fn read_tpm_matrix(path: &str) -> std::io::Result<HashMap<String, Vec<f64>>>
 ///
 /// # Returns
 /// * IO Result
-pub fn write_isoform_counts_matrix(transcripts: &[Transcript], out_path: &str) -> std::io::Result<()> {
+pub fn write_isoform_counts_matrix(
+    transcripts: &[Transcript],
+    out_path: &str,
+) -> std::io::Result<()> {
     let file = File::create(out_path)?;
     let mut w = BufWriter::new(file);
 
@@ -103,4 +115,4 @@ pub fn write_isoform_counts_matrix(transcripts: &[Transcript], out_path: &str) -
     }
 
     Ok(())
-} 
+}

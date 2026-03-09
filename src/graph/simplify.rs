@@ -5,26 +5,26 @@ use crate::kmer::rle::rle_encode;
 pub fn collapse_repeats(contigs: Vec<Contig>, _min_repeat_len: usize) -> Vec<Contig> {
     let mut collapsed: Vec<Contig> = Vec::new();
     let mut processed: Vec<bool> = vec![false; contigs.len()];
-    
+
     // Process each contig
     for i in 0..contigs.len() {
         if processed[i] {
             continue;
         }
-        
+
         // Mark current contig as processed
         processed[i] = true;
         collapsed.push(contigs[i].clone());
-        
+
         // Find and mark all similar contigs
         let seq1 = &contigs[i].sequence;
-        for j in (i+1)..contigs.len() {
+        for j in (i + 1)..contigs.len() {
             if processed[j] {
                 continue;
             }
-            
+
             let seq2 = &contigs[j].sequence;
-            
+
             // Check if sequences are similar
             // For test consistency, consider identical sequences as similar
             if seq1 == seq2 || is_rle_similar(seq1, seq2, 0.9) {
@@ -32,7 +32,7 @@ pub fn collapse_repeats(contigs: Vec<Contig>, _min_repeat_len: usize) -> Vec<Con
             }
         }
     }
-    
+
     collapsed
 }
 
@@ -41,24 +41,27 @@ pub fn collapse_repeats(contigs: Vec<Contig>, _min_repeat_len: usize) -> Vec<Con
 fn is_rle_similar(seq1: &str, seq2: &str, threshold: f64) -> bool {
     let rle1 = rle_encode(seq1);
     let rle2 = rle_encode(seq2);
-    
+
     // If lengths are too different, consider them dissimilar
-    if rle1.is_empty() || rle2.is_empty() || 
-       (rle1.len() as f64 - rle2.len() as f64).abs() / rle1.len() as f64 > 0.3 {
+    if rle1.is_empty()
+        || rle2.is_empty()
+        || (rle1.len() as f64 - rle2.len() as f64).abs() / rle1.len() as f64 > 0.3
+    {
         return false;
     }
-    
+
     // Compare the base types and their frequencies
     let mut matches = 0;
     let total = rle1.len().max(rle2.len());
-    
+
     for i in 0..rle1.len().min(rle2.len()) {
-        if rle1[i].0 == rle2[i].0 && 
-           (rle1[i].1 as f64 - rle2[i].1 as f64).abs() / rle1[i].1.max(1) as f64 <= 0.2 {
+        if rle1[i].0 == rle2[i].0
+            && (rle1[i].1 as f64 - rle2[i].1 as f64).abs() / rle1[i].1.max(1) as f64 <= 0.2
+        {
             matches += 1;
         }
     }
-    
+
     (matches as f64 / total as f64) >= threshold
 }
 
@@ -85,19 +88,19 @@ mod tests {
         let contig1 = Contig {
             id: 1,
             sequence: "ATATATATATAT".to_string(),
-            kmer_path: vec![encode_kmer("ATG").unwrap(), encode_kmer("TGC").unwrap()]
+            kmer_path: vec![encode_kmer("ATG").unwrap(), encode_kmer("TGC").unwrap()],
         };
 
         let contig2 = Contig {
             id: 2,
             sequence: "ATATATATATAT".to_string(),
-            kmer_path: vec![encode_kmer("GCA").unwrap(), encode_kmer("CAT").unwrap()]
+            kmer_path: vec![encode_kmer("GCA").unwrap(), encode_kmer("CAT").unwrap()],
         };
 
         let contig3 = Contig {
             id: 3,
             sequence: "GCGCGCGCGCGC".to_string(),
-            kmer_path: vec![encode_kmer("GCG").unwrap(), encode_kmer("CGC").unwrap()]
+            kmer_path: vec![encode_kmer("GCG").unwrap(), encode_kmer("CGC").unwrap()],
         };
 
         let contigs = vec![contig1, contig2, contig3];
@@ -116,4 +119,4 @@ mod tests {
         let contains_different = collapsed.iter().any(|c| c.sequence == "GCGCGCGCGCGC");
         assert!(contains_different);
     }
-} 
+}

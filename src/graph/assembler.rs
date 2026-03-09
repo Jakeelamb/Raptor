@@ -1,10 +1,10 @@
 // src/graph/assembler.rs
-use std::collections::{HashMap, HashSet};
+use crate::accel::backend::AdjacencyTableU64;
 #[allow(deprecated)]
 use crate::kmer::kmer::canonical_kmer;
 use crate::kmer::kmer::decode_kmer;
-use crate::accel::backend::AdjacencyTableU64;
 use ahash::{AHashMap, AHashSet};
+use std::collections::{HashMap, HashSet};
 
 /// Base lookup table for decoding 2-bit encoded nucleotides
 /// A=00, C=01, G=10, T=11
@@ -29,7 +29,11 @@ impl Contig {
 /// DEPRECATED: Use greedy_assembly_u64 for 6x memory reduction.
 #[deprecated(note = "Use greedy_assembly_u64 for better performance")]
 #[allow(deprecated)]
-pub fn greedy_assembly(k: usize, kmer_counts: &HashMap<String, u32>, min_len: usize) -> Vec<Contig> {
+pub fn greedy_assembly(
+    k: usize,
+    kmer_counts: &HashMap<String, u32>,
+    min_len: usize,
+) -> Vec<Contig> {
     use crate::kmer::kmer::encode_kmer;
 
     let mut used = HashSet::new();
@@ -46,7 +50,7 @@ pub fn greedy_assembly(k: usize, kmer_counts: &HashMap<String, u32>, min_len: us
 
     // Sort by descending count
     let mut sorted_kmers: Vec<_> = kmer_info.iter().collect();
-    sorted_kmers.sort_unstable_by(|a, b| b.1.1.cmp(&a.1.1));
+    sorted_kmers.sort_unstable_by(|a, b| b.1 .1.cmp(&a.1 .1));
 
     // Debug information
     println!("Number of kmers: {}", sorted_kmers.len());
@@ -60,27 +64,29 @@ pub fn greedy_assembly(k: usize, kmer_counts: &HashMap<String, u32>, min_len: us
         let bases = ["A", "C", "G", "T"];
 
         // Try extensions on suffix
-        if kmer.len() >= k-1 {
+        if kmer.len() >= k - 1 {
             let suffix = &kmer[1..];
             for base in &bases {
                 let next = format!("{}{}", suffix, base);
                 if let Some(&(_, count)) = kmer_info.get(&next) {
-                    adjacency.entry(kmer.clone())
-                             .or_default()
-                             .push((next.clone(), count));
+                    adjacency
+                        .entry(kmer.clone())
+                        .or_default()
+                        .push((next.clone(), count));
                 }
             }
         }
 
         // Try extensions on prefix
-        if kmer.len() >= k-1 {
-            let prefix = &kmer[..kmer.len()-1];
+        if kmer.len() >= k - 1 {
+            let prefix = &kmer[..kmer.len() - 1];
             for base in &bases {
                 let prev = format!("{}{}", base, prefix);
                 if let Some(&(_, count)) = kmer_info.get(&prev) {
-                    adjacency.entry(prev.clone())
-                             .or_default()
-                             .push((kmer.clone(), count));
+                    adjacency
+                        .entry(prev.clone())
+                        .or_default()
+                        .push((kmer.clone(), count));
                 }
             }
         }
@@ -132,7 +138,12 @@ pub fn greedy_assembly(k: usize, kmer_counts: &HashMap<String, u32>, min_len: us
                 kmer_path: path,
             });
         } else {
-            println!("Contig too short: {} (length: {}, min: {})", contig, contig.len(), min_len);
+            println!(
+                "Contig too short: {} (length: {}, min: {})",
+                contig,
+                contig.len(),
+                min_len
+            );
         }
     }
 
@@ -280,7 +291,10 @@ pub fn remove_tips(
             continue;
         }
 
-        let in_degree = adjacency.get_predecessors(kmer).map(|v| v.len()).unwrap_or(0);
+        let in_degree = adjacency
+            .get_predecessors(kmer)
+            .map(|v| v.len())
+            .unwrap_or(0);
         let out_degree = adjacency.get_successors(kmer).map(|v| v.len()).unwrap_or(0);
 
         // Dead-end: only one direction connected

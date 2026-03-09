@@ -158,7 +158,11 @@ pub fn decode_kmer(encoded: u64, k: usize) -> String {
 #[inline]
 pub fn canonical_kmer_u64(encoded: u64, k: usize) -> u64 {
     let rc = reverse_complement_u64(encoded, k);
-    if encoded <= rc { encoded } else { rc }
+    if encoded <= rc {
+        encoded
+    } else {
+        rc
+    }
 }
 
 /// Compute reverse complement of u64-encoded k-mer using bit manipulation.
@@ -193,7 +197,7 @@ pub fn canonical_kmer(seq: &str) -> Option<String> {
 
     // Get the reverse complement
     let rc = reverse_complement(seq);
-    
+
     // Return the lexicographically smaller one
     // Important: We preserve the original string format without converting to uppercase
     if seq.to_string() <= rc {

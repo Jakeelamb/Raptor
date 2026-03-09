@@ -1,29 +1,35 @@
-use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
-use std::fs::File;
 use crate::graph::transcript::Transcript;
 use crate::io::fastq::FastqRecord;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 
 /// Parse mapped reads from SAM (transcript_id → sequences)
-pub fn group_alignments_by_transcript(sam_path: &str) -> Result<HashMap<String, Vec<String>>, std::io::Error> {
+pub fn group_alignments_by_transcript(
+    sam_path: &str,
+) -> Result<HashMap<String, Vec<String>>, std::io::Error> {
     let mut map: HashMap<String, Vec<String>> = HashMap::new();
     let file = File::open(sam_path)?;
-    
+
     for line in BufReader::new(file).lines() {
         let line = line?;
-        if line.starts_with('@') { continue; } // Skip header lines
-        
+        if line.starts_with('@') {
+            continue;
+        } // Skip header lines
+
         let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() < 10 || fields[2] == "*" { continue; } // Skip unmapped or invalid alignments
-        
+        if fields.len() < 10 || fields[2] == "*" {
+            continue;
+        } // Skip unmapped or invalid alignments
+
         let tx_id = fields[2].to_string();
         let seq = fields[9].to_string();
-        
+
         if !seq.is_empty() {
             map.entry(tx_id).or_default().push(seq);
         }
     }
-    
+
     Ok(map)
 }
 
@@ -36,7 +42,7 @@ pub fn polish_transcript(seq: &str, reads: &[String]) -> String {
 
     // Create count matrix for each base position (A, C, G, T)
     let mut counts = vec![[0u32; 4]; seq.len()];
-    
+
     // Count nucleotide occurrences at each position
     for read in reads {
         let len = read.len().min(seq.len());
@@ -52,21 +58,25 @@ pub fn polish_transcript(seq: &str, reads: &[String]) -> String {
     }
 
     // Build polished sequence by choosing the most frequent base at each position
-    let polished: String = counts.iter().enumerate().map(|(i, arr)| {
-        // If no reads cover this position, keep original base
-        if arr.iter().sum::<u32>() == 0 {
-            return seq.chars().nth(i).unwrap_or('N');
-        }
-        
-        // Otherwise choose the most frequent base
-        match arr.iter().enumerate().max_by_key(|&(_, &v)| v) {
-            Some((0, _)) => 'A',
-            Some((1, _)) => 'C',
-            Some((2, _)) => 'G',
-            Some((3, _)) => 'T',
-            _ => 'N', // Fallback (should not happen)
-        }
-    }).collect();
+    let polished: String = counts
+        .iter()
+        .enumerate()
+        .map(|(i, arr)| {
+            // If no reads cover this position, keep original base
+            if arr.iter().sum::<u32>() == 0 {
+                return seq.chars().nth(i).unwrap_or('N');
+            }
+
+            // Otherwise choose the most frequent base
+            match arr.iter().enumerate().max_by_key(|&(_, &v)| v) {
+                Some((0, _)) => 'A',
+                Some((1, _)) => 'C',
+                Some((2, _)) => 'G',
+                Some((3, _)) => 'T',
+                _ => 'N', // Fallback (should not happen)
+            }
+        })
+        .collect();
 
     polished
 }
@@ -74,11 +84,11 @@ pub fn polish_transcript(seq: &str, reads: &[String]) -> String {
 /// Polish a set of transcripts using long read alignments
 pub fn polish_transcripts(
     transcripts: &mut [Transcript],
-    sam_path: &str
+    sam_path: &str,
 ) -> Result<usize, std::io::Error> {
     let alignments = group_alignments_by_transcript(sam_path)?;
     let mut polished_count = 0;
-    
+
     for t in transcripts {
         let tx_id = format!("transcript_{}", t.id);
         if let Some(reads) = alignments.get(&tx_id) {
@@ -88,7 +98,7 @@ pub fn polish_transcripts(
             }
         }
     }
-    
+
     Ok(polished_count)
 }
 
@@ -104,23 +114,23 @@ pub fn polish_transcripts(
 /// # Returns
 /// * Vector of polished transcripts
 pub fn polish_transcripts_with_long_reads(
-    transcripts: &[Transcript], 
-    long_reads: &[FastqRecord]
+    transcripts: &[Transcript],
+    long_reads: &[FastqRecord],
 ) -> Vec<Transcript> {
     // Clone the transcripts for modification
     let mut polished = transcripts.to_vec();
-    
+
     // For each transcript, try to find long reads that align to it
     for transcript in &mut polished {
         // Find long reads that match this transcript
         let aligned_reads = find_aligned_reads(&transcript.sequence, long_reads);
-        
+
         if !aligned_reads.is_empty() {
             // Polish the sequence using aligned reads
             transcript.sequence = polish_sequence(&transcript.sequence, &aligned_reads);
         }
     }
-    
+
     polished
 }
 
@@ -135,8 +145,9 @@ pub fn polish_transcripts_with_long_reads(
 fn find_aligned_reads(transcript_seq: &str, long_reads: &[FastqRecord]) -> Vec<FastqRecord> {
     // In a real implementation, we would use a proper alignment algorithm
     // For this example, we'll use a simple substring match as a placeholder
-    
-    long_reads.iter()
+
+    long_reads
+        .iter()
         .filter(|read| {
             // Use a sliding window to check for partial matches
             let min_overlap = std::cmp::min(read.sequence.len(), transcript_seq.len()) / 2;
@@ -164,7 +175,7 @@ fn polish_sequence(seq: &str, reads: &[FastqRecord]) -> String {
     // Convert sequence to nucleotide array for consensus building
     let seq_len = seq.len();
     let mut consensus_counts = vec![[0u32; 5]; seq_len]; // A, C, G, T, N
-    
+
     // For each aligned read, update the consensus counts
     for read in reads {
         // In a real implementation, we would use the actual alignment positions
@@ -173,7 +184,7 @@ fn polish_sequence(seq: &str, reads: &[FastqRecord]) -> String {
             update_consensus_counts(&mut consensus_counts, pos, &read.sequence);
         }
     }
-    
+
     // Build consensus sequence
     build_consensus_sequence(&consensus_counts)
 }
@@ -190,7 +201,7 @@ fn find_approximate_position(reference: &str, read: &str) -> Option<usize> {
     // Simple sliding window search for a match
     let window_size = std::cmp::min(30, read.len());
     let read_prefix = &read[0..window_size];
-    
+
     reference.find(read_prefix)
 }
 
@@ -206,7 +217,7 @@ fn update_consensus_counts(counts: &mut Vec<[u32; 5]>, start_pos: usize, read_se
         if ref_pos >= counts.len() {
             break;
         }
-        
+
         let idx = match c {
             b'A' | b'a' => 0,
             b'C' | b'c' => 1,
@@ -214,7 +225,7 @@ fn update_consensus_counts(counts: &mut Vec<[u32; 5]>, start_pos: usize, read_se
             b'T' | b't' => 3,
             _ => 4, // N or any other character
         };
-        
+
         counts[ref_pos][idx] += 1;
     }
 }
@@ -227,19 +238,23 @@ fn update_consensus_counts(counts: &mut Vec<[u32; 5]>, start_pos: usize, read_se
 /// # Returns
 /// * Consensus sequence
 fn build_consensus_sequence(counts: &Vec<[u32; 5]>) -> String {
-    counts.iter().map(|pos_counts| {
-        let max_idx = pos_counts.iter()
-            .enumerate()
-            .max_by_key(|(_, &count)| count)
-            .map(|(idx, _)| idx)
-            .unwrap_or(4);
-        
-        match max_idx {
-            0 => 'A',
-            1 => 'C',
-            2 => 'G',
-            3 => 'T',
-            _ => 'N',
-        }
-    }).collect()
-} 
+    counts
+        .iter()
+        .map(|pos_counts| {
+            let max_idx = pos_counts
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, &count)| count)
+                .map(|(idx, _)| idx)
+                .unwrap_or(4);
+
+            match max_idx {
+                0 => 'A',
+                1 => 'C',
+                2 => 'G',
+                3 => 'T',
+                _ => 'N',
+            }
+        })
+        .collect()
+}

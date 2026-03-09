@@ -38,6 +38,8 @@ fn main() {
     #[cfg(not(feature = "gpu"))]
     {
         let _ = (k, sequences); // Suppress unused warnings
-        println!("GPU support is not enabled. Compile with '--features gpu' to enable GPU support.");
+        println!(
+            "GPU support is not enabled. Compile with '--features gpu' to enable GPU support."
+        );
     }
 }

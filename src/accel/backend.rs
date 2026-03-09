@@ -1,8 +1,8 @@
 //! Backend abstraction for compute operations
 #![allow(dead_code)]
 
-use std::collections::HashMap;
 use ahash::AHashMap;
+use std::collections::HashMap;
 
 /// Adjacency table for k-mer graph traversal (String-based, legacy)
 #[derive(Debug, Clone, Default)]
@@ -22,7 +22,10 @@ impl AdjacencyTable {
     }
 
     pub fn add_edge(&mut self, from: String, to: String, count: u32) {
-        self.forward.entry(from.clone()).or_default().push((to.clone(), count));
+        self.forward
+            .entry(from.clone())
+            .or_default()
+            .push((to.clone(), count));
         self.backward.entry(to).or_default().push((from, count));
     }
 }
@@ -115,7 +118,12 @@ pub trait ComputeBackend: Send + Sync {
     ///
     /// # Returns
     /// Vector of (from_idx, to_idx, overlap_len) tuples
-    fn find_overlaps(&self, contigs: &[String], min_overlap: usize, max_mismatch: usize) -> Vec<(usize, usize, usize)>;
+    fn find_overlaps(
+        &self,
+        contigs: &[String],
+        min_overlap: usize,
+        max_mismatch: usize,
+    ) -> Vec<(usize, usize, usize)>;
 
     /// Build k-mer adjacency table for graph assembly
     ///

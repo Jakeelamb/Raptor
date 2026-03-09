@@ -1,7 +1,7 @@
-use std::collections::{HashSet, HashMap};
+use bio::data_structures::interval_tree::IntervalTree;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Result as IoResult};
-use bio::data_structures::interval_tree::IntervalTree;
 
 /// A transcript location with chromosome, start, and end positions
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
@@ -107,9 +107,7 @@ pub fn calculate_metrics(tp: usize, fp: usize, fn_: usize) -> (f64, f64, f64) {
 }
 
 /// Load exon information from a GTF file into interval trees for more complex overlap analysis
-pub fn load_exon_intervals(
-    path: &str,
-) -> IoResult<HashMap<String, IntervalTree<usize, String>>> {
+pub fn load_exon_intervals(path: &str) -> IoResult<HashMap<String, IntervalTree<usize, String>>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let mut interval_map: HashMap<String, IntervalTree<usize, String>> = HashMap::new();
@@ -165,10 +163,7 @@ pub fn load_exon_intervals(
 }
 
 /// Advanced GTF comparison using interval trees to find overlapping exons
-pub fn compare_gtf_advanced(
-    truth: &str,
-    predicted: &str,
-) -> IoResult<(usize, usize, usize, f64)> {
+pub fn compare_gtf_advanced(truth: &str, predicted: &str) -> IoResult<(usize, usize, usize, f64)> {
     // Load interval trees for both files
     let true_intervals = load_exon_intervals(truth)?;
     let pred_intervals = load_exon_intervals(predicted)?;
@@ -194,7 +189,7 @@ pub fn compare_gtf_advanced(
                     fp += 1; // No overlapping exon found
                 } else {
                     tp += 1; // Found at least one overlapping exon
-                    
+
                     // Calculate overlap percentage for evaluation
                     for overlap in overlaps {
                         let range = overlap.interval();
@@ -202,7 +197,7 @@ pub fn compare_gtf_advanced(
                         let overlap_end = range.end.min(pred_end);
                         let overlap_len = overlap_end - overlap_start;
                         let overlap_percent = overlap_len as f64 / pred_len as f64;
-                        
+
                         overlap_sum += overlap_percent;
                         overlap_count += 1;
                     }
@@ -221,7 +216,7 @@ pub fn compare_gtf_advanced(
             for entry in intervals.find(0..usize::MAX) {
                 let true_start = entry.interval().start;
                 let true_end = entry.interval().end;
-                
+
                 let overlaps: Vec<_> = pred_tree.find(true_start..true_end).collect();
                 if overlaps.is_empty() {
                     fn_ += 1; // No predicted exon overlapping this true exon
@@ -240,4 +235,4 @@ pub fn compare_gtf_advanced(
     };
 
     Ok((tp, fp, fn_, avg_overlap))
-} 
+}

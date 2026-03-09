@@ -6,20 +6,25 @@ pub fn polish_sequence(seq: &str, reads: &[FastqRecord], _k: usize) -> String {
         if let Some(pos) = seq.find(&read.sequence) {
             for (i, c) in read.sequence.bytes().enumerate() {
                 let idx = match c {
-                    b'A' => 0, b'C' => 1, b'G' => 2, b'T' => 3, _ => continue,
+                    b'A' => 0,
+                    b'C' => 1,
+                    b'G' => 2,
+                    b'T' => 3,
+                    _ => continue,
                 };
                 counts[pos + i][idx] += 1;
             }
         }
     }
 
-    counts.iter().map(|arr| {
-        match arr.iter().enumerate().max_by_key(|(_, &v)| v) {
+    counts
+        .iter()
+        .map(|arr| match arr.iter().enumerate().max_by_key(|(_, &v)| v) {
             Some((0, _)) => 'A',
             Some((1, _)) => 'C',
             Some((2, _)) => 'G',
             Some((3, _)) => 'T',
             _ => 'N',
-        }
-    }).collect()
-} 
+        })
+        .collect()
+}

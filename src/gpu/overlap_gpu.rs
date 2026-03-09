@@ -1,5 +1,5 @@
 #[cfg(feature = "gpu")]
-use ocl::{Buffer, ProQue, flags};
+use ocl::{flags, Buffer, ProQue};
 
 /// GPU-accelerated overlap detection between contigs
 #[cfg(feature = "gpu")]
@@ -25,7 +25,10 @@ impl GpuOverlapFinder {
             .build()
             .map_err(|e| format!("Failed to build OpenCL program: {}", e))?;
 
-        Ok(GpuOverlapFinder { pro_que, max_results })
+        Ok(GpuOverlapFinder {
+            pro_que,
+            max_results,
+        })
     }
 
     /// Find overlaps between contigs
@@ -161,12 +164,15 @@ impl GpuOverlapFinder {
 
         // Execute kernel
         unsafe {
-            kernel.enq().map_err(|e| format!("Failed to execute kernel: {}", e))?;
+            kernel
+                .enq()
+                .map_err(|e| format!("Failed to execute kernel: {}", e))?;
         }
 
         // Read back result count
         let mut count = vec![0i32; 1];
-        count_buf.read(&mut count)
+        count_buf
+            .read(&mut count)
             .enq()
             .map_err(|e| format!("Failed to read count: {}", e))?;
 
@@ -181,15 +187,18 @@ impl GpuOverlapFinder {
         let mut to_indices = vec![0i32; result_count];
         let mut overlap_lens = vec![0i32; result_count];
 
-        from_buf.read(&mut from_indices)
+        from_buf
+            .read(&mut from_indices)
             .enq()
             .map_err(|e| format!("Failed to read from indices: {}", e))?;
 
-        to_buf.read(&mut to_indices)
+        to_buf
+            .read(&mut to_indices)
             .enq()
             .map_err(|e| format!("Failed to read to indices: {}", e))?;
 
-        len_buf.read(&mut overlap_lens)
+        len_buf
+            .read(&mut overlap_lens)
             .enq()
             .map_err(|e| format!("Failed to read overlap lengths: {}", e))?;
 

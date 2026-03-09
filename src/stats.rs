@@ -1,6 +1,6 @@
 use crate::io::fasta::open_fasta;
+use serde::Serialize;
 use std::io::BufRead;
-use serde::{Serialize};
 
 #[derive(Serialize)]
 pub struct Stats {
@@ -46,15 +46,24 @@ pub fn calculate_stats(path: &str) -> Stats {
 
     lengths.sort_unstable();
     let total_contigs = lengths.len();
-    let avg = if total_contigs > 0 { total as f64 / total_contigs as f64 } else { 0.0 };
+    let avg = if total_contigs > 0 {
+        total as f64 / total_contigs as f64
+    } else {
+        0.0
+    };
 
     // Calculate N50
     let mut acc = 0;
     let half_total = total / 2;
-    let n50 = lengths.iter().rev().find(|&&len| {
-        acc += len;
-        acc >= half_total
-    }).copied().unwrap_or(0);
+    let n50 = lengths
+        .iter()
+        .rev()
+        .find(|&&len| {
+            acc += len;
+            acc >= half_total
+        })
+        .copied()
+        .unwrap_or(0);
 
     Stats {
         total_contigs,
@@ -73,7 +82,7 @@ pub fn calculate_graph_stats(path: &str) -> Option<crate::graph::complexity::Pat
     if !path.to_lowercase().ends_with(".gfa") {
         return None;
     }
-    
+
     // Use the new compute_path_stats function that takes a GFA file path
     match crate::graph::complexity::compute_path_stats(path) {
         Ok(stats) => Some(stats),
@@ -85,7 +94,10 @@ pub fn calculate_graph_stats(path: &str) -> Option<crate::graph::complexity::Pat
 }
 
 /// Update Stats object with graph complexity information
-pub fn update_with_graph_stats(stats: &mut Stats, graph_stats: &crate::graph::complexity::PathStats) {
+pub fn update_with_graph_stats(
+    stats: &mut Stats,
+    graph_stats: &crate::graph::complexity::PathStats,
+) {
     stats.path_count = Some(graph_stats.total_paths);
     stats.avg_path_length = Some(graph_stats.average_length);
     stats.branch_count = Some(graph_stats.branch_count);
@@ -109,10 +121,10 @@ mod tests {
         writeln!(file, "ATCG").unwrap(); // 4 bp
 
         let stats = calculate_stats(file.path().to_str().unwrap());
-        
+
         assert_eq!(stats.total_contigs, 3);
         assert_eq!(stats.total_length, 48);
         assert_eq!(stats.average_length, 16.0);
         assert_eq!(stats.n50, 24); // N50 should be 24
     }
-} 
+}

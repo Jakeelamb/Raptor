@@ -73,7 +73,8 @@ pub fn polish_contig(sequence: &str, reads: &[FastqRecord], window: usize) -> St
             }
 
             // Only update if we have strong evidence
-            if max_count >= 3 {  // Require at least 3 reads supporting the change
+            if max_count >= 3 {
+                // Require at least 3 reads supporting the change
                 polished[i + k] = match max_idx {
                     0 => b'A',
                     1 => b'C',
@@ -114,10 +115,7 @@ pub fn polish_contig_parallel(
     let seq_bytes = sequence.as_bytes();
 
     // Create atomic byte array for thread-safe updates
-    let polished: Vec<AtomicU8> = seq_bytes
-        .iter()
-        .map(|&b| AtomicU8::new(b))
-        .collect();
+    let polished: Vec<AtomicU8> = seq_bytes.iter().map(|&b| AtomicU8::new(b)).collect();
 
     // Divide into overlapping chunks
     let overlap = window; // Overlap by window size for boundary handling
@@ -211,17 +209,14 @@ pub fn polish_contig_parallel(
     });
 
     // Collect results
-    let result: Vec<u8> = polished
-        .iter()
-        .map(|a| a.load(Ordering::Relaxed))
-        .collect();
+    let result: Vec<u8> = polished.iter().map(|a| a.load(Ordering::Relaxed)).collect();
 
     String::from_utf8(result).unwrap()
 }
 
 /// Polish the given contig sequence using consensus from aligned reads.
 /// Uses a sliding window and counts nucleotide frequencies to make corrections.
-/// 
+///
 /// Parameters:
 /// - contig: The DNA sequence to polish
 /// - aligned_reads: A vector of DNA sequences that align to the contig
@@ -229,60 +224,66 @@ pub fn polish_contig_parallel(
 ///
 /// Returns:
 /// The polished DNA sequence
-pub fn polish_contig_string(contig: &str, aligned_reads: &[String], correction_threshold: f32) -> String {
+pub fn polish_contig_string(
+    contig: &str,
+    aligned_reads: &[String],
+    correction_threshold: f32,
+) -> String {
     let mut polished = contig.to_string();
     let window_size = 5;
-    
+
     // Convert sequence to bytes for easier processing
     let contig_bytes = contig.as_bytes();
     let length = contig_bytes.len();
-    
+
     if length == 0 || aligned_reads.is_empty() {
         return polished;
     }
-    
+
     // Iterate through each position in the contig
     for i in 0..length {
         // Skip if not enough context for the window
         if i < window_size / 2 || i >= length - window_size / 2 {
             continue;
         }
-        
+
         // Count nucleotide occurrences at this position
         let mut counts: HashMap<u8, usize> = HashMap::new();
-        
+
         // Add weight for the original base
         *counts.entry(contig_bytes[i]).or_insert(0) += 1;
-        
+
         // Count bases from aligned reads at this position
         for read in aligned_reads {
             let read_bytes = read.as_bytes();
             let read_len = read_bytes.len();
-            
+
             // Only consider reads that cover this position
             if read_len <= i {
                 continue;
             }
-            
+
             // Check if read contains this position
             if let Some(&base) = read_bytes.get(i) {
                 *counts.entry(base).or_insert(0) += 1;
             }
         }
-        
+
         // Find the base with the highest count
         if let Some((best_base, count)) = counts.iter().max_by_key(|&(_, count)| count) {
             let total_coverage: usize = counts.values().sum();
-            
+
             // Only correct if the best base is different and exceeds threshold
-            if *best_base != contig_bytes[i] && (*count as f32 / total_coverage as f32) > correction_threshold {
+            if *best_base != contig_bytes[i]
+                && (*count as f32 / total_coverage as f32) > correction_threshold
+            {
                 // Replace the base at this position
                 let bytes = unsafe { polished.as_bytes_mut() };
                 bytes[i] = *best_base;
             }
         }
     }
-    
+
     polished
 }
 
@@ -292,34 +293,33 @@ pub fn hybrid_polish_contig(
     short_reads: &[FastqRecord],
     long_reads: &[FastqRecord],
     correction_threshold: f32,
-    window_size: usize
+    window_size: usize,
 ) -> String {
     use crate::io::longread::{align_long_reads, filter_nanopore_reads};
-    
+
     // First filter long reads to remove very short ones
     let filtered_long_reads = filter_nanopore_reads(long_reads, 500);
-    
+
     // Get short read sequences
-    let short_read_sequences: Vec<String> = short_reads.iter()
-        .map(|r| r.sequence.clone())
-        .collect();
-    
+    let short_read_sequences: Vec<String> =
+        short_reads.iter().map(|r| r.sequence.clone()).collect();
+
     // First pass: polish with short reads only for high accuracy
     let short_polished = polish_contig(contig, short_reads, window_size);
-    
+
     // Second pass: use both short reads and long reads for better coverage
     let mut all_read_seqs = short_read_sequences;
-    
+
     // Align long reads to the short-polished contig
     let long_read_alignments = align_long_reads(&short_polished, &filtered_long_reads);
-    
+
     // Extract aligned portions of long reads
     for (start, end) in long_read_alignments {
         if start < short_polished.len() && end <= short_polished.len() {
             all_read_seqs.push(short_polished[start..end].to_string());
         }
     }
-    
+
     // Final polish using all aligned reads
     polish_contig_string(&short_polished, &all_read_seqs, correction_threshold)
 }
@@ -332,7 +332,7 @@ mod tests {
     fn test_polish_contig() {
         // Create a simple draft contig
         let draft = "ACACGTGTCGATCG";
-        
+
         // Create many reads that have the same error correction (G -> T at position 6)
         let reads = vec![
             FastqRecord {
@@ -358,15 +358,22 @@ mod tests {
                 sequence: "ACACGTTTCGATCG".to_string(), // G -> T
                 plus: "+".to_string(),
                 quality: "IIIIIIIIIIIII".to_string(),
-            }
+            },
         ];
-        
+
         // Verify our implementation doesn't crash
         let polished = polish_contig(draft, &reads, 5);
-        
+
         // For this test, we're just checking that the function runs without errors
         // and returns a valid string of the expected length
-        assert_eq!(polished.len(), draft.len(), "Polished sequence should maintain the same length");
-        assert!(polished.is_ascii(), "Polished sequence should remain valid ASCII");
+        assert_eq!(
+            polished.len(),
+            draft.len(),
+            "Polished sequence should maintain the same length"
+        );
+        assert!(
+            polished.is_ascii(),
+            "Polished sequence should remain valid ASCII"
+        );
     }
-} 
+}

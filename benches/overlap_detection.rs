@@ -1,8 +1,8 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
-use raptor::accel::cpu_backend::CpuBackend;
-use raptor::accel::backend::ComputeBackend;
-use raptor::kmer::minimizer::{get_minimizers, MinimizerIndex};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::Rng;
+use raptor::accel::backend::ComputeBackend;
+use raptor::accel::cpu_backend::CpuBackend;
+use raptor::kmer::minimizer::{get_minimizers, MinimizerIndex};
 
 /// Generate random DNA contigs for benchmarking
 fn generate_contigs(num_contigs: usize, contig_len: usize) -> Vec<String> {
@@ -19,7 +19,11 @@ fn generate_contigs(num_contigs: usize, contig_len: usize) -> Vec<String> {
 }
 
 /// Generate contigs with deliberate overlaps for testing
-fn generate_overlapping_contigs(num_contigs: usize, contig_len: usize, overlap_len: usize) -> Vec<String> {
+fn generate_overlapping_contigs(
+    num_contigs: usize,
+    contig_len: usize,
+    overlap_len: usize,
+) -> Vec<String> {
     let mut rng = rand::thread_rng();
     let bases = ['A', 'C', 'G', 'T'];
 
@@ -64,9 +68,7 @@ fn bench_overlap_detection(c: &mut Criterion) {
             &contigs,
             |b, ctgs| {
                 let backend = CpuBackend::new();
-                b.iter(|| {
-                    black_box(backend.find_overlaps(ctgs, 20, 2))
-                });
+                b.iter(|| black_box(backend.find_overlaps(ctgs, 20, 2)));
             },
         );
     }
@@ -85,15 +87,9 @@ fn bench_minimizer_extraction(c: &mut Criterion) {
 
     // Different window sizes
     for w in [3, 5, 10] {
-        group.bench_with_input(
-            BenchmarkId::new("window_size", w),
-            &w,
-            |b, &w| {
-                b.iter(|| {
-                    black_box(get_minimizers(bytes, 15, w))
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("window_size", w), &w, |b, &w| {
+            b.iter(|| black_box(get_minimizers(bytes, 15, w)));
+        });
     }
 
     group.finish();
@@ -117,9 +113,7 @@ fn bench_minimizer_index(c: &mut Criterion) {
             BenchmarkId::new("build_index", num_seqs),
             &sequences,
             |b, seqs| {
-                b.iter(|| {
-                    black_box(MinimizerIndex::build(seqs, 15, 5))
-                });
+                b.iter(|| black_box(MinimizerIndex::build(seqs, 15, 5)));
             },
         );
 
@@ -131,9 +125,7 @@ fn bench_minimizer_index(c: &mut Criterion) {
             BenchmarkId::new("query_index", num_seqs),
             &(index, query),
             |b, (idx, q)| {
-                b.iter(|| {
-                    black_box(idx.find_overlap_candidates(q, 2))
-                });
+                b.iter(|| black_box(idx.find_overlap_candidates(q, 2)));
             },
         );
     }
@@ -141,5 +133,10 @@ fn bench_minimizer_index(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_overlap_detection, bench_minimizer_extraction, bench_minimizer_index);
+criterion_group!(
+    benches,
+    bench_overlap_detection,
+    bench_minimizer_extraction,
+    bench_minimizer_index
+);
 criterion_main!(benches);

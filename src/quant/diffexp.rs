@@ -51,8 +51,7 @@ fn t_test(a: &[f64], b: &[f64]) -> f64 {
     let mean_a = a.iter().sum::<f64>() / a.len() as f64;
     let mean_b = b.iter().sum::<f64>() / b.len() as f64;
 
-    let t = (mean_a - mean_b).abs()
-        / ((var_a / a.len() as f64) + (var_b / b.len() as f64)).sqrt();
+    let t = (mean_a - mean_b).abs() / ((var_a / a.len() as f64) + (var_b / b.len() as f64)).sqrt();
 
     let _dof = a.len().min(b.len()) as f64 - 1.0;
     // Simple approximation of p-value
@@ -71,6 +70,13 @@ pub fn write_diffexp(results: &[DiffExpResult], output: &str) {
     let mut f = std::fs::File::create(output).unwrap();
     writeln!(f, "transcript_id\tlog2FC\tp_value").unwrap();
     for r in results {
-        writeln!(f, "{}\t{:.3}\t{:.4}", r.transcript, r.fold_change.log2(), r.p_value).unwrap();
+        writeln!(
+            f,
+            "{}\t{:.3}\t{:.4}",
+            r.transcript,
+            r.fold_change.log2(),
+            r.p_value
+        )
+        .unwrap();
     }
-} 
+}
