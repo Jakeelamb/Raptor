@@ -143,6 +143,22 @@ struct WeightedGraphDiagnostics {
     sink_nodes: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct BranchCandidate {
+    base_idx: usize,
+    next: u64,
+    count: u32,
+    is_repeat: bool,
+    read_support: u32,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ReadThreadingStats {
+    ambiguous_edges: usize,
+    supported_edges: usize,
+    edge_observations: u64,
+}
+
 impl InsertSizeStats {
     pub fn from_samples(samples: &[usize]) -> Self {
         if samples.is_empty() {
@@ -266,10 +282,19 @@ impl LargeGenomeAssembler {
             graph_diagnostics.source_nodes,
             graph_diagnostics.sink_nodes
         );
+        let ambiguous_edges = self.collect_ambiguous_branch_edges(&weighted_graph);
+        let (branch_support, threading_stats) =
+            self.collect_branch_support_from_fastq(input_path, &adjacency, &ambiguous_edges, k)?;
+        info!(
+            "  Read threading: {} ambiguous edges, {} supported, {} observations",
+            threading_stats.ambiguous_edges,
+            threading_stats.supported_edges,
+            threading_stats.edge_observations
+        );
 
         // Phase 5: Build contigs from cleaned graph
         info!("Phase 5/6: Building contigs from cleaned graph...");
-        let contigs = self.build_contigs_from_graph(&filtered, &adjacency, k);
+        let contigs = self.build_contigs_from_graph(&filtered, &adjacency, &branch_support, k);
         info!("Assembled {} raw contigs", contigs.len());
 
         // Phase 6: Write output
@@ -376,9 +401,23 @@ impl LargeGenomeAssembler {
             graph_diagnostics.source_nodes,
             graph_diagnostics.sink_nodes
         );
+        let ambiguous_edges = self.collect_ambiguous_branch_edges(&weighted_graph);
+        let (branch_support, threading_stats) = self.collect_branch_support_from_paired_fastq(
+            input1_path,
+            input2_path,
+            &adjacency,
+            &ambiguous_edges,
+            k,
+        )?;
+        info!(
+            "  Read threading: {} ambiguous edges, {} supported, {} observations",
+            threading_stats.ambiguous_edges,
+            threading_stats.supported_edges,
+            threading_stats.edge_observations
+        );
 
         info!("Phase 5/6: Building contigs from cleaned graph...");
-        let contigs = self.build_contigs_from_graph(&filtered, &adjacency, k);
+        let contigs = self.build_contigs_from_graph(&filtered, &adjacency, &branch_support, k);
         info!("Assembled {} raw contigs", contigs.len());
 
         info!("Phase 6/6: Writing output...");
@@ -1087,6 +1126,7 @@ impl LargeGenomeAssembler {
         &self,
         kmer_counts: &AHashMap<u64, u32>,
         adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+        branch_support: &AHashMap<(u64, u64), u32>,
         k: usize,
     ) -> Vec<String> {
         let min_len = self.config.min_contig_len;
@@ -1137,6 +1177,7 @@ impl LargeGenomeAssembler {
                 &valid_kmers,
                 adjacency,
                 kmer_counts,
+                branch_support,
                 &repeat_kmers,
                 &mut used,
             );
@@ -1208,6 +1249,176 @@ impl LargeGenomeAssembler {
         }
 
         diagnostics
+    }
+
+    fn collect_ambiguous_branch_edges(
+        &self,
+        graph: &AHashMap<u64, WeightedGraphNode>,
+    ) -> AHashSet<(u64, u64)> {
+        let mut edges = AHashSet::new();
+
+        for (&node, node_info) in graph {
+            if node_info.successors.len() > 1 {
+                for &(next, _) in &node_info.successors {
+                    edges.insert((node, next));
+                }
+            }
+            if node_info.predecessors.len() > 1 {
+                for &(prev, _) in &node_info.predecessors {
+                    edges.insert((prev, node));
+                }
+            }
+        }
+
+        edges
+    }
+
+    fn collect_branch_support_from_fastq(
+        &self,
+        path: &str,
+        adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+        branch_edges: &AHashSet<(u64, u64)>,
+        k: usize,
+    ) -> std::io::Result<(AHashMap<(u64, u64), u32>, ReadThreadingStats)> {
+        let mut edge_support = AHashMap::with_capacity(branch_edges.len());
+        let mut stats = ReadThreadingStats {
+            ambiguous_edges: branch_edges.len(),
+            ..Default::default()
+        };
+
+        if branch_edges.is_empty() {
+            return Ok((edge_support, stats));
+        }
+
+        let reader = open_fastq(path);
+        for record in stream_fastq_records(reader) {
+            stats.edge_observations += Self::thread_branch_edges_in_sequence(
+                record.sequence.as_bytes(),
+                k,
+                adjacency,
+                branch_edges,
+                &mut edge_support,
+            );
+        }
+
+        stats.supported_edges = edge_support.len();
+        Ok((edge_support, stats))
+    }
+
+    fn collect_branch_support_from_paired_fastq(
+        &self,
+        path1: &str,
+        path2: &str,
+        adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+        branch_edges: &AHashSet<(u64, u64)>,
+        k: usize,
+    ) -> std::io::Result<(AHashMap<(u64, u64), u32>, ReadThreadingStats)> {
+        let mut edge_support = AHashMap::with_capacity(branch_edges.len());
+        let mut stats = ReadThreadingStats {
+            ambiguous_edges: branch_edges.len(),
+            ..Default::default()
+        };
+
+        if branch_edges.is_empty() {
+            return Ok((edge_support, stats));
+        }
+
+        let reader1 = open_fastq(path1);
+        let reader2 = open_fastq(path2);
+        for (r1, r2) in stream_paired_fastq_records(reader1, reader2) {
+            stats.edge_observations += Self::thread_branch_edges_in_sequence(
+                r1.sequence.as_bytes(),
+                k,
+                adjacency,
+                branch_edges,
+                &mut edge_support,
+            );
+            stats.edge_observations += Self::thread_branch_edges_in_sequence(
+                r2.sequence.as_bytes(),
+                k,
+                adjacency,
+                branch_edges,
+                &mut edge_support,
+            );
+        }
+
+        stats.supported_edges = edge_support.len();
+        Ok((edge_support, stats))
+    }
+
+    fn thread_branch_edges_in_sequence(
+        sequence: &[u8],
+        k: usize,
+        adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+        branch_edges: &AHashSet<(u64, u64)>,
+        edge_support: &mut AHashMap<(u64, u64), u32>,
+    ) -> u64 {
+        if branch_edges.is_empty() || sequence.len() < k {
+            return 0;
+        }
+
+        let mut observations = 0u64;
+        let mut prev_node = None;
+        let mut pos = 0usize;
+
+        while pos + k <= sequence.len() {
+            let Some(mut current_kmer) = KmerU64::from_slice(&sequence[pos..pos + k]) else {
+                prev_node = None;
+                pos += 1;
+                continue;
+            };
+
+            loop {
+                if let Some(current_node) =
+                    Self::resolve_threaded_node(current_kmer.encoded, adjacency, k)
+                {
+                    if let Some(prev) = prev_node {
+                        let edge = (prev, current_node);
+                        if branch_edges.contains(&edge) {
+                            *edge_support.entry(edge).or_insert(0) += 1;
+                            observations += 1;
+                        }
+                    }
+                    prev_node = Some(current_node);
+                } else {
+                    prev_node = None;
+                }
+
+                if pos + k >= sequence.len() {
+                    return observations;
+                }
+
+                let next_base = sequence[pos + k];
+                let Some(next_kmer) = current_kmer.extend(next_base) else {
+                    prev_node = None;
+                    pos += k + 1;
+                    break;
+                };
+
+                current_kmer = next_kmer;
+                pos += 1;
+            }
+        }
+
+        observations
+    }
+
+    fn resolve_threaded_node(
+        encoded: u64,
+        adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+        k: usize,
+    ) -> Option<u64> {
+        if adjacency.contains_key(&encoded) {
+            return Some(encoded);
+        }
+
+        let canonical = KmerU64 {
+            encoded,
+            len: k as u8,
+        }
+        .canonical()
+        .encoded;
+        adjacency.contains_key(&canonical).then_some(canonical)
     }
 
     fn weighted_neighbors(
@@ -1633,6 +1844,7 @@ impl LargeGenomeAssembler {
         _valid_kmers: &AHashSet<u64>,
         adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
         kmer_counts: &AHashMap<u64, u32>,
+        branch_support: &AHashMap<(u64, u64), u32>,
         repeat_kmers: &AHashSet<u64>,
         used: &mut AHashSet<u64>,
     ) -> String {
@@ -1653,7 +1865,7 @@ impl LargeGenomeAssembler {
                 .unwrap_or(([false; 4], [false; 4]));
 
             // Find valid extensions with their coverage
-            let mut extensions: Vec<(usize, u64, u32, bool)> = Vec::new();
+            let mut extensions: Vec<BranchCandidate> = Vec::new();
             for (i, &valid) in right_ext.iter().enumerate() {
                 if !valid {
                     continue;
@@ -1667,7 +1879,17 @@ impl LargeGenomeAssembler {
                     if !used.contains(&next_canonical) {
                         let count = kmer_counts.get(&next_canonical).copied().unwrap_or(0);
                         let is_repeat = repeat_kmers.contains(&next_canonical);
-                        extensions.push((i, next, count, is_repeat));
+                        let read_support = branch_support
+                            .get(&(right_kmer, next))
+                            .copied()
+                            .unwrap_or(0);
+                        extensions.push(BranchCandidate {
+                            base_idx: i,
+                            next,
+                            count,
+                            is_repeat,
+                            read_support,
+                        });
                     }
                 }
             }
@@ -1678,17 +1900,17 @@ impl LargeGenomeAssembler {
 
             // If single extension, take it
             if extensions.len() == 1 {
-                let (base_idx, next, _, _) = extensions[0];
-                let base = bases[base_idx];
+                let extension = extensions[0];
+                let base = bases[extension.base_idx];
                 let next_kmer = KmerU64 {
-                    encoded: next,
+                    encoded: extension.next,
                     len: k as u8,
                 };
                 let next_canonical = next_kmer.canonical().encoded;
 
                 contig.push(base);
                 used.insert(next_canonical);
-                right_kmer = next;
+                right_kmer = extension.next;
                 continue;
             }
 
@@ -1706,44 +1928,17 @@ impl LargeGenomeAssembler {
                 .copied()
                 .unwrap_or(1);
 
-            // First, try to find a non-repeat extension with closest coverage
-            let non_repeat_ext: Vec<_> = extensions
-                .iter()
-                .filter(|(_, _, _, is_repeat)| !is_repeat)
-                .collect();
-
-            let best = if !non_repeat_ext.is_empty() {
-                // Choose non-repeat path with coverage closest to current
-                non_repeat_ext
-                    .iter()
-                    .min_by_key(|(_, _, count, _)| {
-                        let ratio = if *count > current_count {
-                            *count / current_count.max(1)
-                        } else {
-                            current_count / (*count).max(1)
-                        };
-                        ratio
-                    })
-                    .map(|&&x| x)
-            } else {
-                // All extensions are repeats - choose one with highest coverage
-                extensions
-                    .iter()
-                    .max_by_key(|(_, _, count, _)| count)
-                    .copied()
-            };
-
-            if let Some((base_idx, next, _, _)) = best {
-                let base = bases[base_idx];
+            if let Some(best) = self.choose_branch_extension(&extensions, current_count) {
+                let base = bases[best.base_idx];
                 let next_kmer = KmerU64 {
-                    encoded: next,
+                    encoded: best.next,
                     len: k as u8,
                 };
                 let next_canonical = next_kmer.canonical().encoded;
 
                 contig.push(base);
                 used.insert(next_canonical);
-                right_kmer = next;
+                right_kmer = best.next;
             } else {
                 break;
             }
@@ -1756,7 +1951,7 @@ impl LargeGenomeAssembler {
                 .copied()
                 .unwrap_or(([false; 4], [false; 4]));
 
-            let mut extensions: Vec<(usize, u64, u32, bool)> = Vec::new();
+            let mut extensions: Vec<BranchCandidate> = Vec::new();
             for (i, &valid) in left_ext.iter().enumerate() {
                 if !valid {
                     continue;
@@ -1770,7 +1965,15 @@ impl LargeGenomeAssembler {
                     if !used.contains(&next_canonical) {
                         let count = kmer_counts.get(&next_canonical).copied().unwrap_or(0);
                         let is_repeat = repeat_kmers.contains(&next_canonical);
-                        extensions.push((i, next, count, is_repeat));
+                        let read_support =
+                            branch_support.get(&(next, left_kmer)).copied().unwrap_or(0);
+                        extensions.push(BranchCandidate {
+                            base_idx: i,
+                            next,
+                            count,
+                            is_repeat,
+                            read_support,
+                        });
                     }
                 }
             }
@@ -1780,17 +1983,17 @@ impl LargeGenomeAssembler {
             }
 
             if extensions.len() == 1 {
-                let (base_idx, next, _, _) = extensions[0];
-                let base = bases[base_idx];
+                let extension = extensions[0];
+                let base = bases[extension.base_idx];
                 let next_kmer = KmerU64 {
-                    encoded: next,
+                    encoded: extension.next,
                     len: k as u8,
                 };
                 let next_canonical = next_kmer.canonical().encoded;
 
                 contig.insert(0, base);
                 used.insert(next_canonical);
-                left_kmer = next;
+                left_kmer = extension.next;
                 continue;
             }
 
@@ -1807,47 +2010,84 @@ impl LargeGenomeAssembler {
                 .copied()
                 .unwrap_or(1);
 
-            let non_repeat_ext: Vec<_> = extensions
-                .iter()
-                .filter(|(_, _, _, is_repeat)| !is_repeat)
-                .collect();
-
-            let best = if !non_repeat_ext.is_empty() {
-                non_repeat_ext
-                    .iter()
-                    .min_by_key(|(_, _, count, _)| {
-                        let ratio = if *count > current_count {
-                            *count / current_count.max(1)
-                        } else {
-                            current_count / (*count).max(1)
-                        };
-                        ratio
-                    })
-                    .map(|&&x| x)
-            } else {
-                extensions
-                    .iter()
-                    .max_by_key(|(_, _, count, _)| count)
-                    .copied()
-            };
-
-            if let Some((base_idx, next, _, _)) = best {
-                let base = bases[base_idx];
+            if let Some(best) = self.choose_branch_extension(&extensions, current_count) {
+                let base = bases[best.base_idx];
                 let next_kmer = KmerU64 {
-                    encoded: next,
+                    encoded: best.next,
                     len: k as u8,
                 };
                 let next_canonical = next_kmer.canonical().encoded;
 
                 contig.insert(0, base);
                 used.insert(next_canonical);
-                left_kmer = next;
+                left_kmer = best.next;
             } else {
                 break;
             }
         }
 
         String::from_utf8(contig).unwrap_or_default()
+    }
+
+    fn choose_branch_extension(
+        &self,
+        extensions: &[BranchCandidate],
+        current_count: u32,
+    ) -> Option<BranchCandidate> {
+        if extensions.is_empty() {
+            return None;
+        }
+
+        let (best_support, second_support, supported_extension) =
+            Self::best_read_supported_extension(extensions);
+        if best_support >= 2 && best_support > second_support {
+            return Some(supported_extension);
+        }
+
+        let non_repeat = extensions.iter().copied().filter(|ext| !ext.is_repeat);
+        let best_non_repeat = non_repeat.min_by_key(|ext| {
+            (
+                Self::coverage_ratio(current_count, ext.count),
+                Reverse(ext.read_support),
+                Reverse(ext.count),
+                ext.base_idx,
+            )
+        });
+
+        best_non_repeat.or_else(|| {
+            extensions
+                .iter()
+                .copied()
+                .max_by_key(|ext| (ext.read_support, ext.count))
+        })
+    }
+
+    fn best_read_supported_extension(
+        extensions: &[BranchCandidate],
+    ) -> (u32, u32, BranchCandidate) {
+        let mut best = extensions[0];
+        let mut best_support = best.read_support;
+        let mut second_support = 0u32;
+
+        for &extension in &extensions[1..] {
+            if extension.read_support > best_support {
+                second_support = best_support;
+                best_support = extension.read_support;
+                best = extension;
+            } else if extension.read_support > second_support {
+                second_support = extension.read_support;
+            }
+        }
+
+        (best_support, second_support, best)
+    }
+
+    fn coverage_ratio(current_count: u32, candidate_count: u32) -> u32 {
+        if candidate_count > current_count {
+            candidate_count / current_count.max(1)
+        } else {
+            current_count / candidate_count.max(1)
+        }
     }
 
     fn write_output(
@@ -2455,5 +2695,104 @@ mod tests {
         assert!(diagnostics.oriented_edges >= counts.len().saturating_sub(1));
         assert_eq!(contigs.len(), 1);
         assert!(contigs[0] == sequence || contigs[0] == reverse);
+    }
+
+    #[test]
+    fn test_branch_threading_counts_ambiguous_edge_support() {
+        let k = 4;
+        let sequences = ["TACGATG", "TACGATG", "TACGACG"];
+        let mut counts = AHashMap::new();
+
+        for sequence in &sequences {
+            for i in 0..=sequence.len() - k {
+                let encoded = KmerU64::from_str(&sequence[i..i + k])
+                    .unwrap()
+                    .canonical()
+                    .encoded;
+                counts.insert(encoded, 10);
+            }
+        }
+
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: 1,
+            ..Default::default()
+        });
+        let valid_kmers: AHashSet<u64> = counts.keys().copied().collect();
+        let adjacency = assembler.build_adjacency(&valid_kmers, k);
+        let graph = assembler.build_weighted_unitig_graph(&counts, &adjacency, k);
+        let branch_edges = assembler.collect_ambiguous_branch_edges(&graph);
+        let mut edge_support = AHashMap::new();
+        let mut observations = 0u64;
+
+        for sequence in &sequences {
+            observations += LargeGenomeAssembler::thread_branch_edges_in_sequence(
+                sequence.as_bytes(),
+                k,
+                &adjacency,
+                &branch_edges,
+                &mut edge_support,
+            );
+        }
+
+        let branch = KmerU64::from_str("ACGA").unwrap().encoded;
+        let next_primary = KmerU64::from_str("CGAT").unwrap().encoded;
+        let next_alternate = KmerU64::from_str("CGAC").unwrap().encoded;
+
+        assert!(observations >= 3);
+        assert_eq!(edge_support.get(&(branch, next_primary)).copied(), Some(2));
+        assert_eq!(
+            edge_support.get(&(branch, next_alternate)).copied(),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn test_choose_branch_extension_prefers_strong_read_support() {
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig::default());
+        let extensions = [
+            BranchCandidate {
+                base_idx: 0,
+                next: 11,
+                count: 18,
+                is_repeat: false,
+                read_support: 5,
+            },
+            BranchCandidate {
+                base_idx: 1,
+                next: 22,
+                count: 20,
+                is_repeat: false,
+                read_support: 1,
+            },
+        ];
+
+        let best = assembler.choose_branch_extension(&extensions, 20).unwrap();
+        assert_eq!(best.next, 11);
+    }
+
+    #[test]
+    fn test_choose_branch_extension_ignores_weak_read_support_noise() {
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig::default());
+        let extensions = [
+            BranchCandidate {
+                base_idx: 0,
+                next: 11,
+                count: 5,
+                is_repeat: false,
+                read_support: 1,
+            },
+            BranchCandidate {
+                base_idx: 1,
+                next: 22,
+                count: 20,
+                is_repeat: false,
+                read_support: 0,
+            },
+        ];
+
+        let best = assembler.choose_branch_extension(&extensions, 20).unwrap();
+        assert_eq!(best.next, 22);
     }
 }

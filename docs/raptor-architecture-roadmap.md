@@ -57,6 +57,12 @@ Deliverables:
 - branch scoring from multiple evidence types
 - path confidence scores and ambiguity annotations
 
+Status:
+
+- initial short-read branch threading landed for `assemble-large`
+- ambiguous edges now collect directed read support before contig extraction
+- on `quick_test`, the first pass improved raw contig N50 substantially while keeping misassemblies flat, but runtime increased and NGA50 still needs work
+
 Success criteria:
 
 - improved NGA50 without increasing QUAST misassemblies
