@@ -1,5 +1,12 @@
 # Benchmarking Setup
 
+This directory now contains two benchmark tracks:
+
+- transcript/isoform benchmarking for GTF-aware evaluation
+- genome assembly benchmarking in `bench/genome_assembly/`
+
+For whole-genome assembler comparisons, use the dedicated workflow documented in `bench/genome_assembly/README.md`.
+
 This directory contains tools and datasets for benchmarking the RNA-Seq assembler against reference transcripts.
 
 ## Required Files

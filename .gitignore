@@ -57,6 +57,22 @@ test_data/*.csv # Ignore generated result CSVs
 # ==================================
 assemble_updates.txt
 main_update.txt
+assembly_test.log
+*.log
+
+# Benchmark Artifacts #
+# ==================================
+bench/genome_assembly/data/
+bench/genome_assembly/results/
+bench/genome_assembly/*.csv
+bench/genome_assembly/*.md
+!bench/genome_assembly/README.md
+!bench/genome_assembly/run_benchmark.sh
+!bench/genome_assembly/quick_benchmark.sh
+!bench/genome_assembly/download_data.sh
+!bench/genome_assembly/setup_environment.sh
+!bench/genome_assembly/summarize_results.py
+data/
 
 # Large Data Files (Optional - uncomment if you don't want to track these) #
 # ===================================================================

@@ -91,7 +91,7 @@ download_simulated() {
     mkdir -p "${SIM_DIR}"
 
     # Create a simple simulated dataset for quick testing
-    python3 << 'EOF'
+    SIM_DIR="${SIM_DIR}" python3 << 'EOF'
 import random
 import gzip
 import os
@@ -156,8 +156,6 @@ with gzip.open(f'{output_dir}/reads_1.fastq.gz', 'wt') as r1, \
 
 print(f"Simulated data generated in {output_dir}")
 EOF
-
-    SIM_DIR="${SIM_DIR}" python3 -c "exec(open('/dev/stdin').read())"
 }
 
 # Main

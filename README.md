@@ -95,6 +95,35 @@ raptor stats --input my_assembly_isoform.counts.matrix --pca pca.png --heatmap h
 ✅ Optional GPU acceleration for k-mer counting  
 ✅ HPC-ready with job monitoring tools  
 
+## 📊 Benchmarking
+
+Raptor now ships with a reproducible genome-assembly benchmark workflow under [bench/genome_assembly](./bench/genome_assembly).
+
+Use it to:
+
+- download or generate benchmark datasets
+- run Raptor and comparator assemblers with fixed commands
+- capture runtime, peak memory, and assembly statistics
+- generate machine-readable summaries and markdown reports
+
+Quick entry points:
+
+```bash
+# Install benchmark dependencies
+./bench/genome_assembly/setup_environment.sh
+
+# Generate simulated data or download public datasets
+./bench/genome_assembly/download_data.sh simulated
+
+# Run a benchmark
+./bench/genome_assembly/run_benchmark.sh simulated 8
+
+# Aggregate all benchmark runs into CSV/Markdown summaries
+python3 ./bench/genome_assembly/summarize_results.py
+```
+
+Methodology and publishing guidance live in [bench/genome_assembly/README.md](./bench/genome_assembly/README.md).
+
 ## 🖥️ HPC Support
 
 Raptor includes scripts specifically designed for high-performance computing environments:

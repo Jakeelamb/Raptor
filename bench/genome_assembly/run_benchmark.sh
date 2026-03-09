@@ -10,6 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="${SCRIPT_DIR}/data"
 RESULTS_DIR="${SCRIPT_DIR}/results"
 RAPTOR_BIN="${SCRIPT_DIR}/../../target/release/raptor"
+SUMMARY_SCRIPT="${SCRIPT_DIR}/summarize_results.py"
 
 DATASET="${1:-simulated}"
 THREADS="${2:-8}"
@@ -329,6 +330,30 @@ EOF
     echo "Report saved to: ${results_dir}/report.md"
 }
 
+write_run_metadata() {
+    local run_dir=$1
+    local dataset=$2
+    local threads=$3
+
+    cat > "${run_dir}/metadata.txt" << EOF
+dataset=${dataset}
+threads=${threads}
+timestamp=${TIMESTAMP}
+raptor_bin=${RAPTOR_BIN}
+hostname=$(hostname)
+kernel=$(uname -sr)
+EOF
+
+    cat > "${run_dir}/commands.sh" << EOF
+#!/bin/bash
+set -e
+
+spades.py -1 "${DATA_DIR}/${dataset}/reads_1.fastq.gz" -2 "${DATA_DIR}/${dataset}/reads_2.fastq.gz" -o "${run_dir}/spades" -t "${threads}" --careful
+"${RAPTOR_BIN}" assemble-large -i "${DATA_DIR}/${dataset}/reads_1.fastq.gz" --input2 "${DATA_DIR}/${dataset}/reads_2.fastq.gz" -o "${run_dir}/raptor/contigs.fa" -t "${threads}" --min-count 2 --scaffold --polish --compress-buckets
+EOF
+    chmod +x "${run_dir}/commands.sh"
+}
+
 # Main benchmark function
 run_benchmark() {
     local dataset=$1
@@ -361,6 +386,7 @@ run_benchmark() {
     fi
 
     mkdir -p "${run_dir}"
+    write_run_metadata "${run_dir}" "${dataset}" "${threads}"
 
     # Run SPAdes
     run_spades "${reads1}" "${reads2}" "${run_dir}/spades" "${threads}"
@@ -383,6 +409,10 @@ run_benchmark() {
 
     # Generate report
     generate_report "${run_dir}" "${dataset}"
+
+    if [ -f "${SUMMARY_SCRIPT}" ]; then
+        python3 "${SUMMARY_SCRIPT}"
+    fi
 }
 
 # Main
