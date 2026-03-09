@@ -72,6 +72,7 @@ bench/genome_assembly/*.md
 !bench/genome_assembly/download_data.sh
 !bench/genome_assembly/setup_environment.sh
 !bench/genome_assembly/summarize_results.py
+artifacts/
 data/
 
 # Large Data Files (Optional - uncomment if you don't want to track these) #

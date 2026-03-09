@@ -124,6 +124,8 @@ python3 ./bench/genome_assembly/summarize_results.py
 
 Methodology and publishing guidance live in [bench/genome_assembly/README.md](./bench/genome_assembly/README.md).
 
+The current checked-in baseline report is in [docs/genome-benchmark-report.md](./docs/genome-benchmark-report.md).
+
 ## 🖥️ HPC Support
 
 Raptor includes scripts specifically designed for high-performance computing environments:
