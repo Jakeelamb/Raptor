@@ -302,6 +302,14 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
             "bases_ge_10kb",
             "bases_ge_50kb",
             "bases_ge_100kb",
+            "contigs_ge_1kb_frac",
+            "contigs_ge_10kb_frac",
+            "contigs_ge_50kb_frac",
+            "contigs_ge_100kb_frac",
+            "bases_ge_1kb_frac",
+            "bases_ge_10kb_frac",
+            "bases_ge_50kb_frac",
+            "bases_ge_100kb_frac",
             "non_finite_confidence_count",
             "mean_confidence",
             "min_confidence",
@@ -408,6 +416,38 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
     stats.insert(
         "bases_ge_100kb".to_string(),
         length_metrics.bases_ge_100kb as f64,
+    );
+    stats.insert(
+        "contigs_ge_1kb_frac".to_string(),
+        length_metrics.contigs_ge_1kb_frac,
+    );
+    stats.insert(
+        "contigs_ge_10kb_frac".to_string(),
+        length_metrics.contigs_ge_10kb_frac,
+    );
+    stats.insert(
+        "contigs_ge_50kb_frac".to_string(),
+        length_metrics.contigs_ge_50kb_frac,
+    );
+    stats.insert(
+        "contigs_ge_100kb_frac".to_string(),
+        length_metrics.contigs_ge_100kb_frac,
+    );
+    stats.insert(
+        "bases_ge_1kb_frac".to_string(),
+        length_metrics.bases_ge_1kb_frac,
+    );
+    stats.insert(
+        "bases_ge_10kb_frac".to_string(),
+        length_metrics.bases_ge_10kb_frac,
+    );
+    stats.insert(
+        "bases_ge_50kb_frac".to_string(),
+        length_metrics.bases_ge_50kb_frac,
+    );
+    stats.insert(
+        "bases_ge_100kb_frac".to_string(),
+        length_metrics.bases_ge_100kb_frac,
     );
 
     let non_finite_confidence_count = transcripts.len() - finite_confidence_count;
@@ -698,6 +738,14 @@ mod tests {
             "bases_ge_10kb",
             "bases_ge_50kb",
             "bases_ge_100kb",
+            "contigs_ge_1kb_frac",
+            "contigs_ge_10kb_frac",
+            "contigs_ge_50kb_frac",
+            "contigs_ge_100kb_frac",
+            "bases_ge_1kb_frac",
+            "bases_ge_10kb_frac",
+            "bases_ge_50kb_frac",
+            "bases_ge_100kb_frac",
             "non_finite_confidence_count",
             "mean_confidence",
             "min_confidence",
