@@ -202,6 +202,7 @@ proptest! {
 
         prop_assert_eq!(observed.get("count").copied().unwrap_or(-1.0) as usize, lengths.len());
         prop_assert_eq!(observed.get("total_length").copied().unwrap_or(-1.0) as usize, expected.total_bases);
+        prop_assert_eq!(observed.get("ungapped_total_length").copied().unwrap_or(-1.0) as usize, expected.total_bases);
         prop_assert_eq!(observed.get("mean_length").copied().unwrap_or(-1.0), expected.avg_length);
         prop_assert_eq!(observed.get("median_length").copied().unwrap_or(-1.0), expected.median_length);
         prop_assert_eq!(observed.get("n25").copied().unwrap_or(-1.0) as usize, expected.n25);
@@ -217,6 +218,8 @@ proptest! {
         prop_assert_eq!(observed.get("l95").copied().unwrap_or(-1.0) as usize, expected.l95);
         prop_assert_eq!(observed.get("l99").copied().unwrap_or(-1.0) as usize, expected.l99);
         prop_assert!((observed.get("au_n").copied().unwrap_or(-1.0) - expected.au_n).abs() < 1e-12);
+        prop_assert_eq!(observed.get("ungapped_n50").copied().unwrap_or(-1.0) as usize, expected.n50);
+        prop_assert!((observed.get("ungapped_au_n").copied().unwrap_or(-1.0) - expected.au_n).abs() < 1e-12);
         prop_assert_eq!(observed.get("contigs_ge_1kb").copied().unwrap_or(-1.0) as usize, expected.contigs_ge_1kb);
         prop_assert_eq!(observed.get("contigs_ge_10kb").copied().unwrap_or(-1.0) as usize, expected.contigs_ge_10kb);
         prop_assert_eq!(observed.get("contigs_ge_50kb").copied().unwrap_or(-1.0) as usize, expected.contigs_ge_50kb);
@@ -241,6 +244,23 @@ proptest! {
         prop_assert_eq!(observed.get("n_content").copied().unwrap_or(-1.0), 0.0);
         prop_assert_eq!(observed.get("ambiguous_content").copied().unwrap_or(-1.0), 0.0);
         prop_assert_eq!(observed.get("length_field_mismatch_count").copied().unwrap_or(-1.0), 0.0);
+        let expected_total_rle_runs: usize = lengths
+            .iter()
+            .map(|len| len.div_ceil(u8::MAX as usize))
+            .sum();
+        prop_assert_eq!(
+            observed.get("total_rle_runs").copied().unwrap_or(-1.0) as usize,
+            expected_total_rle_runs
+        );
+        prop_assert!(
+            (observed
+                .get("length_weighted_rle_ratio")
+                .copied()
+                .unwrap_or(-1.0)
+                - (expected_total_rle_runs as f64 / expected.total_bases as f64))
+                .abs()
+                < 1e-12
+        );
 
         let mut shuffled = lengths.clone();
         let mut rng = StdRng::seed_from_u64(seed);
@@ -251,6 +271,7 @@ proptest! {
         for key in [
             "count",
             "total_length",
+            "ungapped_total_length",
             "mean_length",
             "median_length",
             "n25",
@@ -266,6 +287,8 @@ proptest! {
             "l95",
             "l99",
             "au_n",
+            "ungapped_n50",
+            "ungapped_au_n",
             "contigs_ge_1kb",
             "contigs_ge_10kb",
             "contigs_ge_50kb",
@@ -290,6 +313,9 @@ proptest! {
             "n_bases",
             "ambiguous_bases",
             "length_field_mismatch_count",
+            "total_rle_runs",
+            "mean_rle_ratio",
+            "length_weighted_rle_ratio",
         ] {
             let lhs = observed.get(key).copied().unwrap_or(f64::NAN);
             let rhs = shuffled_stats.get(key).copied().unwrap_or(f64::NAN);

@@ -6,6 +6,87 @@ use petgraph::graphmap::DiGraphMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub const TRANSCRIPT_STATS_KEYS: &[&str] = &[
+    "count",
+    "total_length",
+    "ungapped_total_length",
+    "mean_length",
+    "median_length",
+    "min_length",
+    "max_length",
+    "n10",
+    "n25",
+    "n50",
+    "n75",
+    "n90",
+    "n95",
+    "n99",
+    "l10",
+    "l25",
+    "l50",
+    "l75",
+    "l90",
+    "l95",
+    "l99",
+    "au_n",
+    "ungapped_n50",
+    "ungapped_au_n",
+    "contigs_ge_1kb",
+    "contigs_ge_10kb",
+    "contigs_ge_50kb",
+    "contigs_ge_100kb",
+    "bases_ge_1kb",
+    "bases_ge_10kb",
+    "bases_ge_50kb",
+    "bases_ge_100kb",
+    "contigs_ge_1kb_frac",
+    "contigs_ge_10kb_frac",
+    "contigs_ge_50kb_frac",
+    "contigs_ge_100kb_frac",
+    "bases_ge_1kb_frac",
+    "bases_ge_10kb_frac",
+    "bases_ge_50kb_frac",
+    "bases_ge_100kb_frac",
+    "non_finite_confidence_count",
+    "length_field_mismatch_count",
+    "mean_confidence",
+    "min_confidence",
+    "max_confidence",
+    "gc_content",
+    "gc_content_acgt",
+    "n_content",
+    "ambiguous_content",
+    "acgt_bases",
+    "n_bases",
+    "ambiguous_bases",
+    "total_rle_runs",
+    "mean_rle_ratio",
+    "length_weighted_rle_ratio",
+];
+
+#[inline]
+fn zeroed_transcript_stats() -> HashMap<String, f64> {
+    let mut stats = HashMap::with_capacity(TRANSCRIPT_STATS_KEYS.len());
+    for &key in TRANSCRIPT_STATS_KEYS {
+        stats.insert(key.to_string(), 0.0);
+    }
+    stats
+}
+
+#[inline]
+fn set_transcript_stat(stats: &mut HashMap<String, f64>, key: &str, value: f64) {
+    if let Some(slot) = stats.get_mut(key) {
+        *slot = value;
+    } else {
+        debug_assert!(
+            false,
+            "unknown transcript stats key `{}`; update TRANSCRIPT_STATS_KEYS",
+            key
+        );
+        stats.insert(key.to_string(), value);
+    }
+}
+
 /// Represents a transcript with its sequence, path, and metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transcript {
@@ -303,69 +384,15 @@ pub fn transcript_to_gfa_path(transcript: &Transcript) -> String {
 
 /// Calculate statistics for a collection of transcripts
 pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String, f64> {
-    let mut stats = HashMap::with_capacity(50);
-
-    // Basic counts
-    stats.insert("count".to_string(), transcripts.len() as f64);
+    let mut stats = zeroed_transcript_stats();
+    set_transcript_stat(&mut stats, "count", transcripts.len() as f64);
 
     if transcripts.is_empty() {
-        for key in [
-            "total_length",
-            "mean_length",
-            "median_length",
-            "min_length",
-            "max_length",
-            "n10",
-            "n25",
-            "n50",
-            "n75",
-            "n90",
-            "n95",
-            "n99",
-            "l10",
-            "l25",
-            "l50",
-            "l75",
-            "l90",
-            "l95",
-            "l99",
-            "au_n",
-            "contigs_ge_1kb",
-            "contigs_ge_10kb",
-            "contigs_ge_50kb",
-            "contigs_ge_100kb",
-            "bases_ge_1kb",
-            "bases_ge_10kb",
-            "bases_ge_50kb",
-            "bases_ge_100kb",
-            "contigs_ge_1kb_frac",
-            "contigs_ge_10kb_frac",
-            "contigs_ge_50kb_frac",
-            "contigs_ge_100kb_frac",
-            "bases_ge_1kb_frac",
-            "bases_ge_10kb_frac",
-            "bases_ge_50kb_frac",
-            "bases_ge_100kb_frac",
-            "non_finite_confidence_count",
-            "length_field_mismatch_count",
-            "mean_confidence",
-            "min_confidence",
-            "max_confidence",
-            "gc_content",
-            "gc_content_acgt",
-            "n_content",
-            "ambiguous_content",
-            "acgt_bases",
-            "n_bases",
-            "ambiguous_bases",
-            "mean_rle_ratio",
-        ] {
-            stats.insert(key.to_string(), 0.0);
-        }
         return stats;
     }
 
     let mut lengths: Vec<usize> = Vec::with_capacity(transcripts.len());
+    let mut ungapped_lengths: Vec<usize> = Vec::with_capacity(transcripts.len());
     let mut min_length = usize::MAX;
     let mut max_length = 0usize;
     let mut finite_confidence_count = 0usize;
@@ -375,12 +402,18 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
     let mut length_field_mismatch_count = 0usize;
     let mut composition = BaseComposition::default();
     let mut total_sequence_bases = 0usize;
+    let mut total_rle_runs = 0usize;
     let mut total_rle_ratio = 0.0;
 
     for transcript in transcripts {
         let sequence = transcript.sequence.as_bytes();
         let sequence_len = sequence.len();
+        let n_bases_in_sequence = sequence
+            .iter()
+            .filter(|&&base| matches!(base, b'N' | b'n'))
+            .count();
         lengths.push(sequence_len);
+        ungapped_lengths.push(sequence_len.saturating_sub(n_bases_in_sequence));
         min_length = min_length.min(sequence_len);
         max_length = max_length.max(sequence_len);
         if transcript.length != sequence_len {
@@ -399,6 +432,7 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
         total_sequence_bases = total_sequence_bases.saturating_add(sequence.len());
 
         let compressed_len = rle::rle_encoded_len(&transcript.sequence);
+        total_rle_runs = total_rle_runs.saturating_add(compressed_len);
         total_rle_ratio += if sequence.is_empty() {
             1.0
         } else {
@@ -407,114 +441,137 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
     }
 
     let length_metrics = evaluate_lengths_in_place(&mut lengths);
-    stats.insert(
-        "total_length".to_string(),
-        length_metrics.total_bases as f64,
+    let ungapped_length_metrics = evaluate_lengths_in_place(&mut ungapped_lengths);
+    set_transcript_stat(&mut stats, "total_length", length_metrics.total_bases as f64);
+    set_transcript_stat(
+        &mut stats,
+        "ungapped_total_length",
+        ungapped_length_metrics.total_bases as f64,
     );
-    stats.insert("mean_length".to_string(), length_metrics.avg_length);
-    stats.insert("median_length".to_string(), length_metrics.median_length);
-    stats.insert("min_length".to_string(), min_length as f64);
-    stats.insert("max_length".to_string(), max_length as f64);
-    stats.insert("n10".to_string(), length_metrics.n10 as f64);
-    stats.insert("n25".to_string(), length_metrics.n25 as f64);
-    stats.insert("n50".to_string(), length_metrics.n50 as f64);
-    stats.insert("n75".to_string(), length_metrics.n75 as f64);
-    stats.insert("n90".to_string(), length_metrics.n90 as f64);
-    stats.insert("n95".to_string(), length_metrics.n95 as f64);
-    stats.insert("n99".to_string(), length_metrics.n99 as f64);
-    stats.insert("l10".to_string(), length_metrics.l10 as f64);
-    stats.insert("l25".to_string(), length_metrics.l25 as f64);
-    stats.insert("l50".to_string(), length_metrics.l50 as f64);
-    stats.insert("l75".to_string(), length_metrics.l75 as f64);
-    stats.insert("l90".to_string(), length_metrics.l90 as f64);
-    stats.insert("l95".to_string(), length_metrics.l95 as f64);
-    stats.insert("l99".to_string(), length_metrics.l99 as f64);
-    stats.insert("au_n".to_string(), length_metrics.au_n);
-    stats.insert(
-        "contigs_ge_1kb".to_string(),
+    set_transcript_stat(&mut stats, "mean_length", length_metrics.avg_length);
+    set_transcript_stat(&mut stats, "median_length", length_metrics.median_length);
+    set_transcript_stat(&mut stats, "min_length", min_length as f64);
+    set_transcript_stat(&mut stats, "max_length", max_length as f64);
+    set_transcript_stat(&mut stats, "n10", length_metrics.n10 as f64);
+    set_transcript_stat(&mut stats, "n25", length_metrics.n25 as f64);
+    set_transcript_stat(&mut stats, "n50", length_metrics.n50 as f64);
+    set_transcript_stat(&mut stats, "n75", length_metrics.n75 as f64);
+    set_transcript_stat(&mut stats, "n90", length_metrics.n90 as f64);
+    set_transcript_stat(&mut stats, "n95", length_metrics.n95 as f64);
+    set_transcript_stat(&mut stats, "n99", length_metrics.n99 as f64);
+    set_transcript_stat(&mut stats, "l10", length_metrics.l10 as f64);
+    set_transcript_stat(&mut stats, "l25", length_metrics.l25 as f64);
+    set_transcript_stat(&mut stats, "l50", length_metrics.l50 as f64);
+    set_transcript_stat(&mut stats, "l75", length_metrics.l75 as f64);
+    set_transcript_stat(&mut stats, "l90", length_metrics.l90 as f64);
+    set_transcript_stat(&mut stats, "l95", length_metrics.l95 as f64);
+    set_transcript_stat(&mut stats, "l99", length_metrics.l99 as f64);
+    set_transcript_stat(&mut stats, "au_n", length_metrics.au_n);
+    set_transcript_stat(&mut stats, "ungapped_n50", ungapped_length_metrics.n50 as f64);
+    set_transcript_stat(&mut stats, "ungapped_au_n", ungapped_length_metrics.au_n);
+    set_transcript_stat(
+        &mut stats,
+        "contigs_ge_1kb",
         length_metrics.contigs_ge_1kb as f64,
     );
-    stats.insert(
-        "contigs_ge_10kb".to_string(),
+    set_transcript_stat(
+        &mut stats,
+        "contigs_ge_10kb",
         length_metrics.contigs_ge_10kb as f64,
     );
-    stats.insert(
-        "contigs_ge_50kb".to_string(),
+    set_transcript_stat(
+        &mut stats,
+        "contigs_ge_50kb",
         length_metrics.contigs_ge_50kb as f64,
     );
-    stats.insert(
-        "contigs_ge_100kb".to_string(),
+    set_transcript_stat(
+        &mut stats,
+        "contigs_ge_100kb",
         length_metrics.contigs_ge_100kb as f64,
     );
-    stats.insert(
-        "bases_ge_1kb".to_string(),
+    set_transcript_stat(
+        &mut stats,
+        "bases_ge_1kb",
         length_metrics.bases_ge_1kb as f64,
     );
-    stats.insert(
-        "bases_ge_10kb".to_string(),
+    set_transcript_stat(
+        &mut stats,
+        "bases_ge_10kb",
         length_metrics.bases_ge_10kb as f64,
     );
-    stats.insert(
-        "bases_ge_50kb".to_string(),
+    set_transcript_stat(
+        &mut stats,
+        "bases_ge_50kb",
         length_metrics.bases_ge_50kb as f64,
     );
-    stats.insert(
-        "bases_ge_100kb".to_string(),
+    set_transcript_stat(
+        &mut stats,
+        "bases_ge_100kb",
         length_metrics.bases_ge_100kb as f64,
     );
-    stats.insert(
-        "contigs_ge_1kb_frac".to_string(),
+    set_transcript_stat(
+        &mut stats,
+        "contigs_ge_1kb_frac",
         length_metrics.contigs_ge_1kb_frac,
     );
-    stats.insert(
-        "contigs_ge_10kb_frac".to_string(),
+    set_transcript_stat(
+        &mut stats,
+        "contigs_ge_10kb_frac",
         length_metrics.contigs_ge_10kb_frac,
     );
-    stats.insert(
-        "contigs_ge_50kb_frac".to_string(),
+    set_transcript_stat(
+        &mut stats,
+        "contigs_ge_50kb_frac",
         length_metrics.contigs_ge_50kb_frac,
     );
-    stats.insert(
-        "contigs_ge_100kb_frac".to_string(),
+    set_transcript_stat(
+        &mut stats,
+        "contigs_ge_100kb_frac",
         length_metrics.contigs_ge_100kb_frac,
     );
-    stats.insert(
-        "bases_ge_1kb_frac".to_string(),
+    set_transcript_stat(
+        &mut stats,
+        "bases_ge_1kb_frac",
         length_metrics.bases_ge_1kb_frac,
     );
-    stats.insert(
-        "bases_ge_10kb_frac".to_string(),
+    set_transcript_stat(
+        &mut stats,
+        "bases_ge_10kb_frac",
         length_metrics.bases_ge_10kb_frac,
     );
-    stats.insert(
-        "bases_ge_50kb_frac".to_string(),
+    set_transcript_stat(
+        &mut stats,
+        "bases_ge_50kb_frac",
         length_metrics.bases_ge_50kb_frac,
     );
-    stats.insert(
-        "bases_ge_100kb_frac".to_string(),
+    set_transcript_stat(
+        &mut stats,
+        "bases_ge_100kb_frac",
         length_metrics.bases_ge_100kb_frac,
     );
 
     let non_finite_confidence_count = transcripts.len() - finite_confidence_count;
-    stats.insert(
-        "non_finite_confidence_count".to_string(),
+    set_transcript_stat(
+        &mut stats,
+        "non_finite_confidence_count",
         non_finite_confidence_count as f64,
     );
-    stats.insert(
-        "length_field_mismatch_count".to_string(),
+    set_transcript_stat(
+        &mut stats,
+        "length_field_mismatch_count",
         length_field_mismatch_count as f64,
     );
 
     if finite_confidence_count == 0 {
-        stats.insert("mean_confidence".to_string(), 0.0);
-        stats.insert("min_confidence".to_string(), 0.0);
-        stats.insert("max_confidence".to_string(), 0.0);
+        set_transcript_stat(&mut stats, "mean_confidence", 0.0);
+        set_transcript_stat(&mut stats, "min_confidence", 0.0);
+        set_transcript_stat(&mut stats, "max_confidence", 0.0);
     } else {
         let mean_confidence = finite_confidence_sum / finite_confidence_count as f64;
 
-        stats.insert("mean_confidence".to_string(), mean_confidence);
-        stats.insert("min_confidence".to_string(), min_confidence);
-        stats.insert("max_confidence".to_string(), max_confidence);
+        set_transcript_stat(&mut stats, "mean_confidence", mean_confidence);
+        set_transcript_stat(&mut stats, "min_confidence", min_confidence);
+        set_transcript_stat(&mut stats, "max_confidence", max_confidence);
     }
 
     let gc_content = if total_sequence_bases > 0 {
@@ -522,25 +579,39 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
     } else {
         0.0
     };
-    stats.insert("gc_content".to_string(), gc_content);
-    stats.insert("gc_content_acgt".to_string(), composition.gc_content());
-    stats.insert(
-        "n_content".to_string(),
+    set_transcript_stat(&mut stats, "gc_content", gc_content);
+    set_transcript_stat(&mut stats, "gc_content_acgt", composition.gc_content());
+    set_transcript_stat(
+        &mut stats,
+        "n_content",
         composition.n_content(total_sequence_bases),
     );
-    stats.insert(
-        "ambiguous_content".to_string(),
+    set_transcript_stat(
+        &mut stats,
+        "ambiguous_content",
         composition.ambiguous_content(total_sequence_bases),
     );
-    stats.insert("acgt_bases".to_string(), composition.acgt_bases as f64);
-    stats.insert("n_bases".to_string(), composition.n_bases as f64);
-    stats.insert(
-        "ambiguous_bases".to_string(),
+    set_transcript_stat(&mut stats, "acgt_bases", composition.acgt_bases as f64);
+    set_transcript_stat(&mut stats, "n_bases", composition.n_bases as f64);
+    set_transcript_stat(
+        &mut stats,
+        "ambiguous_bases",
         composition.ambiguous_bases as f64,
     );
 
     let mean_rle_ratio = total_rle_ratio / transcripts.len() as f64;
-    stats.insert("mean_rle_ratio".to_string(), mean_rle_ratio);
+    let length_weighted_rle_ratio = if total_sequence_bases > 0 {
+        total_rle_runs as f64 / total_sequence_bases as f64
+    } else {
+        0.0
+    };
+    set_transcript_stat(&mut stats, "total_rle_runs", total_rle_runs as f64);
+    set_transcript_stat(&mut stats, "mean_rle_ratio", mean_rle_ratio);
+    set_transcript_stat(
+        &mut stats,
+        "length_weighted_rle_ratio",
+        length_weighted_rle_ratio,
+    );
 
     stats
 }
@@ -796,58 +867,7 @@ mod tests {
     fn test_calculate_transcript_stats_empty_input_has_complete_zero_schema() {
         let stats = calculate_transcript_stats(&[]);
 
-        for key in [
-            "count",
-            "total_length",
-            "mean_length",
-            "median_length",
-            "min_length",
-            "max_length",
-            "n10",
-            "n25",
-            "n50",
-            "n75",
-            "n90",
-            "n95",
-            "n99",
-            "l10",
-            "l25",
-            "l50",
-            "l75",
-            "l90",
-            "l95",
-            "l99",
-            "au_n",
-            "contigs_ge_1kb",
-            "contigs_ge_10kb",
-            "contigs_ge_50kb",
-            "contigs_ge_100kb",
-            "bases_ge_1kb",
-            "bases_ge_10kb",
-            "bases_ge_50kb",
-            "bases_ge_100kb",
-            "contigs_ge_1kb_frac",
-            "contigs_ge_10kb_frac",
-            "contigs_ge_50kb_frac",
-            "contigs_ge_100kb_frac",
-            "bases_ge_1kb_frac",
-            "bases_ge_10kb_frac",
-            "bases_ge_50kb_frac",
-            "bases_ge_100kb_frac",
-            "non_finite_confidence_count",
-            "length_field_mismatch_count",
-            "mean_confidence",
-            "min_confidence",
-            "max_confidence",
-            "gc_content",
-            "gc_content_acgt",
-            "n_content",
-            "ambiguous_content",
-            "acgt_bases",
-            "n_bases",
-            "ambiguous_bases",
-            "mean_rle_ratio",
-        ] {
+        for &key in TRANSCRIPT_STATS_KEYS {
             assert_eq!(
                 stats.get(key).copied(),
                 Some(0.0),
@@ -870,6 +890,38 @@ mod tests {
         assert!((stats.get("n_content").copied().unwrap_or(0.0) - (1.0 / 7.0)).abs() < 1e-12);
         assert!(
             (stats.get("ambiguous_content").copied().unwrap_or(0.0) - (2.0 / 7.0)).abs() < 1e-12
+        );
+        assert_eq!(stats.get("ungapped_total_length").copied(), Some(6.0));
+        assert_eq!(stats.get("ungapped_n50").copied(), Some(6.0));
+        assert_eq!(stats.get("total_rle_runs").copied(), Some(7.0));
+        assert_eq!(stats.get("mean_rle_ratio").copied(), Some(1.0));
+        assert_eq!(
+            stats.get("length_weighted_rle_ratio").copied(),
+            Some(1.0)
+        );
+    }
+
+    #[test]
+    fn test_calculate_transcript_stats_reports_ungapped_and_weighted_rle_metrics() {
+        let transcripts = vec![
+            Transcript::new(1, "AAANN".to_string(), vec![0], 0.5),
+            Transcript::new(2, "ATAT".to_string(), vec![1], 0.5),
+        ];
+
+        let stats = calculate_transcript_stats(&transcripts);
+        assert_eq!(stats.get("total_length").copied(), Some(9.0));
+        assert_eq!(stats.get("ungapped_total_length").copied(), Some(7.0));
+        assert_eq!(stats.get("ungapped_n50").copied(), Some(4.0));
+        assert_eq!(stats.get("total_rle_runs").copied(), Some(6.0));
+        assert!((stats.get("mean_rle_ratio").copied().unwrap_or(0.0) - 0.7).abs() < 1e-12);
+        assert!(
+            (stats
+                .get("length_weighted_rle_ratio")
+                .copied()
+                .unwrap_or(0.0)
+                - (6.0 / 9.0))
+                .abs()
+                < 1e-12
         );
     }
 }
