@@ -1488,16 +1488,17 @@ impl LargeGenomeAssembler {
         graph: &AHashMap<u64, WeightedGraphNode>,
     ) -> AHashSet<(u64, u64)> {
         let mut edges = AHashSet::new();
+        let k = self.config.k;
 
         for (&node, node_info) in graph {
             if node_info.successors.len() > 1 {
                 for &(next, _) in &node_info.successors {
-                    edges.insert((node, next));
+                    edges.insert(Self::canonical_edge_key(node, next, k));
                 }
             }
             if node_info.predecessors.len() > 1 {
                 for &(prev, _) in &node_info.predecessors {
-                    edges.insert((prev, node));
+                    edges.insert(Self::canonical_edge_key(prev, node, k));
                 }
             }
         }
@@ -1607,7 +1608,7 @@ impl LargeGenomeAssembler {
                     Self::resolve_threaded_node(current_kmer.encoded, adjacency, k)
                 {
                     if let Some(prev) = prev_node {
-                        let edge = (prev, current_node);
+                        let edge = Self::canonical_edge_key(prev, current_node, k);
                         if branch_edges.contains(&edge) {
                             *edge_support.entry(edge).or_insert(0) += 1;
                             observations += 1;
@@ -1653,6 +1654,19 @@ impl LargeGenomeAssembler {
         .canonical()
         .encoded;
         adjacency.contains_key(&canonical).then_some(canonical)
+    }
+
+    #[inline]
+    fn branch_read_support(
+        branch_support: &AHashMap<(u64, u64), u32>,
+        from: u64,
+        to: u64,
+        k: usize,
+    ) -> u32 {
+        branch_support
+            .get(&Self::canonical_edge_key(from, to, k))
+            .copied()
+            .unwrap_or(0)
     }
 
     fn weighted_neighbors(
@@ -2122,10 +2136,8 @@ impl LargeGenomeAssembler {
                     if !used.contains(&next_canonical) {
                         let count = kmer_counts.get(&next_canonical).copied().unwrap_or(0);
                         let is_repeat = repeat_kmers.contains(&next_canonical);
-                        let read_support = branch_support
-                            .get(&(right_kmer, next))
-                            .copied()
-                            .unwrap_or(0);
+                        let read_support =
+                            Self::branch_read_support(branch_support, right_kmer, next, k);
                         extensions.push(BranchCandidate {
                             base_idx: i,
                             next,
@@ -2209,7 +2221,7 @@ impl LargeGenomeAssembler {
                         let count = kmer_counts.get(&next_canonical).copied().unwrap_or(0);
                         let is_repeat = repeat_kmers.contains(&next_canonical);
                         let read_support =
-                            branch_support.get(&(next, left_kmer)).copied().unwrap_or(0);
+                            Self::branch_read_support(branch_support, next, left_kmer, k);
                         extensions.push(BranchCandidate {
                             base_idx: i,
                             next,
@@ -3416,13 +3428,59 @@ mod tests {
         let branch = KmerU64::from_str("ACGA").unwrap().encoded;
         let next_primary = KmerU64::from_str("CGAT").unwrap().encoded;
         let next_alternate = KmerU64::from_str("CGAC").unwrap().encoded;
+        let primary_key = LargeGenomeAssembler::canonical_edge_key(branch, next_primary, k);
+        let alternate_key = LargeGenomeAssembler::canonical_edge_key(branch, next_alternate, k);
 
         assert!(observations >= 3);
-        assert_eq!(edge_support.get(&(branch, next_primary)).copied(), Some(2));
-        assert_eq!(
-            edge_support.get(&(branch, next_alternate)).copied(),
-            Some(1)
-        );
+        assert_eq!(edge_support.get(&primary_key).copied(), Some(2));
+        assert_eq!(edge_support.get(&alternate_key).copied(), Some(1));
+    }
+
+    #[test]
+    fn test_branch_threading_aggregates_reverse_complement_support_into_same_edge() {
+        let k = 4;
+        let sequences = ["TACGATG", "CATCGTA"];
+        let mut counts = AHashMap::new();
+
+        for sequence in &sequences {
+            for i in 0..=sequence.len() - k {
+                let encoded = KmerU64::from_str(&sequence[i..i + k])
+                    .unwrap()
+                    .canonical()
+                    .encoded;
+                counts.insert(encoded, 10);
+            }
+        }
+
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: 1,
+            ..Default::default()
+        });
+        let valid_kmers: AHashSet<u64> = counts.keys().copied().collect();
+        let adjacency = assembler.build_adjacency(&valid_kmers, k);
+
+        let branch = KmerU64::from_str("ACGA").unwrap().encoded;
+        let next = KmerU64::from_str("CGAT").unwrap().encoded;
+        let canonical_key = LargeGenomeAssembler::canonical_edge_key(branch, next, k);
+        let mut branch_edges = AHashSet::new();
+        branch_edges.insert(canonical_key);
+
+        let mut edge_support = AHashMap::new();
+        let mut observations = 0u64;
+        for sequence in &sequences {
+            observations += LargeGenomeAssembler::thread_branch_edges_in_sequence(
+                sequence.as_bytes(),
+                k,
+                &adjacency,
+                &branch_edges,
+                &mut edge_support,
+            );
+        }
+
+        assert_eq!(observations, 2);
+        assert_eq!(edge_support.get(&canonical_key).copied(), Some(2));
     }
 
     #[test]
