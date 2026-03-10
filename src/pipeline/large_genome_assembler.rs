@@ -1182,7 +1182,7 @@ impl LargeGenomeAssembler {
             })
             .map(|(&e, &c)| (e, c))
             .collect();
-        sorted.sort_unstable_by_key(|(_, c)| Reverse(*c));
+        sorted.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
         info!("  Extending from {} seed k-mers...", sorted.len());
         let mut progress = 0;
@@ -2076,10 +2076,14 @@ impl LargeGenomeAssembler {
         });
 
         best_non_repeat.or_else(|| {
-            extensions
-                .iter()
-                .copied()
-                .max_by_key(|ext| (ext.read_support, ext.count))
+            extensions.iter().copied().max_by_key(|ext| {
+                (
+                    ext.read_support,
+                    ext.count,
+                    Reverse(ext.next),
+                    Reverse(ext.base_idx),
+                )
+            })
         })
     }
 
@@ -2124,7 +2128,7 @@ impl LargeGenomeAssembler {
             .iter()
             .filter(|c| c.len() >= self.config.min_contig_len)
             .collect();
-        valid.sort_by_key(|c| std::cmp::Reverse(c.len()));
+        valid.sort_unstable_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
 
         let mut lengths: Vec<usize> = Vec::with_capacity(valid.len());
         let mut total_len = 0usize;
@@ -2174,6 +2178,9 @@ pub fn assemble_large_genome(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::rngs::StdRng;
+    use rand::seq::SliceRandom;
+    use rand::SeedableRng;
     use std::io::Write;
     use tempfile::{NamedTempFile, TempDir};
 
@@ -2542,6 +2549,32 @@ mod tests {
         assert!((stats.au_n - 75.0).abs() < 1e-12);
     }
 
+    #[test]
+    fn test_write_output_tie_breaks_equal_length_contigs_lexicographically() {
+        let output = NamedTempFile::new().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            min_contig_len: 1,
+            num_buckets: Some(4),
+            temp_dir: Some(temp_dir.path().to_str().unwrap().to_string()),
+            ..Default::default()
+        });
+
+        let contigs = vec!["TT".to_string(), "AA".to_string(), "CC".to_string()];
+        let mut stats = AssemblyStats::default();
+        assembler
+            .write_output(&contigs, output.path().to_str().unwrap(), &mut stats)
+            .unwrap();
+
+        let written = std::fs::read_to_string(output.path()).unwrap();
+        let sequences: Vec<&str> = written
+            .lines()
+            .filter(|line| !line.starts_with('>'))
+            .collect();
+
+        assert_eq!(sequences, vec!["AA", "CC", "TT"]);
+    }
+
     /// Test repeat detection and resolution
     #[test]
     fn test_repeat_detection() {
@@ -2848,5 +2881,75 @@ mod tests {
 
         let best = assembler.choose_branch_extension(&extensions, 20).unwrap();
         assert_eq!(best.next, 22);
+    }
+
+    #[test]
+    fn test_choose_branch_extension_repeat_fallback_is_insertion_order_invariant() {
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig::default());
+        let left = BranchCandidate {
+            base_idx: 3,
+            next: 11,
+            count: 8,
+            is_repeat: true,
+            read_support: 2,
+        };
+        let right = BranchCandidate {
+            base_idx: 0,
+            next: 7,
+            count: 8,
+            is_repeat: true,
+            read_support: 2,
+        };
+
+        let best_ab = assembler
+            .choose_branch_extension(&[left, right], 12)
+            .unwrap();
+        let best_ba = assembler
+            .choose_branch_extension(&[right, left], 12)
+            .unwrap();
+
+        assert_eq!(best_ab.next, best_ba.next);
+        assert_eq!(best_ab.next, 7);
+    }
+
+    #[test]
+    fn test_build_contigs_from_graph_is_stable_under_shuffled_tied_seed_insertion() {
+        let k = 3;
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: 1,
+            ..Default::default()
+        });
+
+        let mut entries: Vec<(u64, u32)> = ["AAA", "AAT", "ATC", "ATG"]
+            .into_iter()
+            .map(|kmer| (KmerU64::from_str(kmer).unwrap().canonical().encoded, 10u32))
+            .collect();
+        entries.sort_unstable_by_key(|(kmer, _)| *kmer);
+        entries.dedup_by_key(|(kmer, _)| *kmer);
+
+        let branch_support: AHashMap<(u64, u64), u32> = AHashMap::new();
+        let mut rng = StdRng::seed_from_u64(7);
+        let mut baseline: Option<Vec<String>> = None;
+
+        for _ in 0..64 {
+            entries.shuffle(&mut rng);
+            let mut counts = AHashMap::new();
+            for &(kmer, count) in &entries {
+                counts.insert(kmer, count);
+            }
+
+            let valid_kmers: AHashSet<u64> = counts.keys().copied().collect();
+            let adjacency = assembler.build_adjacency(&valid_kmers, k);
+            let contigs =
+                assembler.build_contigs_from_graph(&counts, &adjacency, &branch_support, k);
+
+            if let Some(expected) = &baseline {
+                assert_eq!(&contigs, expected);
+            } else {
+                baseline = Some(contigs);
+            }
+        }
     }
 }
