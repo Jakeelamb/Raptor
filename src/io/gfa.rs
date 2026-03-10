@@ -525,11 +525,7 @@ mod tests {
                 overlaps: Vec::new(),
             },
         ];
-        let paths_b = vec![
-            paths_a[1].clone(),
-            paths_a[2].clone(),
-            paths_a[0].clone(),
-        ];
+        let paths_b = vec![paths_a[1].clone(), paths_a[2].clone(), paths_a[0].clone()];
 
         let file_a = NamedTempFile::new().unwrap();
         let mut writer_a = GfaWriter::new(file_a.path().to_str().unwrap());
