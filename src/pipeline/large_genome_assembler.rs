@@ -1743,6 +1743,60 @@ impl LargeGenomeAssembler {
 
         let mut observations = 0u64;
         let mut prev_node = None;
+        let mut rolling = 0u64;
+        let mut valid_run = 0usize;
+        let rolling_mask = if k >= 32 {
+            u64::MAX
+        } else {
+            (1u64 << (k * 2)) - 1
+        };
+
+        for &base in sequence {
+            let Some(base_bits) = Self::encode_dna_base_2bit(base) else {
+                prev_node = None;
+                rolling = 0;
+                valid_run = 0;
+                continue;
+            };
+
+            rolling = ((rolling << 2) | base_bits) & rolling_mask;
+            valid_run += 1;
+            if valid_run < k {
+                continue;
+            }
+
+            if let Some(current_node) = Self::resolve_threaded_node(rolling, adjacency, k) {
+                if let Some(prev) = prev_node {
+                    let edge = Self::canonical_edge_key(prev, current_node, k);
+                    if branch_edges.contains(&edge) {
+                        let support = edge_support.entry(edge).or_insert(0);
+                        *support = support.saturating_add(1);
+                        observations = observations.saturating_add(1);
+                    }
+                }
+                prev_node = Some(current_node);
+            } else {
+                prev_node = None;
+            }
+        }
+
+        observations
+    }
+
+    #[cfg(test)]
+    fn thread_branch_edges_in_sequence_reference(
+        sequence: &[u8],
+        k: usize,
+        adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+        branch_edges: &AHashSet<(u64, u64)>,
+        edge_support: &mut AHashMap<(u64, u64), u32>,
+    ) -> u64 {
+        if branch_edges.is_empty() || sequence.len() < k {
+            return 0;
+        }
+
+        let mut observations = 0u64;
+        let mut prev_node = None;
         let mut pos = 0usize;
 
         while pos + k <= sequence.len() {
@@ -1786,6 +1840,17 @@ impl LargeGenomeAssembler {
         }
 
         observations
+    }
+
+    #[inline]
+    fn encode_dna_base_2bit(base: u8) -> Option<u64> {
+        match base {
+            b'A' | b'a' => Some(0),
+            b'C' | b'c' => Some(1),
+            b'G' | b'g' => Some(2),
+            b'T' | b't' => Some(3),
+            _ => None,
+        }
     }
 
     fn resolve_threaded_node(
@@ -2628,6 +2693,7 @@ pub fn assemble_large_genome(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
     use rand::Rng;
@@ -2664,6 +2730,51 @@ mod tests {
             .map(|(&kmer, &(left, right))| (kmer, left, right))
             .collect();
         entries.sort_unstable_by_key(|(kmer, _, _)| *kmer);
+        entries
+    }
+
+    fn build_branch_threading_fixture(
+        k: usize,
+    ) -> (
+        AHashMap<u64, ([bool; 4], [bool; 4])>,
+        AHashSet<(u64, u64)>,
+        AHashMap<u64, u32>,
+    ) {
+        let sequences = ["TACGATG", "TACGATG", "TACGACG"];
+        let mut counts = AHashMap::new();
+
+        for sequence in &sequences {
+            for i in 0..=sequence.len() - k {
+                let encoded = KmerU64::from_str(&sequence[i..i + k])
+                    .unwrap()
+                    .canonical()
+                    .encoded;
+                counts.insert(encoded, 10);
+            }
+        }
+
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: 1,
+            ..Default::default()
+        });
+        let valid_kmers: AHashSet<u64> = counts.keys().copied().collect();
+        let adjacency = assembler.build_adjacency(&valid_kmers, k);
+        let graph = assembler.build_weighted_unitig_graph(&counts, &adjacency, k);
+        let branch_edges = assembler.collect_ambiguous_branch_edges(&graph);
+
+        (adjacency, branch_edges, counts)
+    }
+
+    fn canonicalize_edge_support(
+        edge_support: &AHashMap<(u64, u64), u32>,
+    ) -> Vec<((u64, u64), u32)> {
+        let mut entries: Vec<_> = edge_support
+            .iter()
+            .map(|(&edge, &count)| (edge, count))
+            .collect();
+        entries.sort_unstable_by_key(|(edge, _)| *edge);
         entries
     }
 
@@ -3836,6 +3947,53 @@ mod tests {
 
         assert_eq!(observations, 1);
         assert_eq!(edge_support.get(&edge_key).copied(), Some(u32::MAX));
+    }
+
+    proptest! {
+        #[test]
+        fn prop_branch_threading_matches_reference_implementation_under_noisy_input(
+            reads in prop::collection::vec(
+                prop::collection::vec(
+                    prop_oneof![
+                        Just(b'A'), Just(b'C'), Just(b'G'), Just(b'T'),
+                        Just(b'N'), Just(b'R'), Just(b'Y'), Just(b'a'), Just(b't')
+                    ],
+                    0..80
+                ),
+                0..24
+            )
+        ) {
+            let k = 4usize;
+            let (adjacency, branch_edges, _) = build_branch_threading_fixture(k);
+
+            let mut optimized_support = AHashMap::new();
+            let mut reference_support = AHashMap::new();
+            let mut optimized_observations = 0u64;
+            let mut reference_observations = 0u64;
+
+            for read in &reads {
+                optimized_observations += LargeGenomeAssembler::thread_branch_edges_in_sequence(
+                    read,
+                    k,
+                    &adjacency,
+                    &branch_edges,
+                    &mut optimized_support,
+                );
+                reference_observations += LargeGenomeAssembler::thread_branch_edges_in_sequence_reference(
+                    read,
+                    k,
+                    &adjacency,
+                    &branch_edges,
+                    &mut reference_support,
+                );
+            }
+
+            prop_assert_eq!(optimized_observations, reference_observations);
+            prop_assert_eq!(
+                canonicalize_edge_support(&optimized_support),
+                canonicalize_edge_support(&reference_support),
+            );
+        }
     }
 
     #[test]
