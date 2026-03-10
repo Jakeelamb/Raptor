@@ -4,6 +4,8 @@ use crate::graph::transcript::Transcript;
 use rayon::prelude::*;
 use std::collections::HashMap;
 
+const START_NODE_CHUNK_SIZE: usize = 64;
+
 /// Process paths in parallel using multiple threads
 pub fn parallel_path_discovery(
     graph: &IsoformGraph,
@@ -11,23 +13,27 @@ pub fn parallel_path_discovery(
     end_nodes: &[usize],
     max_depth: usize,
 ) -> Vec<TranscriptPath> {
-    // Define chunk size based on number of start nodes
-    let chunk_size = (start_nodes.len() / rayon::current_num_threads()).max(1);
+    if start_nodes.is_empty() {
+        return Vec::new();
+    }
 
-    // Split start nodes into chunks for parallel processing
-    let chunks: Vec<Vec<usize>> = start_nodes
-        .chunks(chunk_size)
-        .map(|chunk| chunk.to_vec())
-        .collect();
+    // Sort starts once so output is deterministic regardless of caller order.
+    let mut ordered_starts = start_nodes.to_vec();
+    ordered_starts.sort_unstable();
 
-    // Process each chunk in parallel
-    let results: Vec<Vec<TranscriptPath>> = chunks
-        .par_iter()
+    // Fixed-size chunking keeps output independent of runtime thread count.
+    let mut chunked_results: Vec<Vec<TranscriptPath>> = ordered_starts
+        .par_chunks(START_NODE_CHUNK_SIZE)
+        .with_min_len(1)
         .map(|chunk| find_directed_paths(graph, chunk, end_nodes, max_depth))
         .collect();
 
-    // Flatten results
-    results.into_iter().flatten().collect()
+    let total_paths: usize = chunked_results.iter().map(Vec::len).sum();
+    let mut all_paths = Vec::with_capacity(total_paths);
+    for paths in chunked_results.iter_mut() {
+        all_paths.append(paths);
+    }
+    all_paths
 }
 
 /// Process transcript assembly in parallel
@@ -97,46 +103,24 @@ pub fn parallel_path_filtering(
         .collect()
 }
 
-/// Calculate confidence for a path as the average of edge weights in a DiGraphMap
-fn calculate_path_confidence(graph: &IsoformGraph, path: &[usize]) -> f32 {
-    if path.len() <= 1 {
-        return 1.0; // Single node has perfect confidence
-    }
-
-    let mut sum_weights = 0.0;
-    let mut count = 0;
-
-    for i in 0..path.len() - 1 {
-        // For DiGraphMap, we use edge_weight directly with node IDs
-        if let Some(&weight) = graph.edge_weight(path[i], path[i + 1]) {
-            sum_weights += weight;
-            count += 1;
-        }
-    }
-
-    if count == 0 {
-        0.0
-    } else {
-        sum_weights / count as f32
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use petgraph::Graph;
+    use petgraph::graphmap::DiGraphMap;
+    use rand::rngs::StdRng;
+    use rand::seq::SliceRandom;
+    use rand::SeedableRng;
+    use rayon::ThreadPoolBuilder;
+
+    fn summarize_paths(paths: Vec<TranscriptPath>) -> Vec<(Vec<usize>, u32, usize)> {
+        paths
+            .into_iter()
+            .map(|path| (path.nodes, path.confidence.to_bits(), path.length))
+            .collect()
+    }
 
     #[test]
     fn test_parallel_assembly() {
-        // Create test graph
-        let mut graph = Graph::<usize, f32>::new();
-        let n1 = graph.add_node(1);
-        let n2 = graph.add_node(2);
-        let n3 = graph.add_node(3);
-
-        graph.add_edge(n1, n2, 0.9);
-        graph.add_edge(n2, n3, 0.8);
-
         // Create test contigs
         let mut contigs = HashMap::new();
         contigs.insert(1, "ATCGATCG".to_string());
@@ -164,5 +148,59 @@ mod tests {
         assert_eq!(transcripts.len(), 2);
         assert_eq!(transcripts[0].path, vec![1, 2]);
         assert_eq!(transcripts[1].path, vec![2, 3]);
+    }
+
+    #[test]
+    fn parallel_path_discovery_is_stable_under_start_permutation_and_thread_count() {
+        let mut graph = DiGraphMap::new();
+        let edges = [
+            (0, 1, 0.90),
+            (0, 2, 0.85),
+            (1, 3, 0.80),
+            (2, 3, 0.70),
+            (2, 4, 0.75),
+            (3, 5, 0.95),
+            (4, 5, 0.65),
+            (4, 6, 0.60),
+        ];
+        for &(u, v, w) in &edges {
+            graph.add_edge(u, v, w);
+        }
+
+        let start_nodes = vec![4, 0, 2, 1];
+        let end_nodes = vec![5, 6];
+
+        let baseline = ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .expect("single-thread pool should build")
+            .install(|| {
+                summarize_paths(parallel_path_discovery(&graph, &start_nodes, &end_nodes, 8))
+            });
+
+        let multithread = ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .expect("multi-thread pool should build")
+            .install(|| {
+                summarize_paths(parallel_path_discovery(&graph, &start_nodes, &end_nodes, 8))
+            });
+
+        assert_eq!(multithread, baseline);
+
+        let mut rng = StdRng::seed_from_u64(0xDE7E_0123);
+        for _ in 0..64 {
+            let mut shuffled = start_nodes.clone();
+            shuffled.shuffle(&mut rng);
+
+            let observed = ThreadPoolBuilder::new()
+                .num_threads(3)
+                .build()
+                .expect("thread pool should build")
+                .install(|| {
+                    summarize_paths(parallel_path_discovery(&graph, &shuffled, &end_nodes, 8))
+                });
+            assert_eq!(observed, baseline);
+        }
     }
 }
