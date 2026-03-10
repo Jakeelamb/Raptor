@@ -70,6 +70,10 @@ pub struct AssemblyStats {
     pub kmers_error_corrected: u64,
     pub tips_removed: usize,
     pub bubbles_popped: usize,
+    pub ambiguous_branch_edges: usize,
+    pub branch_edges_supported: usize,
+    pub branch_edge_observations: u64,
+    pub branch_edge_support_fraction: f64,
     pub contigs: usize,
     pub total_length: usize,
     pub gc_bases: usize,
@@ -151,6 +155,16 @@ impl std::fmt::Display for AssemblyStats {
                 f,
                 "Graph cleaning: {} tips removed, {} bubbles popped",
                 self.tips_removed, self.bubbles_popped
+            )?;
+        }
+        if self.ambiguous_branch_edges > 0 || self.branch_edge_observations > 0 {
+            writeln!(
+                f,
+                "Read-threaded branch support: {}/{} ({:.2}%), {} observations",
+                self.branch_edges_supported,
+                self.ambiguous_branch_edges,
+                self.branch_edge_support_fraction * 100.0,
+                self.branch_edge_observations
             )?;
         }
         writeln!(f, "Contigs: {}", self.contigs)?;
@@ -516,6 +530,7 @@ impl LargeGenomeAssembler {
         let ambiguous_edges = self.collect_ambiguous_branch_edges(&weighted_graph);
         let (branch_support, threading_stats) =
             self.collect_branch_support_from_fastq(input_path, &adjacency, &ambiguous_edges, k)?;
+        Self::apply_read_threading_stats(&mut stats, &threading_stats);
         info!(
             "  Read threading: {} ambiguous edges, {} supported, {} observations",
             threading_stats.ambiguous_edges,
@@ -640,6 +655,7 @@ impl LargeGenomeAssembler {
             &ambiguous_edges,
             k,
         )?;
+        Self::apply_read_threading_stats(&mut stats, &threading_stats);
         info!(
             "  Read threading: {} ambiguous edges, {} supported, {} observations",
             threading_stats.ambiguous_edges,
@@ -671,6 +687,18 @@ impl LargeGenomeAssembler {
         }
         config.min_count = 1; // We filter later for flexibility
         config
+    }
+
+    #[inline]
+    fn apply_read_threading_stats(stats: &mut AssemblyStats, threading_stats: &ReadThreadingStats) {
+        stats.ambiguous_branch_edges = threading_stats.ambiguous_edges;
+        stats.branch_edges_supported = threading_stats.supported_edges;
+        stats.branch_edge_observations = threading_stats.edge_observations;
+        stats.branch_edge_support_fraction = if threading_stats.ambiguous_edges == 0 {
+            0.0
+        } else {
+            threading_stats.supported_edges as f64 / threading_stats.ambiguous_edges as f64
+        };
     }
 
     fn distribute_from_fastq(
@@ -3272,6 +3300,50 @@ mod tests {
 
         let rendered = stats.to_string();
         assert!(rendered.contains("auN/effective count: 1234.50 bp / 6.75"));
+    }
+
+    #[test]
+    fn test_apply_read_threading_stats_updates_branch_quality_metrics() {
+        let mut stats = AssemblyStats::default();
+        let threading_stats = ReadThreadingStats {
+            ambiguous_edges: 12,
+            supported_edges: 9,
+            edge_observations: 42,
+        };
+
+        LargeGenomeAssembler::apply_read_threading_stats(&mut stats, &threading_stats);
+
+        assert_eq!(stats.ambiguous_branch_edges, 12);
+        assert_eq!(stats.branch_edges_supported, 9);
+        assert_eq!(stats.branch_edge_observations, 42);
+        assert!((stats.branch_edge_support_fraction - 0.75).abs() < 1e-12);
+
+        LargeGenomeAssembler::apply_read_threading_stats(
+            &mut stats,
+            &ReadThreadingStats {
+                ambiguous_edges: 0,
+                supported_edges: 0,
+                edge_observations: 0,
+            },
+        );
+        assert_eq!(stats.ambiguous_branch_edges, 0);
+        assert_eq!(stats.branch_edges_supported, 0);
+        assert_eq!(stats.branch_edge_observations, 0);
+        assert_eq!(stats.branch_edge_support_fraction, 0.0);
+    }
+
+    #[test]
+    fn test_assembly_stats_display_includes_read_threading_summary() {
+        let stats = AssemblyStats {
+            ambiguous_branch_edges: 12,
+            branch_edges_supported: 9,
+            branch_edge_observations: 42,
+            branch_edge_support_fraction: 0.75,
+            ..AssemblyStats::default()
+        };
+
+        let rendered = stats.to_string();
+        assert!(rendered.contains("Read-threaded branch support: 9/12 (75.00%), 42 observations"));
     }
 
     #[test]
