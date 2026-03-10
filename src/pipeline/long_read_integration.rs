@@ -9,6 +9,7 @@
 use crate::io::fasta::{open_fasta, FastaWriter};
 use crate::io::fastq::{open_fastq, stream_fastq_records};
 use ahash::{AHashMap, AHashSet};
+use std::cmp::Ordering;
 use std::io::{BufRead, Result};
 use tracing::info;
 
@@ -61,6 +62,18 @@ struct ReadMapping {
     read_end: usize,
     is_reverse: bool,
     score: usize, // Number of matching minimizers
+}
+
+#[inline]
+fn compare_read_mappings(a: &ReadMapping, b: &ReadMapping) -> Ordering {
+    b.score
+        .cmp(&a.score)
+        .then_with(|| a.contig_id.cmp(&b.contig_id))
+        .then_with(|| a.is_reverse.cmp(&b.is_reverse))
+        .then_with(|| a.contig_start.cmp(&b.contig_start))
+        .then_with(|| a.contig_end.cmp(&b.contig_end))
+        .then_with(|| a.read_start.cmp(&b.read_start))
+        .then_with(|| a.read_end.cmp(&b.read_end))
 }
 
 /// Minimizer index for fast contig mapping
@@ -167,8 +180,7 @@ impl MinimizerIndex {
             });
         }
 
-        // Sort by score
-        mappings.sort_by(|a, b| b.score.cmp(&a.score));
+        mappings.sort_unstable_by(compare_read_mappings);
         mappings
     }
 }
@@ -242,6 +254,18 @@ struct ContigLink {
     gap_estimate: i32,
     supporting_reads: usize,
     bridging_sequences: Vec<Vec<u8>>,
+}
+
+#[inline]
+fn compare_contig_links(a: &ContigLink, b: &ContigLink) -> Ordering {
+    b.supporting_reads
+        .cmp(&a.supporting_reads)
+        .then_with(|| a.contig_a.cmp(&b.contig_a))
+        .then_with(|| a.contig_b.cmp(&b.contig_b))
+        .then_with(|| a.orientation_a.cmp(&b.orientation_a))
+        .then_with(|| a.orientation_b.cmp(&b.orientation_b))
+        .then_with(|| a.gap_estimate.cmp(&b.gap_estimate))
+        .then_with(|| b.bridging_sequences.len().cmp(&a.bridging_sequences.len()))
 }
 
 /// Main function for long read integration
@@ -342,7 +366,7 @@ pub fn integrate_long_reads(
                 }
 
                 // Check for right extension
-                if best.contig_end > contig_len - 50
+                if best.contig_end > contig_len.saturating_sub(50)
                     && record.sequence.len() - best.read_end > config.min_overlap
                 {
                     let extension = record.sequence[best.read_end..].as_bytes().to_vec();
@@ -401,7 +425,7 @@ pub fn integrate_long_reads(
         .values()
         .filter(|l| l.supporting_reads >= 3 && !l.bridging_sequences.is_empty())
         .collect();
-    sorted_links.sort_by(|a, b| b.supporting_reads.cmp(&a.supporting_reads));
+    sorted_links.sort_unstable_by(|a, b| compare_contig_links(a, b));
 
     for link in sorted_links {
         if joined_contigs.contains(&link.contig_a) || joined_contigs.contains(&link.contig_b) {
@@ -456,6 +480,8 @@ pub fn integrate_long_reads(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_reverse_complement() {
@@ -489,5 +515,135 @@ mod tests {
         let config = LongReadConfig::default();
         assert_eq!(config.min_anchor_matches, 5);
         assert_eq!(config.min_read_length, 1000);
+    }
+
+    #[test]
+    fn map_read_tie_breaks_are_deterministic() {
+        let mut mappings = vec![
+            ReadMapping {
+                contig_id: 2,
+                contig_start: 10,
+                contig_end: 20,
+                read_start: 1,
+                read_end: 11,
+                is_reverse: false,
+                score: 7,
+            },
+            ReadMapping {
+                contig_id: 1,
+                contig_start: 11,
+                contig_end: 21,
+                read_start: 2,
+                read_end: 12,
+                is_reverse: true,
+                score: 7,
+            },
+            ReadMapping {
+                contig_id: 1,
+                contig_start: 8,
+                contig_end: 18,
+                read_start: 0,
+                read_end: 10,
+                is_reverse: false,
+                score: 7,
+            },
+            ReadMapping {
+                contig_id: 0,
+                contig_start: 0,
+                contig_end: 10,
+                read_start: 0,
+                read_end: 10,
+                is_reverse: false,
+                score: 9,
+            },
+        ];
+
+        mappings.sort_unstable_by(compare_read_mappings);
+        let ordering: Vec<(usize, bool, usize)> = mappings
+            .iter()
+            .map(|m| (m.contig_id, m.is_reverse, m.score))
+            .collect();
+
+        assert_eq!(
+            ordering,
+            vec![(0, false, 9), (1, false, 7), (1, true, 7), (2, false, 7)]
+        );
+    }
+
+    #[test]
+    fn contig_link_tie_breaks_are_deterministic() {
+        let mut links = vec![
+            ContigLink {
+                contig_a: 5,
+                contig_b: 8,
+                orientation_a: false,
+                orientation_b: false,
+                gap_estimate: 0,
+                supporting_reads: 4,
+                bridging_sequences: vec![b"AAA".to_vec()],
+            },
+            ContigLink {
+                contig_a: 2,
+                contig_b: 3,
+                orientation_a: false,
+                orientation_b: false,
+                gap_estimate: 0,
+                supporting_reads: 4,
+                bridging_sequences: vec![b"CCC".to_vec()],
+            },
+            ContigLink {
+                contig_a: 1,
+                contig_b: 2,
+                orientation_a: false,
+                orientation_b: false,
+                gap_estimate: 0,
+                supporting_reads: 5,
+                bridging_sequences: vec![b"GGG".to_vec()],
+            },
+        ];
+
+        links.sort_unstable_by(compare_contig_links);
+        let ordering: Vec<(usize, usize, usize)> = links
+            .iter()
+            .map(|l| (l.contig_a, l.contig_b, l.supporting_reads))
+            .collect();
+
+        assert_eq!(ordering, vec![(1, 2, 5), (2, 3, 4), (5, 8, 4)]);
+    }
+
+    #[test]
+    fn integrate_long_reads_handles_short_contigs_without_underflow() {
+        let mut contigs = NamedTempFile::new().expect("temp contig fasta");
+        writeln!(contigs, ">contig_1").expect("write header");
+        writeln!(contigs, "ACGTACGTACGT").expect("write sequence");
+
+        let mut reads = NamedTempFile::new().expect("temp long-read fastq");
+        let read_seq = "ACGTACGTACGTAAAA";
+        writeln!(reads, "@read_1").expect("write read id");
+        writeln!(reads, "{}", read_seq).expect("write read seq");
+        writeln!(reads, "+").expect("write plus line");
+        writeln!(reads, "{}", "I".repeat(read_seq.len())).expect("write quality");
+
+        let output = NamedTempFile::new().expect("temp output fasta");
+        let config = LongReadConfig {
+            min_anchor_matches: 3,
+            min_overlap: 1,
+            min_read_length: 8,
+            minimizer_k: 3,
+            minimizer_w: 2,
+        };
+
+        let stats = integrate_long_reads(
+            contigs.path().to_str().expect("utf8 contigs path"),
+            reads.path().to_str().expect("utf8 reads path"),
+            output.path().to_str().expect("utf8 output path"),
+            config,
+        )
+        .expect("integration should succeed");
+
+        assert_eq!(stats.contigs_input, 1);
+        assert_eq!(stats.long_reads_processed, 1);
+        assert_eq!(stats.long_reads_mapped, 1);
+        assert_eq!(stats.output_contigs, 1);
     }
 }
