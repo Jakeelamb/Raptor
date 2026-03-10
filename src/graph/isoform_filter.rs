@@ -62,6 +62,10 @@ fn edit_distance(a: &str, b: &str) -> usize {
 /// Jaccard similarity = |intersection| / |union|
 #[inline]
 pub fn kmer_jaccard_similarity(seq1: &str, seq2: &str, k: usize) -> f64 {
+    if k == 0 {
+        return f64::from(seq1 == seq2);
+    }
+
     if seq1.is_empty() || seq2.is_empty() {
         return f64::from(seq1.is_empty() && seq2.is_empty());
     }
@@ -109,7 +113,7 @@ pub fn kmer_jaccard_similarity(seq1: &str, seq2: &str, k: usize) -> f64 {
 /// Extract k-mer hashes from a sequence using ntHash.
 #[inline]
 fn extract_kmer_hashes(seq: &[u8], k: usize) -> AHashSet<u64> {
-    if seq.len() < k {
+    if k == 0 || seq.len() < k {
         return AHashSet::new();
     }
 
@@ -585,6 +589,14 @@ mod tests {
     fn test_kmer_jaccard_similarity_short_equal_length_distinguishes_disjoint_sequences() {
         let similarity = kmer_jaccard_similarity("AAAA", "TTTT", JACCARD_K);
         assert_eq!(similarity, 0.0);
+    }
+
+    #[test]
+    fn test_kmer_jaccard_similarity_zero_k_is_sequence_aware() {
+        assert_eq!(kmer_jaccard_similarity("AAAA", "AAAA", 0), 1.0);
+        assert_eq!(kmer_jaccard_similarity("AAAA", "TTTT", 0), 0.0);
+        assert_eq!(kmer_jaccard_similarity("", "", 0), 1.0);
+        assert_eq!(kmer_jaccard_similarity("", "A", 0), 0.0);
     }
 
     #[test]
