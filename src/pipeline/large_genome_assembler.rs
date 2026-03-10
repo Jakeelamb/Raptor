@@ -1737,6 +1737,7 @@ impl LargeGenomeAssembler {
         // Start with the seed k-mer sequence (use canonical form)
         let seed_seq = decode_kmer(seed_canonical, k);
         let mut contig: Vec<u8> = seed_seq.into_bytes();
+        let mut left_extension: Vec<u8> = Vec::new();
         used.insert(seed_canonical);
 
         // Track current ACTUAL k-mer at each end (not canonical)
@@ -1841,7 +1842,7 @@ impl LargeGenomeAssembler {
                 };
                 let next_canonical = next_kmer.canonical().encoded;
 
-                contig.insert(0, base);
+                left_extension.push(base);
                 used.insert(next_canonical);
 
                 // Continue with ACTUAL extended k-mer
@@ -1849,6 +1850,13 @@ impl LargeGenomeAssembler {
             } else {
                 break;
             }
+        }
+
+        if !left_extension.is_empty() {
+            let mut merged = Vec::with_capacity(left_extension.len() + contig.len());
+            merged.extend(left_extension.iter().rev().copied());
+            merged.extend_from_slice(&contig);
+            contig = merged;
         }
 
         String::from_utf8(contig).unwrap_or_default()
@@ -1873,6 +1881,7 @@ impl LargeGenomeAssembler {
 
         let seed_seq = decode_kmer(seed_canonical, k);
         let mut contig: Vec<u8> = seed_seq.into_bytes();
+        let mut left_extension: Vec<u8> = Vec::new();
         used.insert(seed_canonical);
 
         let mut right_kmer = seed_canonical;
@@ -1886,7 +1895,7 @@ impl LargeGenomeAssembler {
                 .unwrap_or(([false; 4], [false; 4]));
 
             // Find valid extensions with their coverage
-            let mut extensions: Vec<BranchCandidate> = Vec::new();
+            let mut extensions: Vec<BranchCandidate> = Vec::with_capacity(4);
             for (i, &valid) in right_ext.iter().enumerate() {
                 if !valid {
                     continue;
@@ -1972,7 +1981,7 @@ impl LargeGenomeAssembler {
                 .copied()
                 .unwrap_or(([false; 4], [false; 4]));
 
-            let mut extensions: Vec<BranchCandidate> = Vec::new();
+            let mut extensions: Vec<BranchCandidate> = Vec::with_capacity(4);
             for (i, &valid) in left_ext.iter().enumerate() {
                 if !valid {
                     continue;
@@ -2012,7 +2021,7 @@ impl LargeGenomeAssembler {
                 };
                 let next_canonical = next_kmer.canonical().encoded;
 
-                contig.insert(0, base);
+                left_extension.push(base);
                 used.insert(next_canonical);
                 left_kmer = extension.next;
                 continue;
@@ -2039,12 +2048,19 @@ impl LargeGenomeAssembler {
                 };
                 let next_canonical = next_kmer.canonical().encoded;
 
-                contig.insert(0, base);
+                left_extension.push(base);
                 used.insert(next_canonical);
                 left_kmer = best.next;
             } else {
                 break;
             }
+        }
+
+        if !left_extension.is_empty() {
+            let mut merged = Vec::with_capacity(left_extension.len() + contig.len());
+            merged.extend(left_extension.iter().rev().copied());
+            merged.extend_from_slice(&contig);
+            contig = merged;
         }
 
         String::from_utf8(contig).unwrap_or_default()
@@ -2782,6 +2798,48 @@ mod tests {
         assert!(diagnostics.oriented_edges >= counts.len().saturating_sub(1));
         assert_eq!(contigs.len(), 1);
         assert!(contigs[0] == sequence || contigs[0] == reverse);
+    }
+
+    #[test]
+    fn test_extend_bidirectional_with_coverage_reconstructs_linear_path() {
+        let sequence = "AAATCGG";
+        let k = 4;
+        let mut counts = AHashMap::new();
+
+        for i in 0..=sequence.len() - k {
+            let encoded = KmerU64::from_str(&sequence[i..i + k])
+                .unwrap()
+                .canonical()
+                .encoded;
+            counts.insert(encoded, 10);
+        }
+
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: 1,
+            ..Default::default()
+        });
+        let valid_kmers: AHashSet<u64> = counts.keys().copied().collect();
+        let adjacency = assembler.build_adjacency(&valid_kmers, k);
+        let branch_support: AHashMap<(u64, u64), u32> = AHashMap::new();
+        let repeat_kmers: AHashSet<u64> = AHashSet::new();
+        let mut used = AHashSet::new();
+        let seed = KmerU64::from_str("ATCG").unwrap().canonical().encoded;
+
+        let contig = assembler.extend_bidirectional_with_coverage(
+            seed,
+            k,
+            &valid_kmers,
+            &adjacency,
+            &counts,
+            &branch_support,
+            &repeat_kmers,
+            &mut used,
+        );
+
+        let reverse = reverse_complement(sequence);
+        assert!(contig == sequence || contig == reverse);
     }
 
     #[test]
