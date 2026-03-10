@@ -8,24 +8,33 @@ pub fn write_counts_matrix(
     samples: &HashMap<String, Vec<f64>>,
     transcripts: &[Transcript],
     output: &str,
-) {
-    let mut file = std::fs::File::create(output).expect("Unable to write matrix");
-    use std::io::Write;
+) -> std::io::Result<()> {
+    let file = std::fs::File::create(output)?;
+    let mut writer = BufWriter::new(file);
+    let mut sample_names: Vec<&str> = samples.keys().map(|name| name.as_str()).collect();
+    sample_names.sort_unstable();
 
     // Header
-    write!(file, "transcript_id").unwrap();
-    for sample in samples.keys() {
-        write!(file, "\t{}", sample).unwrap();
+    write!(writer, "transcript_id")?;
+    for sample in &sample_names {
+        write!(writer, "\t{}", sample)?;
     }
-    writeln!(file).unwrap();
+    writeln!(writer)?;
 
-    for (i, tx) in transcripts.iter().enumerate() {
-        write!(file, "transcript_{}", tx.id).unwrap();
-        for tpms in samples.values() {
-            write!(file, "\t{:.2}", tpms[i]).unwrap();
+    for (tx_idx, tx) in transcripts.iter().enumerate() {
+        write!(writer, "transcript_{}", tx.id)?;
+        for sample in &sample_names {
+            let tpm = samples
+                .get(*sample)
+                .and_then(|tpms| tpms.get(tx_idx))
+                .copied()
+                .unwrap_or(0.0);
+            write!(writer, "\t{:.2}", tpm)?;
         }
-        writeln!(file).unwrap();
+        writeln!(writer)?;
     }
+
+    writer.flush()
 }
 
 /// Read a TPM matrix file into a map of sample name -> transcript TPM values
@@ -115,4 +124,69 @@ pub fn write_isoform_counts_matrix(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    fn make_transcript(id: usize) -> Transcript {
+        Transcript {
+            id,
+            sequence: "ACGT".to_string(),
+            path: vec![id],
+            confidence: 0.9,
+            length: 4,
+            strand: '+',
+            tpm: None,
+            splicing: "linear".to_string(),
+        }
+    }
+
+    #[test]
+    fn write_counts_matrix_sorts_headers_and_is_insertion_order_independent() {
+        let transcripts = vec![make_transcript(1), make_transcript(2)];
+
+        let mut samples_a = HashMap::new();
+        samples_a.insert("zeta".to_string(), vec![2.0, 4.0]);
+        samples_a.insert("alpha".to_string(), vec![1.0, 3.0]);
+
+        let mut samples_b = HashMap::new();
+        samples_b.insert("alpha".to_string(), vec![1.0, 3.0]);
+        samples_b.insert("zeta".to_string(), vec![2.0, 4.0]);
+
+        let out_a = NamedTempFile::new().unwrap();
+        let out_b = NamedTempFile::new().unwrap();
+
+        write_counts_matrix(&samples_a, &transcripts, out_a.path().to_str().unwrap()).unwrap();
+        write_counts_matrix(&samples_b, &transcripts, out_b.path().to_str().unwrap()).unwrap();
+
+        let content_a = std::fs::read_to_string(out_a.path()).unwrap();
+        let content_b = std::fs::read_to_string(out_b.path()).unwrap();
+        assert_eq!(content_a, content_b);
+
+        let mut lines = content_a.lines();
+        assert_eq!(lines.next().unwrap(), "transcript_id\talpha\tzeta");
+        assert_eq!(lines.next().unwrap(), "transcript_1\t1.00\t2.00");
+        assert_eq!(lines.next().unwrap(), "transcript_2\t3.00\t4.00");
+    }
+
+    #[test]
+    fn write_counts_matrix_pads_missing_values_with_zero() {
+        let transcripts = vec![make_transcript(1), make_transcript(2), make_transcript(3)];
+
+        let mut samples = HashMap::new();
+        samples.insert("sample".to_string(), vec![5.0]);
+
+        let out = NamedTempFile::new().unwrap();
+        write_counts_matrix(&samples, &transcripts, out.path().to_str().unwrap()).unwrap();
+
+        let content = std::fs::read_to_string(out.path()).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines[0], "transcript_id\tsample");
+        assert_eq!(lines[1], "transcript_1\t5.00");
+        assert_eq!(lines[2], "transcript_2\t0.00");
+        assert_eq!(lines[3], "transcript_3\t0.00");
+    }
 }

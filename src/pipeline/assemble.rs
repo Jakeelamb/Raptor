@@ -515,8 +515,13 @@ pub fn assemble_reads_with_gpu(
                     if !sample_tpms.is_empty() {
                         // Write the matrix output
                         let matrix_path = format!("{}_isoform.counts.matrix", output_path);
-                        write_counts_matrix(&sample_tpms, &transcripts, &matrix_path);
-                        info!("Multi-sample counts matrix written to {}", matrix_path);
+                        if let Err(e) =
+                            write_counts_matrix(&sample_tpms, &transcripts, &matrix_path)
+                        {
+                            warn!("Failed to write multi-sample counts matrix: {}", e);
+                        } else {
+                            info!("Multi-sample counts matrix written to {}", matrix_path);
+                        }
                     } else {
                         warn!("No valid samples found in {}", sample_file);
                     }
