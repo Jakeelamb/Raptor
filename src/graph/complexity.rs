@@ -52,7 +52,9 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
     // Parse segments and links
     let mut segments = BTreeSet::new();
     let mut links = BTreeSet::new();
-    let mut paths = Vec::new();
+    let mut path_count = 0usize;
+    let mut path_lengths = Vec::new();
+    let mut node_path_count: HashMap<String, usize> = HashMap::new();
 
     for line_result in reader.lines() {
         let line = line_result?;
@@ -72,17 +74,23 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
             }
             Some(&"P") if parts.len() >= 3 => {
                 // Path line
-                let path_segments = parts[2].to_string();
-                let path_segments: Vec<String> = path_segments
-                    .split(',')
-                    .filter_map(|s| {
-                        let segment = s.trim_end_matches(|c| c == '+' || c == '-');
-                        (!segment.is_empty()).then(|| segment.to_string())
-                    })
-                    .collect();
+                let mut unique_nodes_in_path = HashSet::new();
+                let mut path_len = 0usize;
+                for segment in parts[2].split(',') {
+                    let segment = segment.trim_end_matches(|c| c == '+' || c == '-');
+                    if segment.is_empty() {
+                        continue;
+                    }
+                    path_len += 1;
+                    unique_nodes_in_path.insert(segment.to_string());
+                }
 
-                if !path_segments.is_empty() {
-                    paths.push(path_segments);
+                if path_len > 0 {
+                    path_count += 1;
+                    path_lengths.push(path_len);
+                    for node in unique_nodes_in_path {
+                        *node_path_count.entry(node).or_insert(0) += 1;
+                    }
                 }
             }
             _ => {}
@@ -125,19 +133,6 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
         }
     }
 
-    // Also count nodes that appear in multiple different paths
-    let mut node_path_count = HashMap::new();
-    for path in &paths {
-        let mut path_nodes = HashSet::new();
-        for segment in path {
-            path_nodes.insert(segment);
-        }
-
-        for node in path_nodes {
-            *node_path_count.entry(node.clone()).or_insert(0) += 1;
-        }
-    }
-
     // Nodes that appear in multiple paths are also branch points
     for (node, count) in node_path_count {
         if count > 1 {
@@ -172,7 +167,6 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
     let bubble_count = count_bubbles_simple(&digraph);
 
     // Calculate path-length distribution metrics.
-    let path_lengths: Vec<usize> = paths.iter().map(|p| p.len()).collect();
     let path_length_stats = evaluate_lengths(&path_lengths);
 
     // Calculate branchiness
@@ -183,7 +177,7 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
     };
 
     Ok(PathStats {
-        total_paths: paths.len(),
+        total_paths: path_count,
         average_length: path_length_stats.avg_length,
         median_length: path_length_stats.median_length,
         path_n50: path_length_stats.n50,
@@ -441,6 +435,21 @@ mod tests {
         assert_eq!(stats.path_n50, 2);
         assert_eq!(stats.path_n90, 2);
         assert_eq!(stats.path_au_n, 2.0);
+    }
+
+    #[test]
+    fn test_compute_path_stats_counts_path_node_presence_not_repetitions() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "H\tVN:Z:1.0").unwrap();
+        writeln!(temp_file, "S\t1\tAAAA").unwrap();
+        writeln!(temp_file, "S\t2\tCCCC").unwrap();
+        writeln!(temp_file, "S\t3\tGGGG").unwrap();
+        writeln!(temp_file, "P\tpath1\t1+,1+,2+\t*").unwrap();
+        writeln!(temp_file, "P\tpath2\t1+,3+\t*").unwrap();
+
+        let stats = compute_path_stats(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(stats.total_paths, 2);
+        assert_eq!(stats.branch_count, 1);
     }
 
     #[test]
