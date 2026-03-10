@@ -212,13 +212,14 @@ fn main() {
                 }
                 "tsv" => {
                     println!(
-                        "contigs\ttotal_len\tavg_len\tgc_content\tn_content\tambiguous_content\tn50\tn75\tn90\tn95\tn99\tl50\tl75\tl90\tl95\tl99\taun\tlongest\tcontigs_ge_1kb\tcontigs_ge_10kb\tcontigs_ge_50kb\tcontigs_ge_100kb\tbases_ge_1kb\tbases_ge_10kb\tbases_ge_50kb\tbases_ge_100kb"
+                        "contigs\ttotal_len\tavg_len\tmedian_len\tgc_content\tn_content\tambiguous_content\tn50\tn75\tn90\tn95\tn99\tl50\tl75\tl90\tl95\tl99\taun\tlongest\tcontigs_ge_1kb\tcontigs_ge_10kb\tcontigs_ge_50kb\tcontigs_ge_100kb\tbases_ge_1kb\tbases_ge_10kb\tbases_ge_50kb\tbases_ge_100kb"
                     );
                     println!(
-                        "{}\t{}\t{:.2}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                        "{}\t{}\t{:.2}\t{:.2}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                         stats.total_contigs,
                         stats.total_length,
                         stats.average_length,
+                        stats.median_length,
                         stats.gc_content,
                         stats.n_content,
                         stats.ambiguous_content,

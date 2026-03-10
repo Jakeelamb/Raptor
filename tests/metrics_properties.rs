@@ -42,6 +42,7 @@ proptest! {
         prop_assert!(stats.l90 <= stats.l95);
         prop_assert!(stats.l95 <= stats.l99);
         prop_assert!(stats.longest >= stats.n50);
+        prop_assert!(stats.median_length <= stats.longest as f64 + 1e-9);
         prop_assert!(stats.au_n + 1e-9 >= stats.avg_length);
         prop_assert!(stats.au_n <= stats.longest as f64 + 1e-9);
         prop_assert!(stats.contigs_ge_50kb <= stats.contigs_ge_10kb);
@@ -79,6 +80,7 @@ proptest! {
         prop_assert_eq!(observed.l95, baseline.l95);
         prop_assert_eq!(observed.l99, baseline.l99);
         prop_assert_eq!(observed.longest, baseline.longest);
+        prop_assert!((observed.median_length - baseline.median_length).abs() < 1e-12);
         prop_assert_eq!(observed.contigs_ge_1kb, baseline.contigs_ge_1kb);
         prop_assert_eq!(observed.contigs_ge_10kb, baseline.contigs_ge_10kb);
         prop_assert_eq!(observed.contigs_ge_50kb, baseline.contigs_ge_50kb);
@@ -114,6 +116,7 @@ proptest! {
             prop_assert_eq!(baseline.l99, 0);
             prop_assert_eq!(baseline.longest, 0);
             prop_assert_eq!(baseline.au_n, 0.0);
+            prop_assert_eq!(baseline.median_length, 0.0);
         }
 
         let mut shuffled = lengths.clone();
@@ -134,6 +137,7 @@ proptest! {
         prop_assert_eq!(observed.l95, baseline.l95);
         prop_assert_eq!(observed.l99, baseline.l99);
         prop_assert_eq!(observed.longest, baseline.longest);
+        prop_assert!((observed.median_length - baseline.median_length).abs() < 1e-12);
         prop_assert_eq!(observed.contigs_ge_1kb, baseline.contigs_ge_1kb);
         prop_assert_eq!(observed.contigs_ge_10kb, baseline.contigs_ge_10kb);
         prop_assert_eq!(observed.contigs_ge_50kb, baseline.contigs_ge_50kb);
@@ -158,6 +162,7 @@ proptest! {
         prop_assert_eq!(observed.get("count").copied().unwrap_or(-1.0) as usize, lengths.len());
         prop_assert_eq!(observed.get("total_length").copied().unwrap_or(-1.0) as usize, expected.total_bases);
         prop_assert_eq!(observed.get("mean_length").copied().unwrap_or(-1.0), expected.avg_length);
+        prop_assert_eq!(observed.get("median_length").copied().unwrap_or(-1.0), expected.median_length);
         prop_assert_eq!(observed.get("n50").copied().unwrap_or(-1.0) as usize, expected.n50);
         prop_assert_eq!(observed.get("n75").copied().unwrap_or(-1.0) as usize, expected.n75);
         prop_assert_eq!(observed.get("n90").copied().unwrap_or(-1.0) as usize, expected.n90);
@@ -195,6 +200,7 @@ proptest! {
             "count",
             "total_length",
             "mean_length",
+            "median_length",
             "n50",
             "n75",
             "n90",

@@ -280,6 +280,7 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
         for key in [
             "total_length",
             "mean_length",
+            "median_length",
             "min_length",
             "max_length",
             "n50",
@@ -362,6 +363,7 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
         length_metrics.total_bases as f64,
     );
     stats.insert("mean_length".to_string(), length_metrics.avg_length);
+    stats.insert("median_length".to_string(), length_metrics.median_length);
     stats.insert("min_length".to_string(), min_length as f64);
     stats.insert("max_length".to_string(), max_length as f64);
     stats.insert("n50".to_string(), length_metrics.n50 as f64);
@@ -674,6 +676,7 @@ mod tests {
             "count",
             "total_length",
             "mean_length",
+            "median_length",
             "min_length",
             "max_length",
             "n50",
