@@ -40,9 +40,9 @@
 
 use clap::Parser;
 use ndarray::Array2;
-use rayon::ThreadPoolBuilder;
 use raptor::cli_main::{Cli, Commands};
 use raptor::{eval, io, pipeline, stats, visualize};
+use rayon::ThreadPoolBuilder;
 use std::collections::HashMap;
 use tracing::info;
 use tracing_subscriber::FmtSubscriber;

@@ -159,11 +159,7 @@ mod tests {
         partitions.insert(7usize, vec!["GGGG".to_string()]);
 
         let tmp = TempDir::new().unwrap();
-        let paths = save_partitions(
-            &partitions,
-            tmp.path().to_str().unwrap(),
-            "partition",
-        );
+        let paths = save_partitions(&partitions, tmp.path().to_str().unwrap(), "partition");
 
         let names: Vec<String> = paths
             .iter()
