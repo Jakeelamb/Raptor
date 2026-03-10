@@ -118,10 +118,12 @@ pub fn write_isoform_counts_matrix(
 ) -> std::io::Result<()> {
     let file = File::create(out_path)?;
     let mut w = BufWriter::new(file);
+    let mut ordered: Vec<&Transcript> = transcripts.iter().collect();
+    ordered.sort_unstable_by_key(|tx| tx.id);
 
     writeln!(w, "transcript_id\tlength\ttpm\tconfidence")?;
 
-    for tx in transcripts {
+    for tx in ordered {
         writeln!(
             w,
             "transcript_{}\t{}\t{:.3}\t{:.2}",
@@ -234,6 +236,21 @@ mod tests {
 
     fn round_two(v: f64) -> f64 {
         (v * 100.0).round() / 100.0
+    }
+
+    #[test]
+    fn write_isoform_counts_matrix_is_sorted_by_transcript_id() {
+        let out = NamedTempFile::new().unwrap();
+        let transcripts = vec![make_transcript(9), make_transcript(2), make_transcript(5)];
+
+        write_isoform_counts_matrix(&transcripts, out.path().to_str().unwrap()).unwrap();
+        let content = std::fs::read_to_string(out.path()).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+
+        assert_eq!(lines[0], "transcript_id\tlength\ttpm\tconfidence");
+        assert!(lines[1].starts_with("transcript_2\t"));
+        assert!(lines[2].starts_with("transcript_5\t"));
+        assert!(lines[3].starts_with("transcript_9\t"));
     }
 
     proptest! {

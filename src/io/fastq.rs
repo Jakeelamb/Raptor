@@ -373,7 +373,10 @@ impl FastqWriter {
 /// * Result containing a vector of FastqRecord on success, or an io::Error on failure
 pub fn read_long_reads(path: &str) -> io::Result<Vec<FastqRecord>> {
     let reader = open_fastq(path);
-    let records: Vec<FastqRecord> = stream_fastq_records(reader).collect();
+    let mut records = Vec::new();
+    for record in stream_fastq_records_checked(reader) {
+        records.push(record?);
+    }
 
     if records.is_empty() {
         Err(io::Error::new(
@@ -389,6 +392,8 @@ pub fn read_long_reads(path: &str) -> io::Result<Vec<FastqRecord>> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn checked_fastq_parser_reports_truncated_record() {
@@ -431,5 +436,32 @@ mod tests {
             .expect_err("expected paired mismatch error");
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("different record counts"));
+    }
+
+    #[test]
+    fn read_long_reads_rejects_malformed_fastq() {
+        let mut file = NamedTempFile::new().expect("temp fastq");
+        writeln!(file, "@r1").expect("header");
+        writeln!(file, "ACGT").expect("sequence");
+        writeln!(file, "+").expect("plus");
+        file.flush().expect("flush");
+
+        let err = read_long_reads(file.path().to_str().expect("path"))
+            .expect_err("expected strict parser error");
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn read_long_reads_accepts_well_formed_fastq() {
+        let mut file = NamedTempFile::new().expect("temp fastq");
+        writeln!(file, "@r1").expect("header");
+        writeln!(file, "ACGT").expect("sequence");
+        writeln!(file, "+").expect("plus");
+        writeln!(file, "IIII").expect("quality");
+        file.flush().expect("flush");
+
+        let records = read_long_reads(file.path().to_str().expect("path")).expect("valid fastq");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].sequence, "ACGT");
     }
 }
