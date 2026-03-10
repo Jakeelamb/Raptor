@@ -11,6 +11,7 @@
 //!
 //! Memory: O(bucket_size + adjacency_cache) ≈ 2-4 GB
 
+use crate::eval::metrics::evaluate_lengths;
 use crate::io::fasta::FastaWriter;
 use crate::io::fastq::{open_fastq, stream_fastq_records, stream_paired_fastq_records};
 use crate::kmer::disk_counting_v2::{
@@ -70,6 +71,11 @@ pub struct AssemblyStats {
     pub contigs: usize,
     pub total_length: usize,
     pub n50: usize,
+    pub n90: usize,
+    pub n95: usize,
+    pub l50: usize,
+    pub avg_contig_len: f64,
+    pub au_n: f64,
     pub largest: usize,
     pub disk_bytes: u64,
 }
@@ -102,7 +108,12 @@ impl std::fmt::Display for AssemblyStats {
         }
         writeln!(f, "Contigs: {}", self.contigs)?;
         writeln!(f, "Total length: {} bp", self.total_length)?;
+        writeln!(f, "Mean contig: {:.2} bp", self.avg_contig_len)?;
         writeln!(f, "N50: {} bp", self.n50)?;
+        writeln!(f, "N90: {} bp", self.n90)?;
+        writeln!(f, "N95: {} bp", self.n95)?;
+        writeln!(f, "L50: {}", self.l50)?;
+        writeln!(f, "auN: {:.2} bp", self.au_n)?;
         writeln!(f, "Largest: {} bp", self.largest)?;
         writeln!(f, "Disk used: {:.2} GB", self.disk_bytes as f64 / 1e9)?;
         Ok(())
@@ -2114,22 +2125,17 @@ impl LargeGenomeAssembler {
             total_len += contig.len();
         }
 
-        // Calculate N50
-        let half = total_len / 2;
-        let mut cumsum = 0;
-        let n50 = lengths
-            .iter()
-            .find(|&&len| {
-                cumsum += len;
-                cumsum >= half
-            })
-            .copied()
-            .unwrap_or(0);
+        let contig_stats = evaluate_lengths(&lengths);
 
         stats.contigs = valid.len();
         stats.total_length = total_len;
-        stats.n50 = n50;
-        stats.largest = lengths.first().copied().unwrap_or(0);
+        stats.n50 = contig_stats.n50;
+        stats.n90 = contig_stats.n90;
+        stats.n95 = contig_stats.n95;
+        stats.l50 = contig_stats.l50;
+        stats.avg_contig_len = contig_stats.avg_length;
+        stats.au_n = contig_stats.au_n;
+        stats.largest = contig_stats.longest;
 
         Ok(())
     }
@@ -2486,6 +2492,34 @@ mod tests {
         assert!(stats.std_dev > 0.0);
         assert_eq!(stats.min, 190);
         assert_eq!(stats.max, 215);
+    }
+
+    #[test]
+    fn test_write_output_populates_extended_length_metrics() {
+        let output = NamedTempFile::new().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            min_contig_len: 1,
+            num_buckets: Some(4),
+            temp_dir: Some(temp_dir.path().to_str().unwrap().to_string()),
+            ..Default::default()
+        });
+
+        let contigs = vec!["A".repeat(100), "C".repeat(50), "G".repeat(25)];
+        let mut stats = AssemblyStats::default();
+        assembler
+            .write_output(&contigs, output.path().to_str().unwrap(), &mut stats)
+            .unwrap();
+
+        assert_eq!(stats.contigs, 3);
+        assert_eq!(stats.total_length, 175);
+        assert_eq!(stats.n50, 100);
+        assert_eq!(stats.n90, 25);
+        assert_eq!(stats.n95, 25);
+        assert_eq!(stats.l50, 1);
+        assert_eq!(stats.largest, 100);
+        assert!((stats.avg_contig_len - (175.0 / 3.0)).abs() < 1e-12);
+        assert!((stats.au_n - 75.0).abs() < 1e-12);
     }
 
     /// Test repeat detection and resolution
