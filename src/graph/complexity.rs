@@ -90,7 +90,12 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
             }
             "L" => {
                 if let (Some(from), Some(to)) = (fields.next(), fields.nth(1)) {
-                    links.insert((from.to_string(), to.to_string()));
+                    let from = from.to_string();
+                    let to = to.to_string();
+                    // Keep graph node accounting correct even when GFA omits explicit S records.
+                    segments.insert(from.clone());
+                    segments.insert(to.clone());
+                    links.insert((from, to));
                 }
             }
             "P" => {
@@ -120,6 +125,10 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
             _ => {}
         }
     }
+
+    // Some GFAs (or hand-edited subsets) include paths without declaring all segments in S lines.
+    // Preserve those referenced nodes so branch/depth/bubble metrics stay accurate.
+    segments.extend(node_path_count.keys().cloned());
 
     // Build graph from links
     let mut graph = Graph::<String, ()>::new();
@@ -661,6 +670,35 @@ mod tests {
         assert_eq!(stats.path_l99, 2);
         assert!((stats.path_au_n - 2.6).abs() < 1e-12);
         assert_eq!(stats.branch_count, 2);
+    }
+
+    #[test]
+    fn test_compute_path_stats_counts_shared_path_nodes_without_segment_records() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "H\tVN:Z:1.0").unwrap();
+        writeln!(temp_file, "P\tp1\t1+,2+\t*").unwrap();
+        writeln!(temp_file, "P\tp2\t1+,3+\t*").unwrap();
+
+        let stats = compute_path_stats(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(stats.total_paths, 2);
+        assert_eq!(stats.path_n50, 2);
+        assert_eq!(stats.path_l50, 1);
+        assert_eq!(stats.branch_count, 1);
+        assert!((stats.branchiness - (1.0 / 3.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_compute_path_stats_infers_link_nodes_without_segment_records() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "H\tVN:Z:1.0").unwrap();
+        writeln!(temp_file, "L\t10\t+\t11\t+\t1M").unwrap();
+        writeln!(temp_file, "L\t11\t+\t12\t+\t1M").unwrap();
+
+        let stats = compute_path_stats(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(stats.total_paths, 0);
+        assert_eq!(stats.branch_count, 0);
+        assert_eq!(stats.max_depth, 2);
+        assert_eq!(stats.bubble_count, 0);
     }
 
     #[test]
