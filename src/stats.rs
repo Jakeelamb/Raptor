@@ -1,4 +1,4 @@
-use crate::eval::metrics::{evaluate_lengths_in_place, BaseComposition};
+use crate::eval::metrics::{evaluate_lengths_in_place, normalized_run_base, BaseComposition};
 use crate::io::fasta::try_open_fasta;
 use serde::Serialize;
 use std::io::BufRead;
@@ -243,14 +243,15 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
                 }
                 n_runs.add_base(base);
 
-                if current_rle_last_base != Some(base) {
+                let run_base = normalized_run_base(base);
+                if current_rle_last_base != Some(run_base) {
                     current_rle_len = current_rle_len.checked_add(1).ok_or_else(|| {
                         std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
                             format!("RLE run count overflow while reading {}", path),
                         )
                     })?;
-                    current_rle_last_base = Some(base);
+                    current_rle_last_base = Some(run_base);
                 }
             }
             current_ungapped_len = current_ungapped_len
@@ -976,6 +977,20 @@ mod tests {
         assert!((stats.mean_rle_ratio - ((1.0 / 6.0 + 1.0) / 2.0)).abs() < 1e-12);
         assert!((stats.length_weighted_rle_ratio - 0.5).abs() < 1e-12);
         assert_eq!(stats.total_rle_runs, 5);
+    }
+
+    #[test]
+    fn test_calculate_stats_rle_metrics_are_case_insensitive() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, ">contig_1").unwrap();
+        writeln!(file, "AaAA").unwrap();
+        writeln!(file, ">contig_2").unwrap();
+        writeln!(file, "tT").unwrap();
+
+        let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(stats.total_rle_runs, 2);
+        assert!((stats.mean_rle_ratio - ((1.0 / 4.0 + 1.0 / 2.0) / 2.0)).abs() < 1e-12);
+        assert!((stats.length_weighted_rle_ratio - (2.0 / 6.0)).abs() < 1e-12);
     }
 
     #[test]

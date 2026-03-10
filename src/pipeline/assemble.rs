@@ -1,5 +1,5 @@
 use crate::accel::CpuBackend;
-use crate::eval::metrics::{evaluate_lengths_in_place, BaseComposition};
+use crate::eval::metrics::{evaluate_lengths_in_place, normalized_run_base, BaseComposition};
 use crate::graph::assembler::{greedy_assembly_u64, Contig};
 use crate::graph::overlap::find_overlaps;
 use crate::graph::stitch::OverlapGraphBuilder;
@@ -123,14 +123,15 @@ fn analyze_sequence(
 ) -> SequenceAnalysis {
     let mut ungapped_len = sequence.len();
     let mut rle_runs = 0usize;
-    let mut previous_base = None;
+    let mut previous_run_base = None;
     let mut run_len = 0usize;
     let mut has_n = false;
     let mut has_ambiguous = false;
 
     for &base in sequence {
-        if previous_base != Some(base) {
-            previous_base = Some(base);
+        let run_base = normalized_run_base(base);
+        if previous_run_base != Some(run_base) {
+            previous_run_base = Some(run_base);
             rle_runs = rle_runs.saturating_add(1);
         }
 
@@ -1624,6 +1625,27 @@ mod tests {
         assert_eq!(summary.total_rle_runs, 9);
         assert!((summary.n_runs_per_100kb - (3.0 * 100_000.0 / 16.0)).abs() < 1e-12);
         assert_eq!(summary.ungapped_n50, 3);
+    }
+
+    #[test]
+    fn summarize_assembly_quality_rle_metrics_are_case_insensitive() {
+        let contigs = vec![
+            Contig {
+                id: 0,
+                sequence: "AaAA".to_string(),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 1,
+                sequence: "tT".to_string(),
+                kmer_path: vec![],
+            },
+        ];
+
+        let summary = summarize_assembly_quality(&contigs);
+        assert_eq!(summary.total_rle_runs, 2);
+        assert!((summary.mean_rle_ratio - ((1.0 / 4.0 + 1.0 / 2.0) / 2.0)).abs() < 1e-12);
+        assert!((summary.length_weighted_rle_ratio - (2.0 / 6.0)).abs() < 1e-12);
     }
 
     #[test]

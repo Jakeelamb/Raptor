@@ -1,7 +1,6 @@
-use crate::eval::metrics::{evaluate_lengths_in_place, BaseComposition};
+use crate::eval::metrics::{evaluate_lengths_in_place, normalized_run_base, BaseComposition};
 use crate::graph::assembler::Contig;
 use crate::graph::isoform_traverse::TranscriptPath;
-use crate::kmer::rle;
 use petgraph::graphmap::DiGraphMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -414,12 +413,7 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
     for transcript in transcripts {
         let sequence = transcript.sequence.as_bytes();
         let sequence_len = sequence.len();
-        let n_bases_in_sequence = sequence
-            .iter()
-            .filter(|&&base| matches!(base, b'N' | b'n'))
-            .count();
         lengths.push(sequence_len);
-        ungapped_lengths.push(sequence_len.saturating_sub(n_bases_in_sequence));
         min_length = min_length.min(sequence_len);
         max_length = max_length.max(sequence_len);
         if transcript.length != sequence_len {
@@ -434,15 +428,42 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
             max_confidence = max_confidence.max(confidence);
         }
 
-        composition.add_sequence(sequence);
-        total_sequence_bases = total_sequence_bases.saturating_add(sequence.len());
+        let mut ungapped_len = sequence_len;
+        let mut rle_runs = 0usize;
+        let mut previous_run_base = None;
 
-        let compressed_len = rle::rle_encoded_len(&transcript.sequence);
-        total_rle_runs = total_rle_runs.saturating_add(compressed_len);
+        for &base in sequence {
+            let run_base = normalized_run_base(base);
+            if previous_run_base != Some(run_base) {
+                previous_run_base = Some(run_base);
+                rle_runs = rle_runs.saturating_add(1);
+            }
+
+            match base {
+                b'A' | b'a' | b'T' | b't' | b'U' | b'u' => {
+                    composition.acgt_bases += 1;
+                }
+                b'G' | b'g' | b'C' | b'c' => {
+                    composition.gc_bases += 1;
+                    composition.acgt_bases += 1;
+                }
+                b'N' | b'n' => {
+                    composition.n_bases += 1;
+                    ungapped_len = ungapped_len.saturating_sub(1);
+                }
+                _ => {
+                    composition.ambiguous_bases += 1;
+                }
+            }
+        }
+
+        ungapped_lengths.push(ungapped_len);
+        total_sequence_bases = total_sequence_bases.saturating_add(sequence.len());
+        total_rle_runs = total_rle_runs.saturating_add(rle_runs);
         total_rle_ratio += if sequence.is_empty() {
             1.0
         } else {
-            compressed_len as f64 / sequence.len() as f64
+            rle_runs as f64 / sequence.len() as f64
         };
     }
 
@@ -961,6 +982,33 @@ mod tests {
                 .copied()
                 .unwrap_or(0.0)
                 - (6.0 / 9.0))
+                .abs()
+                < 1e-12
+        );
+    }
+
+    #[test]
+    fn test_calculate_transcript_stats_rle_metrics_are_case_insensitive_and_do_not_chunk_long_runs()
+    {
+        let transcripts = vec![
+            Transcript::new(1, "a".repeat(300), vec![0], 0.5),
+            Transcript::new(2, "CcCC".to_string(), vec![1], 0.5),
+        ];
+
+        let stats = calculate_transcript_stats(&transcripts);
+        assert_eq!(stats.get("total_rle_runs").copied(), Some(2.0));
+        assert!(
+            (stats.get("mean_rle_ratio").copied().unwrap_or(0.0)
+                - ((1.0 / 300.0) + (1.0 / 4.0)) / 2.0)
+                .abs()
+                < 1e-12
+        );
+        assert!(
+            (stats
+                .get("length_weighted_rle_ratio")
+                .copied()
+                .unwrap_or(0.0)
+                - (2.0 / 304.0))
                 .abs()
                 < 1e-12
         );

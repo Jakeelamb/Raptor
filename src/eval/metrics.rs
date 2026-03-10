@@ -141,6 +141,30 @@ impl BaseComposition {
     }
 }
 
+#[inline]
+pub(crate) fn normalized_run_base(base: u8) -> u8 {
+    base.to_ascii_uppercase()
+}
+
+#[cfg(test)]
+#[inline]
+fn count_homopolymer_runs(sequence: &[u8]) -> usize {
+    if sequence.is_empty() {
+        return 0;
+    }
+
+    let mut runs = 1usize;
+    let mut prev = normalized_run_base(sequence[0]);
+    for &base in &sequence[1..] {
+        let current = normalized_run_base(base);
+        if current != prev {
+            runs += 1;
+            prev = current;
+        }
+    }
+    runs
+}
+
 #[cfg(test)]
 #[inline]
 fn nx_lx(
@@ -411,8 +435,8 @@ pub fn evaluate_lengths_in_place(lengths: &mut [usize]) -> TranscriptStats {
 #[cfg(test)]
 mod tests {
     use super::{
-        evaluate_lengths, evaluate_lengths_in_place, evaluate_lengths_sorted_desc, nx_lx,
-        BaseComposition,
+        count_homopolymer_runs, evaluate_lengths, evaluate_lengths_in_place,
+        evaluate_lengths_sorted_desc, normalized_run_base, nx_lx, BaseComposition,
     };
 
     #[test]
@@ -652,5 +676,22 @@ mod tests {
         assert_eq!(stats.bases_ge_50kb_frac, 0.0);
         assert_eq!(stats.bases_ge_100kb_frac, 0.0);
         assert_eq!(stats.bases_ge_1mb_frac, 0.0);
+    }
+
+    #[test]
+    fn normalized_run_base_is_case_insensitive_for_ascii_letters() {
+        assert_eq!(normalized_run_base(b'A'), b'A');
+        assert_eq!(normalized_run_base(b'a'), b'A');
+        assert_eq!(normalized_run_base(b'n'), b'N');
+        assert_eq!(normalized_run_base(b'Y'), b'Y');
+        assert_eq!(normalized_run_base(b'y'), b'Y');
+    }
+
+    #[test]
+    fn count_homopolymer_runs_ignores_case_transitions() {
+        assert_eq!(count_homopolymer_runs(b""), 0);
+        assert_eq!(count_homopolymer_runs(b"AaAA"), 1);
+        assert_eq!(count_homopolymer_runs(b"aAcCgG"), 3);
+        assert_eq!(count_homopolymer_runs(b"NNnnAAaa"), 2);
     }
 }

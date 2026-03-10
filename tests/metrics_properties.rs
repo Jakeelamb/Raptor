@@ -283,10 +283,7 @@ proptest! {
         prop_assert_eq!(observed.get("n_content").copied().unwrap_or(-1.0), 0.0);
         prop_assert_eq!(observed.get("ambiguous_content").copied().unwrap_or(-1.0), 0.0);
         prop_assert_eq!(observed.get("length_field_mismatch_count").copied().unwrap_or(-1.0), 0.0);
-        let expected_total_rle_runs: usize = lengths
-            .iter()
-            .map(|len| len.div_ceil(u8::MAX as usize))
-            .sum();
+        let expected_total_rle_runs = lengths.len();
         prop_assert_eq!(
             observed.get("total_rle_runs").copied().unwrap_or(-1.0) as usize,
             expected_total_rle_runs
