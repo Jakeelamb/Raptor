@@ -19,41 +19,67 @@ pub fn traverse_path(path: &Path, include_edges: bool) -> Vec<String> {
 
 /// Traverse GFA `P` lines into segment ID chains
 pub fn parse_gfa_paths(lines: &[String]) -> HashMap<String, Vec<(String, char)>> {
-    let mut paths = HashMap::new();
+    let mut paths = HashMap::with_capacity(lines.len());
 
     for line in lines {
-        if !line.starts_with('P') {
-            continue;
+        if let Some((path_name, segments)) = parse_path_record(line) {
+            paths.insert(path_name, segments);
         }
-
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() < 3 {
-            continue;
-        }
-
-        let path_name = parts[1].to_string();
-        let segment_str = parts[2];
-
-        // Parse segment string (e.g., "1+,2-,3+")
-        let mut segments = Vec::new();
-        for seg in segment_str.split(',') {
-            if seg.is_empty() {
-                continue;
-            }
-
-            let orientation = seg.chars().last().unwrap_or('+');
-            if orientation != '+' && orientation != '-' {
-                continue;
-            }
-
-            let segment_id = seg[..seg.len() - 1].to_string();
-            segments.push((segment_id, orientation));
-        }
-
-        paths.insert(path_name, segments);
     }
 
     paths
+}
+
+/// Parse GFA `P` lines from a buffered reader.
+///
+/// Unlike `parse_gfa_paths`, this API does not allocate an intermediate
+/// collection of all lines and preserves I/O errors from the source reader.
+pub fn parse_gfa_paths_reader<R: BufRead>(
+    reader: R,
+) -> io::Result<HashMap<String, Vec<(String, char)>>> {
+    let mut paths = HashMap::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        if let Some((path_name, segments)) = parse_path_record(&line) {
+            paths.insert(path_name, segments);
+        }
+    }
+
+    Ok(paths)
+}
+
+#[inline]
+fn parse_path_record(line: &str) -> Option<(String, Vec<(String, char)>)> {
+    if !line.starts_with("P\t") {
+        return None;
+    }
+
+    let mut parts = line.split('\t');
+    let _record_type = parts.next()?;
+    let path_name = parts.next()?.to_string();
+    let segment_str = parts.next()?;
+
+    // Parse segment string (e.g., "1+,2-,3+")
+    let mut segments = Vec::new();
+    for seg in segment_str.split(',') {
+        if seg.len() < 2 {
+            continue;
+        }
+
+        let orientation = seg.chars().last().unwrap_or('+');
+        if orientation != '+' && orientation != '-' {
+            continue;
+        }
+
+        let segment_id = seg[..seg.len() - 1].to_string();
+        if segment_id.is_empty() {
+            continue;
+        }
+        segments.push((segment_id, orientation));
+    }
+
+    Some((path_name, segments))
 }
 
 /// Load all `P`-lines from GFA file and parse them into path navigation
@@ -62,8 +88,7 @@ pub fn load_and_parse_gfa_paths(
 ) -> Result<HashMap<String, Vec<(String, char)>>, std::io::Error> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
-    let lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
-    Ok(parse_gfa_paths(&lines))
+    parse_gfa_paths_reader(reader)
 }
 
 /// Load segment sequences from a TSV file (segment_id\tsequence)
@@ -159,7 +184,7 @@ fn reverse_complement(sequence: &str) -> String {
 
 /// Extract path information from GFA for visualization tools like Bandage/ODGI
 pub fn extract_path_metadata(path_map: &HashMap<String, Vec<(String, char)>>) -> Vec<PathMetadata> {
-    path_map
+    let mut metadata: Vec<PathMetadata> = path_map
         .iter()
         .map(|(id, segments)| {
             let length = segments.len();
@@ -172,7 +197,9 @@ pub fn extract_path_metadata(path_map: &HashMap<String, Vec<(String, char)>>) ->
                 has_inversions: segments.iter().any(|(_, dir)| *dir == '-'),
             }
         })
-        .collect()
+        .collect();
+    metadata.sort_unstable_by(|a, b| a.id.cmp(&b.id));
+    metadata
 }
 
 /// Metadata about a GFA path for analysis and visualization
@@ -188,6 +215,7 @@ pub struct PathMetadata {
 mod tests {
     use super::*;
     use crate::graph::stitch::Path;
+    use std::io::Cursor;
 
     #[test]
     fn test_path_traversal() {
@@ -237,9 +265,36 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_gfa_paths_reader_matches_slice_parser() {
+        let lines = vec![
+            "H\tVN:Z:1.0".to_string(),
+            "P\tpath2\t2+,3-\t*".to_string(),
+            "P\tpath1\t1+,2+,3+\t*".to_string(),
+        ];
+        let expected = parse_gfa_paths(&lines);
+        let raw = lines.join("\n");
+        let observed = parse_gfa_paths_reader(Cursor::new(raw)).unwrap();
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
     fn test_revcomp() {
         assert_eq!(revcomp("ACGT"), "ACGT");
         assert_eq!(revcomp("AAAAAA"), "TTTTTT");
         assert_eq!(revcomp("GATTACA"), "TGTAATC");
+    }
+
+    #[test]
+    fn extract_path_metadata_is_sorted_by_id() {
+        let mut paths = HashMap::new();
+        paths.insert(
+            "path2".to_string(),
+            vec![("1".to_string(), '+'), ("2".to_string(), '-')],
+        );
+        paths.insert("path1".to_string(), vec![("3".to_string(), '+')]);
+
+        let metadata = extract_path_metadata(&paths);
+        let ids: Vec<&str> = metadata.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["path1", "path2"]);
     }
 }

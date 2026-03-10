@@ -1,8 +1,15 @@
 use crate::graph::navigation;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, Write};
+use std::io::{self, BufReader, Write};
 use tracing::info;
+
+#[inline]
+fn sorted_entries<V>(map: &HashMap<String, V>) -> Vec<(&String, &V)> {
+    let mut entries: Vec<(&String, &V)> = map.iter().collect();
+    entries.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+    entries
+}
 
 /// Traverses paths in a GFA file and exports them in various formats
 pub fn traverse_paths(
@@ -16,15 +23,12 @@ pub fn traverse_paths(
 ) -> io::Result<usize> {
     info!("Traversing paths in GFA file: {}", input);
 
-    // Load GFA file
-    let gfa_content = std::fs::read_to_string(input)?;
-
     // Load segment sequences
     let segment_map = navigation::load_segment_sequences(segments)?;
 
-    // Parse GFA paths
-    let gfa_lines: Vec<String> = gfa_content.lines().map(String::from).collect();
-    let paths = navigation::parse_gfa_paths(&gfa_lines);
+    // Parse GFA paths without loading the entire file into memory.
+    let gfa_file = File::open(input)?;
+    let paths = navigation::parse_gfa_paths_reader(BufReader::new(gfa_file))?;
 
     // Reconstruct path sequences
     let reconstructed_paths = navigation::reconstruct_paths(&paths, &segment_map);
@@ -70,7 +74,7 @@ pub fn traverse_paths(
 fn export_paths_to_fasta(paths: &HashMap<String, String>, output_path: &str) -> io::Result<()> {
     let mut file = File::create(output_path)?;
 
-    for (path_id, sequence) in paths {
+    for (path_id, sequence) in sorted_entries(paths) {
         writeln!(file, ">{}", path_id)?;
 
         // Write sequence in chunks of 60 characters
@@ -100,10 +104,11 @@ fn export_paths_to_json(
 
     let mut path_metadatas = Vec::new();
 
-    for (id, sequence) in reconstructed_paths {
+    for (id, sequence) in sorted_entries(reconstructed_paths) {
         // Retrieve the original path segments
-        let empty_vec = Vec::new();
-        let segments = paths.get(id).unwrap_or(&empty_vec);
+        let Some(segments) = paths.get(id) else {
+            continue;
+        };
         let segment_count = segments.len();
 
         // Count unique segments
@@ -117,7 +122,7 @@ fn export_paths_to_json(
 
         // Create metadata
         let meta = PathMetadata {
-            path_id: id.clone(),
+            path_id: (*id).clone(),
             segment_count,
             unique_segments: unique_segment_ids.len(),
             total_length: sequence.len(),
@@ -128,8 +133,7 @@ fn export_paths_to_json(
     }
 
     // Serialize and write to file
-    let json_data = serde_json::to_string_pretty(&path_metadatas)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let json_data = serde_json::to_string_pretty(&path_metadatas).map_err(io::Error::other)?;
 
     std::fs::write(output_path, json_data)?;
 
@@ -155,7 +159,7 @@ fn export_paths_to_dot(
     let mut edges = std::collections::HashSet::new();
 
     // Process each path
-    for (path_id, segments) in paths {
+    for (path_id, segments) in sorted_entries(paths) {
         // Add path as subgraph
         writeln!(file, "  subgraph cluster_{} {{", path_id.replace('-', "_"))?;
         writeln!(file, "    label=\"Path {}\"", path_id)?;
@@ -203,4 +207,75 @@ fn export_paths_to_dot(
     writeln!(file, "}}")?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn export_paths_to_fasta_is_sorted_by_path_id() {
+        let mut paths = HashMap::new();
+        paths.insert("path2".to_string(), "CCCC".to_string());
+        paths.insert("path1".to_string(), "AAAA".to_string());
+
+        let file = NamedTempFile::new().unwrap();
+        export_paths_to_fasta(&paths, file.path().to_str().unwrap()).unwrap();
+
+        let mut contents = String::new();
+        File::open(file.path())
+            .unwrap()
+            .read_to_string(&mut contents)
+            .unwrap();
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines[0], ">path1");
+        assert_eq!(lines[2], ">path2");
+    }
+
+    #[test]
+    fn export_paths_to_json_is_deterministic_under_map_insertion_order() {
+        let mut reconstructed_a = HashMap::new();
+        reconstructed_a.insert("path2".to_string(), "CCCC".to_string());
+        reconstructed_a.insert("path1".to_string(), "AAAA".to_string());
+        let mut paths_a = HashMap::new();
+        paths_a.insert("path2".to_string(), vec![("2".to_string(), '+')]);
+        paths_a.insert(
+            "path1".to_string(),
+            vec![("1".to_string(), '+'), ("2".to_string(), '-')],
+        );
+
+        let mut reconstructed_b = HashMap::new();
+        reconstructed_b.insert("path1".to_string(), "AAAA".to_string());
+        reconstructed_b.insert("path2".to_string(), "CCCC".to_string());
+        let mut paths_b = HashMap::new();
+        paths_b.insert(
+            "path1".to_string(),
+            vec![("1".to_string(), '+'), ("2".to_string(), '-')],
+        );
+        paths_b.insert("path2".to_string(), vec![("2".to_string(), '+')]);
+
+        let out_a = NamedTempFile::new().unwrap();
+        let out_b = NamedTempFile::new().unwrap();
+        export_paths_to_json(&reconstructed_a, &paths_a, out_a.path().to_str().unwrap()).unwrap();
+        export_paths_to_json(&reconstructed_b, &paths_b, out_b.path().to_str().unwrap()).unwrap();
+
+        let mut json_a = String::new();
+        let mut json_b = String::new();
+        File::open(out_a.path())
+            .unwrap()
+            .read_to_string(&mut json_a)
+            .unwrap();
+        File::open(out_b.path())
+            .unwrap()
+            .read_to_string(&mut json_b)
+            .unwrap();
+
+        assert_eq!(json_a, json_b);
+        assert!(
+            json_a.find("\"path_id\": \"path1\"").unwrap()
+                < json_a.find("\"path_id\": \"path2\"").unwrap()
+        );
+    }
 }
