@@ -55,6 +55,7 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
     let mut path_count = 0usize;
     let mut path_lengths = Vec::new();
     let mut node_path_count: HashMap<String, usize> = HashMap::new();
+    let mut unique_nodes_in_path = HashSet::new();
 
     for line_result in reader.lines() {
         let line = line_result?;
@@ -82,6 +83,7 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
                         &mut path_count,
                         &mut path_lengths,
                         &mut node_path_count,
+                        &mut unique_nodes_in_path,
                     );
                 }
             }
@@ -93,6 +95,7 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
                         &mut path_count,
                         &mut path_lengths,
                         &mut node_path_count,
+                        &mut unique_nodes_in_path,
                     );
                 }
             }
@@ -199,8 +202,9 @@ fn add_path_record_from_p(
     path_count: &mut usize,
     path_lengths: &mut Vec<usize>,
     node_path_count: &mut HashMap<String, usize>,
+    unique_nodes_in_path: &mut HashSet<String>,
 ) {
-    let mut unique_nodes_in_path = HashSet::new();
+    unique_nodes_in_path.clear();
     let mut path_len = 0usize;
 
     for segment in segments_field.split(',') {
@@ -227,8 +231,9 @@ fn add_path_record_from_w(
     path_count: &mut usize,
     path_lengths: &mut Vec<usize>,
     node_path_count: &mut HashMap<String, usize>,
+    unique_nodes_in_path: &mut HashSet<String>,
 ) {
-    let mut unique_nodes_in_path = HashSet::new();
+    unique_nodes_in_path.clear();
     let mut path_len = 0usize;
 
     let bytes = walk.as_bytes();
@@ -261,18 +266,19 @@ fn add_path_record_from_w(
 #[inline]
 fn finalize_path_record(
     path_len: usize,
-    unique_nodes_in_path: HashSet<String>,
+    unique_nodes_in_path: &mut HashSet<String>,
     path_count: &mut usize,
     path_lengths: &mut Vec<usize>,
     node_path_count: &mut HashMap<String, usize>,
 ) {
     if path_len == 0 {
+        unique_nodes_in_path.clear();
         return;
     }
 
     *path_count += 1;
     path_lengths.push(path_len);
-    for node in unique_nodes_in_path {
+    for node in unique_nodes_in_path.drain() {
         *node_path_count.entry(node).or_insert(0) += 1;
     }
 }
@@ -339,6 +345,9 @@ where
     N: petgraph::graphmap::NodeTrait + std::hash::Hash + Eq + Copy,
 {
     let mut bubble_count = 0;
+    let mut reachable_from_primary = HashSet::new();
+    let mut visited_secondary = HashSet::new();
+    let mut stack = Vec::new();
 
     // For each node with multiple outgoing edges (potential bubble start)
     for node in graph.nodes() {
@@ -352,15 +361,21 @@ where
 
         // For each pair of alternative paths
         for i in 0..out_neighbors.len() {
+            collect_reachable_outgoing(
+                graph,
+                out_neighbors[i],
+                &mut reachable_from_primary,
+                &mut stack,
+            );
+
             for j in i + 1..out_neighbors.len() {
-                let path1_start = out_neighbors[i];
-                let path2_start = out_neighbors[j];
-
-                // Check if these two paths have a common successor (convergence point)
-                let has_common_successor =
-                    paths_have_common_target(graph, path1_start, path2_start, 10);
-
-                if has_common_successor {
+                if path_intersects_reachable(
+                    graph,
+                    out_neighbors[j],
+                    &reachable_from_primary,
+                    &mut visited_secondary,
+                    &mut stack,
+                ) {
                     bubble_count += 1;
                 }
             }
@@ -370,49 +385,58 @@ where
     bubble_count
 }
 
-/// Check if two nodes have a common successor within a certain depth
-fn paths_have_common_target<N, E>(
+/// Collect all nodes reachable from `start` by following outgoing edges.
+fn collect_reachable_outgoing<N, E>(
     graph: &DiGraphMap<N, E>,
-    node1: N,
-    node2: N,
-    max_depth: usize,
+    start: N,
+    reachable: &mut HashSet<N>,
+    stack: &mut Vec<N>,
+) where
+    N: petgraph::graphmap::NodeTrait + std::hash::Hash + Eq + Copy,
+{
+    reachable.clear();
+    stack.clear();
+    stack.push(start);
+
+    while let Some(node) = stack.pop() {
+        if !reachable.insert(node) {
+            continue;
+        }
+
+        for neighbor in graph.neighbors_directed(node, petgraph::Direction::Outgoing) {
+            if !reachable.contains(&neighbor) {
+                stack.push(neighbor);
+            }
+        }
+    }
+}
+
+/// Check whether the outgoing traversal from `start` intersects `reachable`.
+fn path_intersects_reachable<N, E>(
+    graph: &DiGraphMap<N, E>,
+    start: N,
+    reachable: &HashSet<N>,
+    visited: &mut HashSet<N>,
+    stack: &mut Vec<N>,
 ) -> bool
 where
     N: petgraph::graphmap::NodeTrait + std::hash::Hash + Eq + Copy,
 {
-    // Get all successors of node1 up to max_depth
-    let mut visited1 = HashSet::new();
-    let mut queue1 = vec![(node1, 1)];
+    visited.clear();
+    stack.clear();
+    stack.push(start);
 
-    while let Some((node, depth)) = queue1.pop() {
-        visited1.insert(node);
-
-        if depth < max_depth {
-            for neighbor in graph.neighbors_directed(node, petgraph::Direction::Outgoing) {
-                if !visited1.contains(&neighbor) {
-                    queue1.push((neighbor, depth + 1));
-                }
-            }
+    while let Some(node) = stack.pop() {
+        if !visited.insert(node) {
+            continue;
         }
-    }
-
-    // Get all successors of node2 up to max_depth
-    let mut queue2 = vec![(node2, 1)];
-    let mut visited2 = HashSet::new();
-
-    while let Some((node, depth)) = queue2.pop() {
-        // If this node is also a successor of node1, we found a common target
-        if visited1.contains(&node) {
+        if reachable.contains(&node) {
             return true;
         }
 
-        visited2.insert(node);
-
-        if depth < max_depth {
-            for neighbor in graph.neighbors_directed(node, petgraph::Direction::Outgoing) {
-                if !visited2.contains(&neighbor) {
-                    queue2.push((neighbor, depth + 1));
-                }
+        for neighbor in graph.neighbors_directed(node, petgraph::Direction::Outgoing) {
+            if !visited.contains(&neighbor) {
+                stack.push(neighbor);
             }
         }
     }
@@ -614,5 +638,46 @@ mod tests {
         graph.add_edge(n3, n1, ());
 
         assert_eq!(calculate_max_depth(&graph), 4);
+    }
+
+    #[test]
+    fn test_count_bubbles_simple_detects_reconvergence_beyond_depth_ten() {
+        let mut graph = DiGraphMap::<usize, ()>::new();
+        // Bubble start with two outgoing choices.
+        graph.add_edge(0, 1, ());
+        graph.add_edge(0, 2, ());
+
+        // First branch reaches node 100 after 11 hops.
+        let mut first = 1usize;
+        for next in 10usize..20usize {
+            graph.add_edge(first, next, ());
+            first = next;
+        }
+        graph.add_edge(first, 100, ());
+
+        // Second branch reaches the same node 100 after 11 hops.
+        let mut second = 2usize;
+        for next in 200usize..210usize {
+            graph.add_edge(second, next, ());
+            second = next;
+        }
+        graph.add_edge(second, 100, ());
+
+        assert_eq!(count_bubbles_simple(&graph), 1);
+    }
+
+    #[test]
+    fn test_count_bubbles_simple_handles_cycles_without_recursion() {
+        let mut graph = DiGraphMap::<usize, ()>::new();
+        graph.add_edge(0, 1, ());
+        graph.add_edge(0, 2, ());
+        graph.add_edge(1, 3, ());
+        graph.add_edge(3, 1, ());
+        graph.add_edge(2, 4, ());
+        graph.add_edge(4, 2, ());
+        graph.add_edge(3, 5, ());
+        graph.add_edge(4, 5, ());
+
+        assert!(count_bubbles_simple(&graph) >= 1);
     }
 }
