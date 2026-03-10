@@ -13,12 +13,29 @@ pub struct AbundanceStats {
 /// Estimates the abundance statistics for a read sequence.
 /// Uses ntHash for fast O(1) rolling hash computation.
 pub fn estimate_read_abundance(seq: &str, k: usize, sketch: &[u32]) -> AbundanceStats {
-    let bytes = seq.as_bytes();
-    let sketch_mask = (sketch.len() - 1) as u64;
+    if k == 0 || seq.len() < k || sketch.is_empty() {
+        return AbundanceStats { median: 0, min: 0 };
+    }
 
-    let mut abund: Vec<u32> = NtHashIterator::new(bytes, k)
-        .map(|(_, hash)| sketch[(hash & sketch_mask) as usize])
-        .collect();
+    let bytes = seq.as_bytes();
+    let mut abund: Vec<u32> = Vec::with_capacity(bytes.len() - k + 1);
+    let mut min_abundance = u32::MAX;
+
+    if sketch.len().is_power_of_two() {
+        let sketch_mask = (sketch.len() - 1) as u64;
+        for (_, hash) in NtHashIterator::new(bytes, k) {
+            let count = sketch[(hash & sketch_mask) as usize];
+            min_abundance = min_abundance.min(count);
+            abund.push(count);
+        }
+    } else {
+        let sketch_len = sketch.len() as u64;
+        for (_, hash) in NtHashIterator::new(bytes, k) {
+            let count = sketch[(hash % sketch_len) as usize];
+            min_abundance = min_abundance.min(count);
+            abund.push(count);
+        }
+    }
 
     if abund.is_empty() {
         return AbundanceStats { median: 0, min: 0 };
@@ -28,7 +45,7 @@ pub fn estimate_read_abundance(seq: &str, k: usize, sketch: &[u32]) -> Abundance
     abund.select_nth_unstable(mid);
     AbundanceStats {
         median: abund[mid],
-        min: *abund.iter().min().unwrap(),
+        min: min_abundance,
     }
 }
 
@@ -156,7 +173,10 @@ fn deterministic_roll(record: &FastqRecord) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_keep_read, should_keep_read_pair, should_keep_read_pair_with_scratch};
+    use super::{
+        estimate_read_abundance, should_keep_read, should_keep_read_pair,
+        should_keep_read_pair_with_scratch,
+    };
     use crate::io::fastq::FastqRecord;
     use crate::kmer::cms::CountMinSketch;
     use crate::kmer::nthash::NtHashIterator;
@@ -183,6 +203,56 @@ mod tests {
             }
         }
         cms
+    }
+
+    fn reference_abundance(seq: &str, k: usize, sketch: &[u32]) -> (u32, u32) {
+        if k == 0 || seq.len() < k || sketch.is_empty() {
+            return (0, 0);
+        }
+
+        let sketch_len = sketch.len() as u64;
+        let mut values: Vec<u32> = NtHashIterator::new(seq.as_bytes(), k)
+            .map(|(_, hash)| sketch[(hash % sketch_len) as usize])
+            .collect();
+
+        if values.is_empty() {
+            return (0, 0);
+        }
+
+        let min = values.iter().copied().min().unwrap_or(0);
+        let mid = values.len() / 2;
+        values.select_nth_unstable(mid);
+        (values[mid], min)
+    }
+
+    #[test]
+    fn estimate_read_abundance_handles_empty_sketch_and_invalid_k() {
+        let seq = "ACGTACGT";
+        let empty: Vec<u32> = Vec::new();
+
+        let zero_k = estimate_read_abundance(seq, 0, &[1, 2, 3, 4]);
+        assert_eq!(zero_k.median, 0);
+        assert_eq!(zero_k.min, 0);
+
+        let short_seq = estimate_read_abundance("ACG", 5, &[1, 2, 3, 4]);
+        assert_eq!(short_seq.median, 0);
+        assert_eq!(short_seq.min, 0);
+
+        let empty_sketch = estimate_read_abundance(seq, 3, &empty);
+        assert_eq!(empty_sketch.median, 0);
+        assert_eq!(empty_sketch.min, 0);
+    }
+
+    #[test]
+    fn estimate_read_abundance_matches_reference_on_non_power_of_two_sketch() {
+        let seq = "ACGTACGTACGT";
+        let sketch = vec![9, 2, 5, 1, 4, 7, 3];
+
+        let observed = estimate_read_abundance(seq, 5, &sketch);
+        let (expected_median, expected_min) = reference_abundance(seq, 5, &sketch);
+
+        assert_eq!(observed.median, expected_median);
+        assert_eq!(observed.min, expected_min);
     }
 
     #[test]
