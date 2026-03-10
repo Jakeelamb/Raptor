@@ -4317,6 +4317,47 @@ mod tests {
                 canonicalize_edge_support(&reference_support),
             );
         }
+
+        #[test]
+        fn prop_select_min_count_matches_reference_and_is_insertion_order_invariant(
+            counts in prop::collection::vec(0u32..200u32, 1..256),
+            seed in any::<u64>(),
+        ) {
+            let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+                min_count: 0,
+                ..Default::default()
+            });
+
+            let mut baseline = AHashMap::new();
+            let mut items = Vec::with_capacity(counts.len());
+            for (idx, &count) in counts.iter().enumerate() {
+                let key = idx as u64;
+                baseline.insert(key, count);
+                items.push((key, count));
+            }
+
+            let mut non_singleton = counts
+                .iter()
+                .copied()
+                .filter(|&count| count >= 2)
+                .collect::<Vec<_>>();
+            let expected = if non_singleton.is_empty() {
+                2
+            } else {
+                non_singleton.sort_unstable();
+                (non_singleton[non_singleton.len() / 2] / 10).clamp(2, 5)
+            };
+
+            prop_assert_eq!(assembler.select_min_count(&baseline), expected);
+
+            let mut rng = StdRng::seed_from_u64(seed);
+            items.shuffle(&mut rng);
+            let mut shuffled = AHashMap::new();
+            for (key, value) in items {
+                shuffled.insert(key, value);
+            }
+            prop_assert_eq!(assembler.select_min_count(&shuffled), expected);
+        }
     }
 
     #[test]
