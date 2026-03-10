@@ -71,9 +71,12 @@ pub struct AssemblyStats {
     pub contigs: usize,
     pub total_length: usize,
     pub n50: usize,
+    pub n75: usize,
     pub n90: usize,
     pub n95: usize,
     pub l50: usize,
+    pub l90: usize,
+    pub l95: usize,
     pub avg_contig_len: f64,
     pub au_n: f64,
     pub largest: usize,
@@ -110,9 +113,12 @@ impl std::fmt::Display for AssemblyStats {
         writeln!(f, "Total length: {} bp", self.total_length)?;
         writeln!(f, "Mean contig: {:.2} bp", self.avg_contig_len)?;
         writeln!(f, "N50: {} bp", self.n50)?;
+        writeln!(f, "N75: {} bp", self.n75)?;
         writeln!(f, "N90: {} bp", self.n90)?;
         writeln!(f, "N95: {} bp", self.n95)?;
         writeln!(f, "L50: {}", self.l50)?;
+        writeln!(f, "L90: {}", self.l90)?;
+        writeln!(f, "L95: {}", self.l95)?;
         writeln!(f, "auN: {:.2} bp", self.au_n)?;
         writeln!(f, "Largest: {} bp", self.largest)?;
         writeln!(f, "Disk used: {:.2} GB", self.disk_bytes as f64 / 1e9)?;
@@ -2130,9 +2136,12 @@ impl LargeGenomeAssembler {
         stats.contigs = valid.len();
         stats.total_length = total_len;
         stats.n50 = contig_stats.n50;
+        stats.n75 = contig_stats.n75;
         stats.n90 = contig_stats.n90;
         stats.n95 = contig_stats.n95;
         stats.l50 = contig_stats.l50;
+        stats.l90 = contig_stats.l90;
+        stats.l95 = contig_stats.l95;
         stats.avg_contig_len = contig_stats.avg_length;
         stats.au_n = contig_stats.au_n;
         stats.largest = contig_stats.longest;
@@ -2514,9 +2523,12 @@ mod tests {
         assert_eq!(stats.contigs, 3);
         assert_eq!(stats.total_length, 175);
         assert_eq!(stats.n50, 100);
+        assert_eq!(stats.n75, 50);
         assert_eq!(stats.n90, 25);
         assert_eq!(stats.n95, 25);
         assert_eq!(stats.l50, 1);
+        assert_eq!(stats.l90, 3);
+        assert_eq!(stats.l95, 3);
         assert_eq!(stats.largest, 100);
         assert!((stats.avg_contig_len - (175.0 / 3.0)).abs() < 1e-12);
         assert!((stats.au_n - 75.0).abs() < 1e-12);

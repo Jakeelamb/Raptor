@@ -1,3 +1,4 @@
+use crate::eval::metrics::evaluate_lengths;
 use crate::io::fasta::open_fasta;
 use serde::Serialize;
 use std::io::BufRead;
@@ -22,50 +23,9 @@ pub struct Stats {
     pub branch_count: Option<usize>,
 }
 
-#[inline]
-fn nx_lx(
-    sorted_desc_lengths: &[usize],
-    total_len: usize,
-    numerator: usize,
-    denominator: usize,
-) -> (usize, usize) {
-    if sorted_desc_lengths.is_empty() || total_len == 0 {
-        return (0, 0);
-    }
-
-    let threshold =
-        ((total_len as u128 * numerator as u128) + denominator as u128 - 1) / denominator as u128;
-    let mut acc = 0u128;
-    for (idx, &len) in sorted_desc_lengths.iter().enumerate() {
-        acc += len as u128;
-        if acc >= threshold {
-            return (len, idx + 1);
-        }
-    }
-
-    (0, sorted_desc_lengths.len())
-}
-
-#[inline]
-fn compute_au_n(lengths: &[usize], total_len: usize) -> f64 {
-    if lengths.is_empty() || total_len == 0 {
-        return 0.0;
-    }
-
-    let sum_squares: u128 = lengths
-        .iter()
-        .map(|&len| {
-            let len128 = len as u128;
-            len128 * len128
-        })
-        .sum();
-    sum_squares as f64 / total_len as f64
-}
-
 pub fn calculate_stats(path: &str) -> Stats {
     let reader = open_fasta(path);
     let mut lengths = vec![];
-    let mut total: usize = 0;
     let mut in_sequence = false;
     let mut current_len = 0usize;
 
@@ -73,9 +33,7 @@ pub fn calculate_stats(path: &str) -> Stats {
         if line.starts_with('>') {
             // If we were in a sequence, add its final length.
             if in_sequence && current_len > 0 {
-                let len = current_len;
-                total = total.saturating_add(len);
-                lengths.push(len);
+                lengths.push(current_len);
             }
             in_sequence = true;
             current_len = 0;
@@ -86,39 +44,24 @@ pub fn calculate_stats(path: &str) -> Stats {
 
     // Add the last sequence if there is one
     if in_sequence && current_len > 0 {
-        let len = current_len;
-        total = total.saturating_add(len);
-        lengths.push(len);
+        lengths.push(current_len);
     }
 
-    lengths.sort_unstable_by(|a, b| b.cmp(a));
-    let total_contigs = lengths.len();
-    let avg = if total_contigs > 0 {
-        total as f64 / total_contigs as f64
-    } else {
-        0.0
-    };
-
-    let (n50, l50) = nx_lx(&lengths, total, 1, 2);
-    let (n75, _) = nx_lx(&lengths, total, 3, 4);
-    let (n90, l90) = nx_lx(&lengths, total, 9, 10);
-    let (n95, l95) = nx_lx(&lengths, total, 19, 20);
-    let au_n = compute_au_n(&lengths, total);
-    let longest_contig = lengths.first().copied().unwrap_or(0);
+    let length_stats = evaluate_lengths(&lengths);
 
     Stats {
-        total_contigs,
-        total_length: total,
-        average_length: avg,
-        n50,
-        n75,
-        n90,
-        n95,
-        l50,
-        l90,
-        l95,
-        au_n,
-        longest_contig,
+        total_contigs: length_stats.total,
+        total_length: length_stats.total_bases,
+        average_length: length_stats.avg_length,
+        n50: length_stats.n50,
+        n75: length_stats.n75,
+        n90: length_stats.n90,
+        n95: length_stats.n95,
+        l50: length_stats.l50,
+        l90: length_stats.l90,
+        l95: length_stats.l95,
+        au_n: length_stats.au_n,
+        longest_contig: length_stats.longest,
         path_count: None,
         avg_path_length: None,
         branch_count: None,
@@ -206,14 +149,5 @@ mod tests {
         assert_eq!(stats.l95, 2);
         assert!((stats.au_n - 10.0).abs() < 1e-6);
         assert_eq!(stats.longest_contig, 12);
-    }
-
-    #[test]
-    fn test_nx_lx_handles_large_totals_without_overflow() {
-        let very_large = usize::MAX - 3;
-        let lengths = vec![very_large];
-        let (n90, l90) = nx_lx(&lengths, very_large, 9, 10);
-        assert_eq!(n90, very_large);
-        assert_eq!(l90, 1);
     }
 }
