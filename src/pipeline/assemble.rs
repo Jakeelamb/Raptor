@@ -1284,11 +1284,70 @@ mod tests {
     use crate::graph::assembler::Contig;
     use crate::io::fastq::FastqRecord;
     use ahash::AHashMap;
+    use proptest::prelude::*;
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
     use rand::SeedableRng;
     use std::io::{self, Write};
     use tempfile::{NamedTempFile, TempDir};
+
+    #[inline]
+    fn is_n(base: u8) -> bool {
+        matches!(base, b'N' | b'n')
+    }
+
+    #[inline]
+    fn is_acgt_or_u(base: u8) -> bool {
+        matches!(
+            base,
+            b'A' | b'a' | b'T' | b't' | b'U' | b'u' | b'G' | b'g' | b'C' | b'c'
+        )
+    }
+
+    #[inline]
+    fn is_ambiguous(base: u8) -> bool {
+        !is_n(base) && !is_acgt_or_u(base)
+    }
+
+    #[inline]
+    fn count_rle_runs(sequence: &str) -> usize {
+        let mut bytes = sequence.bytes();
+        let Some(first) = bytes.next() else {
+            return 0;
+        };
+
+        let mut runs = 1usize;
+        let mut prev = first.to_ascii_uppercase();
+        for base in bytes {
+            let current = base.to_ascii_uppercase();
+            if current != prev {
+                runs += 1;
+                prev = current;
+            }
+        }
+        runs
+    }
+
+    #[inline]
+    fn n_run_stats(sequence: &str) -> (usize, usize) {
+        let mut count = 0usize;
+        let mut longest = 0usize;
+        let mut active = 0usize;
+        for base in sequence.bytes() {
+            if is_n(base) {
+                active += 1;
+            } else if active > 0 {
+                count += 1;
+                longest = longest.max(active);
+                active = 0;
+            }
+        }
+        if active > 0 {
+            count += 1;
+            longest = longest.max(active);
+        }
+        (count, longest)
+    }
 
     #[test]
     fn derive_contig_expression_map_averages_observed_kmer_support() {
@@ -1693,6 +1752,143 @@ mod tests {
             permuted.shuffle(&mut rng);
             let observed = summarize_assembly_quality(&permuted);
             assert_eq!(observed, expected);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn summarize_assembly_quality_satisfies_internal_invariants(
+            sequences in prop::collection::vec("[ACGTNRYacgtnry]{0,120}", 1..24)
+        ) {
+            let contigs: Vec<Contig> = sequences
+                .iter()
+                .enumerate()
+                .map(|(id, sequence)| Contig {
+                    id,
+                    sequence: sequence.clone(),
+                    kmer_path: vec![],
+                })
+                .collect();
+
+            let summary = summarize_assembly_quality(&contigs);
+            let lengths: Vec<usize> = sequences.iter().map(String::len).collect();
+            let total_bases: usize = lengths.iter().sum();
+            let n_bases: usize = sequences
+                .iter()
+                .map(|sequence| sequence.bytes().filter(|&base| is_n(base)).count())
+                .sum();
+            let ambiguous_bases: usize = sequences
+                .iter()
+                .map(|sequence| sequence.bytes().filter(|&base| is_ambiguous(base)).count())
+                .sum();
+            let ungapped_total_bases = total_bases.saturating_sub(n_bases);
+            let gc_bases: usize = sequences
+                .iter()
+                .map(|sequence| {
+                    sequence
+                        .bytes()
+                        .filter(|&base| matches!(base, b'G' | b'g' | b'C' | b'c'))
+                        .count()
+                })
+                .sum();
+            let acgt_bases: usize = sequences
+                .iter()
+                .map(|sequence| {
+                    sequence
+                        .bytes()
+                        .filter(|&base| matches!(
+                            base,
+                            b'A' | b'a' | b'T' | b't' | b'U' | b'u' | b'G' | b'g' | b'C' | b'c'
+                        ))
+                        .count()
+                })
+                .sum();
+            let contigs_with_n = sequences
+                .iter()
+                .filter(|sequence| sequence.bytes().any(is_n))
+                .count();
+            let contigs_with_ambiguous = sequences
+                .iter()
+                .filter(|sequence| sequence.bytes().any(is_ambiguous))
+                .count();
+            let contigs_all_acgt = sequences
+                .iter()
+                .filter(|sequence| sequence.bytes().all(|base| is_acgt_or_u(base)))
+                .count();
+            let total_rle_runs: usize = sequences.iter().map(|sequence| count_rle_runs(sequence)).sum();
+            let (n_runs, longest_n_run) = sequences
+                .iter()
+                .fold((0usize, 0usize), |(total_runs, max_run), sequence| {
+                    let (runs, longest) = n_run_stats(sequence);
+                    (total_runs + runs, max_run.max(longest))
+                });
+
+            prop_assert_eq!(summary.total_contigs, sequences.len());
+            prop_assert_eq!(summary.total_bases, total_bases);
+            prop_assert_eq!(summary.ungapped_total_bases, ungapped_total_bases);
+            prop_assert_eq!(summary.gc_bases, gc_bases);
+            prop_assert_eq!(summary.acgt_bases, acgt_bases);
+            prop_assert_eq!(summary.n_bases, n_bases);
+            prop_assert_eq!(summary.ambiguous_bases, ambiguous_bases);
+            prop_assert_eq!(summary.contigs_with_n, contigs_with_n);
+            prop_assert_eq!(summary.contigs_with_ambiguous, contigs_with_ambiguous);
+            prop_assert_eq!(summary.contigs_all_acgt, contigs_all_acgt);
+            prop_assert_eq!(summary.total_rle_runs, total_rle_runs);
+            prop_assert_eq!(summary.n_runs, n_runs);
+            prop_assert_eq!(summary.longest_n_run, longest_n_run);
+            prop_assert!(summary.ungapped_total_bases <= summary.total_bases);
+
+            prop_assert!(summary.contigs_ge_1mb <= summary.contigs_ge_100kb);
+            prop_assert!(summary.contigs_ge_100kb <= summary.contigs_ge_50kb);
+            prop_assert!(summary.contigs_ge_50kb <= summary.contigs_ge_10kb);
+            prop_assert!(summary.contigs_ge_10kb <= summary.contigs_ge_1kb);
+            prop_assert!(summary.contigs_ge_1kb <= summary.total_contigs);
+
+            prop_assert!(summary.bases_ge_1mb <= summary.bases_ge_100kb);
+            prop_assert!(summary.bases_ge_100kb <= summary.bases_ge_50kb);
+            prop_assert!(summary.bases_ge_50kb <= summary.bases_ge_10kb);
+            prop_assert!(summary.bases_ge_10kb <= summary.bases_ge_1kb);
+            prop_assert!(summary.bases_ge_1kb <= summary.total_bases);
+
+            for fraction in [
+                summary.contigs_with_n_frac,
+                summary.contigs_with_ambiguous_frac,
+                summary.contigs_all_acgt_frac,
+                summary.contigs_ge_1kb_frac,
+                summary.contigs_ge_10kb_frac,
+                summary.contigs_ge_50kb_frac,
+                summary.contigs_ge_100kb_frac,
+                summary.contigs_ge_1mb_frac,
+                summary.bases_ge_1kb_frac,
+                summary.bases_ge_10kb_frac,
+                summary.bases_ge_50kb_frac,
+                summary.bases_ge_100kb_frac,
+                summary.bases_ge_1mb_frac,
+                summary.gc_content,
+                summary.n_content,
+                summary.ambiguous_content,
+            ] {
+                prop_assert!((0.0..=1.0).contains(&fraction));
+            }
+
+            if summary.total_bases > 0 {
+                let total_bases_f = summary.total_bases as f64;
+                prop_assert!((summary.n_content - summary.n_bases as f64 / total_bases_f).abs() < 1e-12);
+                prop_assert!((summary.ambiguous_content - summary.ambiguous_bases as f64 / total_bases_f).abs() < 1e-12);
+                prop_assert!((summary.length_weighted_rle_ratio - summary.total_rle_runs as f64 / total_bases_f).abs() < 1e-12);
+                prop_assert!((summary.n_runs_per_100kb - summary.n_runs as f64 * 100_000.0 / total_bases_f).abs() < 1e-12);
+                prop_assert!((summary.n_bases_per_100kb - summary.n_bases as f64 * 100_000.0 / total_bases_f).abs() < 1e-12);
+                prop_assert!((summary.ambiguous_bases_per_100kb - summary.ambiguous_bases as f64 * 100_000.0 / total_bases_f).abs() < 1e-12);
+            } else {
+                prop_assert_eq!(summary.n_content, 0.0);
+                prop_assert_eq!(summary.ambiguous_content, 0.0);
+                prop_assert_eq!(summary.length_weighted_rle_ratio, 0.0);
+                prop_assert_eq!(summary.n_runs_per_100kb, 0.0);
+                prop_assert_eq!(summary.n_bases_per_100kb, 0.0);
+                prop_assert_eq!(summary.ambiguous_bases_per_100kb, 0.0);
+            }
         }
     }
 
