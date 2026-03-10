@@ -15,6 +15,8 @@ pub struct Stats {
     pub n_bases: usize,
     pub ambiguous_bases: usize,
     pub mean_rle_ratio: f64,
+    pub length_weighted_rle_ratio: f64,
+    pub total_rle_runs: usize,
     pub n_run_count: usize,
     pub max_n_run: usize,
     pub contigs_with_n: usize,
@@ -143,6 +145,7 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
     let mut contig_quality = ContigQualitySummary::default();
     let mut n_runs = NRunSummary::default();
     let mut total_rle_ratio = 0.0f64;
+    let mut total_rle_runs = 0usize;
     let mut current_rle_len = 0usize;
     let mut current_rle_last_base: Option<u8> = None;
     let mut line = String::new();
@@ -165,6 +168,12 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
                 } else {
                     current_rle_len as f64 / current_len as f64
                 };
+                total_rle_runs = total_rle_runs.checked_add(current_rle_len).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("total RLE run count overflow while reading {}", path),
+                    )
+                })?;
             }
             in_sequence = true;
             current_len = 0;
@@ -206,6 +215,12 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         } else {
             current_rle_len as f64 / current_len as f64
         };
+        total_rle_runs = total_rle_runs.checked_add(current_rle_len).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("total RLE run count overflow while reading {}", path),
+            )
+        })?;
     }
 
     let length_stats = evaluate_lengths_in_place(&mut lengths);
@@ -228,6 +243,11 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
     } else {
         0.0
     };
+    let length_weighted_rle_ratio = if length_stats.total_bases > 0 {
+        total_rle_runs as f64 / length_stats.total_bases as f64
+    } else {
+        0.0
+    };
 
     Ok(Stats {
         total_contigs: length_stats.total,
@@ -240,6 +260,8 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         n_bases: composition.n_bases,
         ambiguous_bases: composition.ambiguous_bases,
         mean_rle_ratio,
+        length_weighted_rle_ratio,
+        total_rle_runs,
         n_run_count: n_runs.run_count,
         max_n_run: n_runs.max_run,
         contigs_with_n: contig_quality.with_n,
@@ -382,6 +404,8 @@ mod tests {
         assert_eq!(stats.n_bases, 0);
         assert_eq!(stats.ambiguous_bases, 0);
         assert_eq!(stats.mean_rle_ratio, 1.0);
+        assert_eq!(stats.length_weighted_rle_ratio, 1.0);
+        assert_eq!(stats.total_rle_runs, 48);
         assert_eq!(stats.n_run_count, 0);
         assert_eq!(stats.max_n_run, 0);
         assert_eq!(stats.contigs_with_n, 0);
@@ -445,6 +469,8 @@ mod tests {
         assert_eq!(stats.n_bases, 0);
         assert_eq!(stats.ambiguous_bases, 0);
         assert_eq!(stats.mean_rle_ratio, 1.0);
+        assert_eq!(stats.length_weighted_rle_ratio, 1.0);
+        assert_eq!(stats.total_rle_runs, 16);
         assert_eq!(stats.n_run_count, 0);
         assert_eq!(stats.max_n_run, 0);
         assert_eq!(stats.contigs_with_n, 0);
@@ -549,6 +575,8 @@ mod tests {
             n_bases: 0,
             ambiguous_bases: 0,
             mean_rle_ratio: 0.0,
+            length_weighted_rle_ratio: 0.0,
+            total_rle_runs: 0,
             n_run_count: 0,
             max_n_run: 0,
             contigs_with_n: 0,
@@ -680,6 +708,8 @@ mod tests {
         assert_eq!(stats.n_bases, 4);
         assert_eq!(stats.ambiguous_bases, 1);
         assert!((stats.mean_rle_ratio - 0.8125).abs() < 1e-12);
+        assert!((stats.length_weighted_rle_ratio - 0.75).abs() < 1e-12);
+        assert_eq!(stats.total_rle_runs, 9);
         assert_eq!(stats.n_run_count, 1);
         assert_eq!(stats.max_n_run, 4);
         assert_eq!(stats.contigs_with_n, 1);
@@ -726,6 +756,8 @@ mod tests {
         assert_eq!(stats.contigs_with_ambiguous, 0);
         assert_eq!(stats.contigs_all_acgt, 4);
         assert_eq!(stats.mean_rle_ratio, 1.0);
+        assert_eq!(stats.length_weighted_rle_ratio, 1.0);
+        assert_eq!(stats.total_rle_runs, 3);
         assert_eq!(stats.contigs_with_n_frac, 0.0);
         assert_eq!(stats.contigs_with_ambiguous_frac, 0.0);
         assert_eq!(stats.contigs_all_acgt_frac, 1.0);
@@ -780,6 +812,8 @@ mod tests {
 
         let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
         assert!((stats.mean_rle_ratio - ((1.0 / 6.0 + 1.0) / 2.0)).abs() < 1e-12);
+        assert!((stats.length_weighted_rle_ratio - 0.5).abs() < 1e-12);
+        assert_eq!(stats.total_rle_runs, 5);
     }
 
     #[test]
@@ -828,6 +862,8 @@ mod tests {
             prop_assert_eq!(stats_a.n_bases, stats_b.n_bases);
             prop_assert_eq!(stats_a.ambiguous_bases, stats_b.ambiguous_bases);
             prop_assert!((stats_a.mean_rle_ratio - stats_b.mean_rle_ratio).abs() < 1e-12);
+            prop_assert!((stats_a.length_weighted_rle_ratio - stats_b.length_weighted_rle_ratio).abs() < 1e-12);
+            prop_assert_eq!(stats_a.total_rle_runs, stats_b.total_rle_runs);
             prop_assert_eq!(stats_a.n_run_count, stats_b.n_run_count);
             prop_assert_eq!(stats_a.max_n_run, stats_b.max_n_run);
             prop_assert_eq!(stats_a.contigs_with_n, stats_b.contigs_with_n);
