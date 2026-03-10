@@ -1362,13 +1362,12 @@ impl LargeGenomeAssembler {
         k: usize,
     ) -> Vec<String> {
         let min_len = self.config.min_contig_len;
-        let valid_kmers: AHashSet<u64> = kmer_counts.keys().copied().collect();
 
         // Identify repeat k-mers for coverage-guided traversal
         let (repeat_kmers, _repeat_stats) = self.identify_repeats(kmer_counts);
 
         // Track used k-mers
-        let mut used: AHashSet<u64> = AHashSet::with_capacity(valid_kmers.len());
+        let mut used: AHashSet<u64> = AHashSet::with_capacity(kmer_counts.len());
         let mut contigs: Vec<String> = Vec::new();
 
         // Sort k-mers by count (highest first) for seed selection
@@ -1406,7 +1405,6 @@ impl LargeGenomeAssembler {
             let contig = self.extend_bidirectional_with_coverage(
                 seed,
                 k,
-                &valid_kmers,
                 adjacency,
                 kmer_counts,
                 branch_support,
@@ -1955,7 +1953,6 @@ impl LargeGenomeAssembler {
         &self,
         seed_canonical: u64,
         k: usize,
-        _valid_kmers: &AHashSet<u64>,
         adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
         used: &mut AHashSet<u64>,
     ) -> String {
@@ -2097,7 +2094,6 @@ impl LargeGenomeAssembler {
         &self,
         seed_canonical: u64,
         k: usize,
-        _valid_kmers: &AHashSet<u64>,
         adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
         kmer_counts: &AHashMap<u64, u32>,
         branch_support: &AHashMap<(u64, u64), u32>,
@@ -3374,7 +3370,6 @@ mod tests {
         let contig = assembler.extend_bidirectional_with_coverage(
             seed,
             k,
-            &valid_kmers,
             &adjacency,
             &counts,
             &branch_support,
