@@ -167,72 +167,83 @@ pub fn tsv_header() -> &'static str {
 }
 
 pub fn tsv_row(stats: &Stats) -> String {
-    [
-        stats.total_contigs.to_string(),
-        stats.total_length.to_string(),
-        format!("{:.2}", stats.average_length),
-        format!("{:.2}", stats.median_length),
-        stats.gc_bases.to_string(),
-        stats.acgt_bases.to_string(),
-        stats.n_bases.to_string(),
-        stats.ambiguous_bases.to_string(),
-        format!("{:.6}", stats.mean_rle_ratio),
-        format!("{:.6}", stats.length_weighted_rle_ratio),
-        stats.total_rle_runs.to_string(),
-        format!("{:.6}", stats.gc_content),
-        format!("{:.6}", stats.n_content),
-        format!("{:.6}", stats.ambiguous_content),
-        stats.n10.to_string(),
-        stats.n25.to_string(),
-        stats.n50.to_string(),
-        stats.n75.to_string(),
-        stats.n90.to_string(),
-        stats.n95.to_string(),
-        stats.n99.to_string(),
-        stats.l10.to_string(),
-        stats.l25.to_string(),
-        stats.l50.to_string(),
-        stats.l75.to_string(),
-        stats.l90.to_string(),
-        stats.l95.to_string(),
-        stats.l99.to_string(),
-        format!("{:.2}", stats.au_n),
-        format!("{:.6}", stats.effective_contig_count),
-        format!("{:.6}", stats.ungapped_effective_contig_count),
-        stats.ungapped_total_length.to_string(),
-        stats.ungapped_n50.to_string(),
-        format!("{:.2}", stats.ungapped_au_n),
-        stats.longest_contig.to_string(),
-        stats.contigs_ge_1kb.to_string(),
-        stats.contigs_ge_10kb.to_string(),
-        stats.contigs_ge_50kb.to_string(),
-        stats.contigs_ge_100kb.to_string(),
-        stats.contigs_ge_1mb.to_string(),
-        stats.bases_ge_1kb.to_string(),
-        stats.bases_ge_10kb.to_string(),
-        stats.bases_ge_50kb.to_string(),
-        stats.bases_ge_100kb.to_string(),
-        stats.bases_ge_1mb.to_string(),
-        format!("{:.6}", stats.contigs_ge_1kb_frac),
-        format!("{:.6}", stats.contigs_ge_10kb_frac),
-        format!("{:.6}", stats.contigs_ge_50kb_frac),
-        format!("{:.6}", stats.contigs_ge_100kb_frac),
-        format!("{:.6}", stats.contigs_ge_1mb_frac),
-        format!("{:.6}", stats.bases_ge_1kb_frac),
-        format!("{:.6}", stats.bases_ge_10kb_frac),
-        format!("{:.6}", stats.bases_ge_50kb_frac),
-        format!("{:.6}", stats.bases_ge_100kb_frac),
-        format!("{:.6}", stats.bases_ge_1mb_frac),
-        stats.n_run_count.to_string(),
-        stats.max_n_run.to_string(),
-        stats.contigs_with_n.to_string(),
-        stats.contigs_with_ambiguous.to_string(),
-        stats.contigs_all_acgt.to_string(),
-        format!("{:.6}", stats.contigs_with_n_frac),
-        format!("{:.6}", stats.contigs_with_ambiguous_frac),
-        format!("{:.6}", stats.contigs_all_acgt_frac),
-    ]
-    .join("\t")
+    use std::fmt::Write as _;
+
+    let mut row = String::with_capacity(1024);
+    macro_rules! push_fmt {
+        ($($arg:tt)*) => {{
+            if !row.is_empty() {
+                row.push('\t');
+            }
+            write!(&mut row, $($arg)*).expect("writing to String cannot fail");
+        }};
+    }
+
+    push_fmt!("{}", stats.total_contigs);
+    push_fmt!("{}", stats.total_length);
+    push_fmt!("{:.2}", stats.average_length);
+    push_fmt!("{:.2}", stats.median_length);
+    push_fmt!("{}", stats.gc_bases);
+    push_fmt!("{}", stats.acgt_bases);
+    push_fmt!("{}", stats.n_bases);
+    push_fmt!("{}", stats.ambiguous_bases);
+    push_fmt!("{:.6}", stats.mean_rle_ratio);
+    push_fmt!("{:.6}", stats.length_weighted_rle_ratio);
+    push_fmt!("{}", stats.total_rle_runs);
+    push_fmt!("{:.6}", stats.gc_content);
+    push_fmt!("{:.6}", stats.n_content);
+    push_fmt!("{:.6}", stats.ambiguous_content);
+    push_fmt!("{}", stats.n10);
+    push_fmt!("{}", stats.n25);
+    push_fmt!("{}", stats.n50);
+    push_fmt!("{}", stats.n75);
+    push_fmt!("{}", stats.n90);
+    push_fmt!("{}", stats.n95);
+    push_fmt!("{}", stats.n99);
+    push_fmt!("{}", stats.l10);
+    push_fmt!("{}", stats.l25);
+    push_fmt!("{}", stats.l50);
+    push_fmt!("{}", stats.l75);
+    push_fmt!("{}", stats.l90);
+    push_fmt!("{}", stats.l95);
+    push_fmt!("{}", stats.l99);
+    push_fmt!("{:.2}", stats.au_n);
+    push_fmt!("{:.6}", stats.effective_contig_count);
+    push_fmt!("{:.6}", stats.ungapped_effective_contig_count);
+    push_fmt!("{}", stats.ungapped_total_length);
+    push_fmt!("{}", stats.ungapped_n50);
+    push_fmt!("{:.2}", stats.ungapped_au_n);
+    push_fmt!("{}", stats.longest_contig);
+    push_fmt!("{}", stats.contigs_ge_1kb);
+    push_fmt!("{}", stats.contigs_ge_10kb);
+    push_fmt!("{}", stats.contigs_ge_50kb);
+    push_fmt!("{}", stats.contigs_ge_100kb);
+    push_fmt!("{}", stats.contigs_ge_1mb);
+    push_fmt!("{}", stats.bases_ge_1kb);
+    push_fmt!("{}", stats.bases_ge_10kb);
+    push_fmt!("{}", stats.bases_ge_50kb);
+    push_fmt!("{}", stats.bases_ge_100kb);
+    push_fmt!("{}", stats.bases_ge_1mb);
+    push_fmt!("{:.6}", stats.contigs_ge_1kb_frac);
+    push_fmt!("{:.6}", stats.contigs_ge_10kb_frac);
+    push_fmt!("{:.6}", stats.contigs_ge_50kb_frac);
+    push_fmt!("{:.6}", stats.contigs_ge_100kb_frac);
+    push_fmt!("{:.6}", stats.contigs_ge_1mb_frac);
+    push_fmt!("{:.6}", stats.bases_ge_1kb_frac);
+    push_fmt!("{:.6}", stats.bases_ge_10kb_frac);
+    push_fmt!("{:.6}", stats.bases_ge_50kb_frac);
+    push_fmt!("{:.6}", stats.bases_ge_100kb_frac);
+    push_fmt!("{:.6}", stats.bases_ge_1mb_frac);
+    push_fmt!("{}", stats.n_run_count);
+    push_fmt!("{}", stats.max_n_run);
+    push_fmt!("{}", stats.contigs_with_n);
+    push_fmt!("{}", stats.contigs_with_ambiguous);
+    push_fmt!("{}", stats.contigs_all_acgt);
+    push_fmt!("{:.6}", stats.contigs_with_n_frac);
+    push_fmt!("{:.6}", stats.contigs_with_ambiguous_frac);
+    push_fmt!("{:.6}", stats.contigs_all_acgt_frac);
+
+    row
 }
 
 pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
@@ -689,6 +700,26 @@ mod tests {
         assert_eq!(row_by_name.get("n50").copied(), Some("6"));
         assert_eq!(row_by_name.get("ungapped_n50").copied(), Some("4"));
         assert_eq!(row_by_name.get("ungapped_aun").copied(), Some("3.57"));
+    }
+
+    proptest! {
+        #[test]
+        fn stats_tsv_row_column_count_stays_in_sync_for_random_inputs(
+            seqs in prop::collection::vec("[ACGTNacgtnRYSWKMBDHVryswkmbdhv]{0,64}", 1..32)
+        ) {
+            let mut file = NamedTempFile::new().expect("create temp fasta");
+            for (idx, seq) in seqs.iter().enumerate() {
+                writeln!(file, ">contig_{idx}").expect("write header");
+                writeln!(file, "{seq}").expect("write sequence");
+            }
+
+            let stats = calculate_stats(file.path().to_str().expect("utf8 path"))
+                .expect("calculate stats");
+
+            let header_cols = tsv_header().split('\t').count();
+            let row_cols = tsv_row(&stats).split('\t').count();
+            prop_assert_eq!(row_cols, header_cols);
+        }
     }
 
     #[test]
