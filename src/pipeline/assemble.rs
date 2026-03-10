@@ -8,11 +8,12 @@ use crate::io::fastq::{stream_fastq_records_checked, try_open_fastq, FastqRecord
 use crate::io::gfa::GfaWriter;
 use crate::io::gfa2::Gfa2Writer;
 use crate::kmer::variable_k::{kmer_coverage_histogram, optimal_k, select_best_k};
+use serde::Serialize;
 use std::fs;
 use std::io::{self, Write};
 use tracing::{info, warn};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize)]
 struct AssemblyQualitySummary {
     total_contigs: usize,
     total_bases: usize,
@@ -99,6 +100,96 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
         bases_ge_50kb_frac: length_stats.bases_ge_50kb_frac,
         bases_ge_100kb_frac: length_stats.bases_ge_100kb_frac,
     }
+}
+
+fn write_assembly_quality_reports(
+    output_path: &str,
+    quality: AssemblyQualitySummary,
+) -> io::Result<(String, String)> {
+    let json_path = get_output_filename(output_path, "assembly_metrics.json");
+    let tsv_path = get_output_filename(output_path, "assembly_metrics.tsv");
+
+    let json_file = fs::File::create(&json_path)?;
+    serde_json::to_writer_pretty(json_file, &quality).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("failed to serialize assembly quality metrics to JSON: {err}"),
+        )
+    })?;
+
+    let mut tsv_file = fs::File::create(&tsv_path)?;
+    writeln!(tsv_file, "metric\tvalue")?;
+
+    let rows = [
+        ("total_contigs", quality.total_contigs.to_string()),
+        ("total_bases", quality.total_bases.to_string()),
+        ("avg_length", format!("{:.12}", quality.avg_length)),
+        ("median_length", format!("{:.12}", quality.median_length)),
+        ("n25", quality.n25.to_string()),
+        ("n50", quality.n50.to_string()),
+        ("n75", quality.n75.to_string()),
+        ("n90", quality.n90.to_string()),
+        ("n95", quality.n95.to_string()),
+        ("n99", quality.n99.to_string()),
+        ("l50", quality.l50.to_string()),
+        ("l90", quality.l90.to_string()),
+        ("l95", quality.l95.to_string()),
+        ("l99", quality.l99.to_string()),
+        ("au_n", format!("{:.12}", quality.au_n)),
+        ("longest", quality.longest.to_string()),
+        ("gc_content", format!("{:.12}", quality.gc_content)),
+        ("n_content", format!("{:.12}", quality.n_content)),
+        (
+            "ambiguous_content",
+            format!("{:.12}", quality.ambiguous_content),
+        ),
+        ("contigs_ge_1kb", quality.contigs_ge_1kb.to_string()),
+        ("contigs_ge_10kb", quality.contigs_ge_10kb.to_string()),
+        ("contigs_ge_50kb", quality.contigs_ge_50kb.to_string()),
+        ("contigs_ge_100kb", quality.contigs_ge_100kb.to_string()),
+        ("bases_ge_1kb", quality.bases_ge_1kb.to_string()),
+        ("bases_ge_10kb", quality.bases_ge_10kb.to_string()),
+        ("bases_ge_50kb", quality.bases_ge_50kb.to_string()),
+        ("bases_ge_100kb", quality.bases_ge_100kb.to_string()),
+        (
+            "contigs_ge_1kb_frac",
+            format!("{:.12}", quality.contigs_ge_1kb_frac),
+        ),
+        (
+            "contigs_ge_10kb_frac",
+            format!("{:.12}", quality.contigs_ge_10kb_frac),
+        ),
+        (
+            "contigs_ge_50kb_frac",
+            format!("{:.12}", quality.contigs_ge_50kb_frac),
+        ),
+        (
+            "contigs_ge_100kb_frac",
+            format!("{:.12}", quality.contigs_ge_100kb_frac),
+        ),
+        (
+            "bases_ge_1kb_frac",
+            format!("{:.12}", quality.bases_ge_1kb_frac),
+        ),
+        (
+            "bases_ge_10kb_frac",
+            format!("{:.12}", quality.bases_ge_10kb_frac),
+        ),
+        (
+            "bases_ge_50kb_frac",
+            format!("{:.12}", quality.bases_ge_50kb_frac),
+        ),
+        (
+            "bases_ge_100kb_frac",
+            format!("{:.12}", quality.bases_ge_100kb_frac),
+        ),
+    ];
+
+    for (metric, value) in rows {
+        writeln!(tsv_file, "{}\t{}", metric, value)?;
+    }
+
+    Ok((json_path, tsv_path))
 }
 
 #[inline]
@@ -386,6 +477,13 @@ pub fn assemble_reads_with_gpu(
         quality.bases_ge_10kb_frac * 100.0,
         quality.bases_ge_50kb_frac * 100.0,
         quality.bases_ge_100kb_frac * 100.0
+    );
+
+    let (quality_json_path, quality_tsv_path) =
+        write_assembly_quality_reports(output_path, quality)?;
+    info!(
+        "Assembly quality reports written to {} and {}",
+        quality_json_path, quality_tsv_path
     );
 
     // Write FASTA output
@@ -825,13 +923,13 @@ fn derive_contig_expression_map(
 mod tests {
     use super::{
         assemble_reads_with_gpu, derive_contig_expression_map, sequence_only_record,
-        summarize_assembly_quality,
+        summarize_assembly_quality, write_assembly_quality_reports, AssemblyQualitySummary,
     };
     use crate::graph::assembler::Contig;
     use crate::io::fastq::FastqRecord;
     use ahash::AHashMap;
     use std::io::{self, Write};
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, TempDir};
 
     #[test]
     fn derive_contig_expression_map_averages_observed_kmer_support() {
@@ -1059,5 +1157,70 @@ mod tests {
         )
         .expect_err("truncated FASTQ must return an error");
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn write_assembly_quality_reports_emits_stable_json_and_tsv_sidecars() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let output_base = temp_dir.path().join("assembled.fasta");
+        let summary = AssemblyQualitySummary {
+            total_contigs: 5,
+            total_bases: 1234,
+            avg_length: 246.8,
+            median_length: 210.0,
+            n25: 300,
+            n50: 250,
+            n75: 200,
+            n90: 150,
+            n95: 140,
+            n99: 100,
+            l50: 2,
+            l90: 4,
+            l95: 5,
+            l99: 5,
+            au_n: 260.5,
+            longest: 420,
+            gc_content: 0.5,
+            n_content: 0.1,
+            ambiguous_content: 0.02,
+            contigs_ge_1kb: 1,
+            contigs_ge_10kb: 0,
+            contigs_ge_50kb: 0,
+            contigs_ge_100kb: 0,
+            bases_ge_1kb: 1000,
+            bases_ge_10kb: 0,
+            bases_ge_50kb: 0,
+            bases_ge_100kb: 0,
+            contigs_ge_1kb_frac: 0.2,
+            contigs_ge_10kb_frac: 0.0,
+            contigs_ge_50kb_frac: 0.0,
+            contigs_ge_100kb_frac: 0.0,
+            bases_ge_1kb_frac: 0.81,
+            bases_ge_10kb_frac: 0.0,
+            bases_ge_50kb_frac: 0.0,
+            bases_ge_100kb_frac: 0.0,
+        };
+
+        let (json_path, tsv_path) = write_assembly_quality_reports(
+            output_base.to_str().expect("utf8 output path"),
+            summary,
+        )
+        .expect("write quality reports");
+
+        assert!(json_path.ends_with("assembled.assembly_metrics.json"));
+        assert!(tsv_path.ends_with("assembled.assembly_metrics.tsv"));
+
+        let json = std::fs::read_to_string(&json_path).expect("read json report");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse json");
+        assert_eq!(parsed["total_contigs"], 5);
+        assert_eq!(parsed["n50"], 250);
+        assert_eq!(parsed["gc_content"], 0.5);
+
+        let tsv = std::fs::read_to_string(&tsv_path).expect("read tsv report");
+        let mut lines = tsv.lines();
+        assert_eq!(lines.next(), Some("metric\tvalue"));
+        assert!(tsv.contains("n50\t250"));
+        assert!(tsv.contains("gc_content\t0.500000000000"));
+        assert!(tsv.contains("bases_ge_1kb_frac\t0.810000000000"));
     }
 }
