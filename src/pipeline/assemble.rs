@@ -43,6 +43,10 @@ struct AssemblyQualitySummary {
     gc_content: f64,
     n_content: f64,
     ambiguous_content: f64,
+    n_runs: usize,
+    longest_n_run: usize,
+    mean_n_run_length: f64,
+    n_runs_per_100kb: f64,
     n_bases_per_100kb: f64,
     ambiguous_bases_per_100kb: f64,
     contigs_ge_1kb: usize,
@@ -63,6 +67,12 @@ struct AssemblyQualitySummary {
     bases_ge_100kb_frac: f64,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct NRunSummary {
+    count: usize,
+    longest: usize,
+}
+
 #[inline]
 fn per_100kb(count: usize, total_bases: usize) -> f64 {
     if total_bases == 0 {
@@ -73,18 +83,46 @@ fn per_100kb(count: usize, total_bases: usize) -> f64 {
 }
 
 #[inline]
+fn update_n_runs(sequence: &[u8], n_runs: &mut NRunSummary) {
+    let mut run_len = 0usize;
+
+    for &base in sequence {
+        if matches!(base, b'N' | b'n') {
+            run_len += 1;
+        } else if run_len > 0 {
+            n_runs.count += 1;
+            n_runs.longest = n_runs.longest.max(run_len);
+            run_len = 0;
+        }
+    }
+
+    if run_len > 0 {
+        n_runs.count += 1;
+        n_runs.longest = n_runs.longest.max(run_len);
+    }
+}
+
+#[inline]
 fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
     let mut lengths = Vec::with_capacity(contigs.len());
     let mut composition = BaseComposition::default();
+    let mut n_runs = NRunSummary::default();
 
     for contig in contigs {
         lengths.push(contig.sequence.len());
-        composition.add_sequence(contig.sequence.as_bytes());
+        let sequence = contig.sequence.as_bytes();
+        composition.add_sequence(sequence);
+        update_n_runs(sequence, &mut n_runs);
     }
 
     let length_stats = evaluate_lengths_in_place(&mut lengths);
     let longest_frac = if length_stats.total_bases > 0 {
         length_stats.longest as f64 / length_stats.total_bases as f64
+    } else {
+        0.0
+    };
+    let mean_n_run_length = if n_runs.count > 0 {
+        composition.n_bases as f64 / n_runs.count as f64
     } else {
         0.0
     };
@@ -117,6 +155,10 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
         gc_content: composition.gc_content(),
         n_content: composition.n_content(length_stats.total_bases),
         ambiguous_content: composition.ambiguous_content(length_stats.total_bases),
+        n_runs: n_runs.count,
+        longest_n_run: n_runs.longest,
+        mean_n_run_length,
+        n_runs_per_100kb: per_100kb(n_runs.count, length_stats.total_bases),
         n_bases_per_100kb: per_100kb(composition.n_bases, length_stats.total_bases),
         ambiguous_bases_per_100kb: per_100kb(composition.ambiguous_bases, length_stats.total_bases),
         contigs_ge_1kb: length_stats.contigs_ge_1kb,
@@ -187,6 +229,16 @@ fn write_assembly_quality_reports(
         (
             "ambiguous_content",
             format!("{:.12}", quality.ambiguous_content),
+        ),
+        ("n_runs", quality.n_runs.to_string()),
+        ("longest_n_run", quality.longest_n_run.to_string()),
+        (
+            "mean_n_run_length",
+            format!("{:.12}", quality.mean_n_run_length),
+        ),
+        (
+            "n_runs_per_100kb",
+            format!("{:.12}", quality.n_runs_per_100kb),
         ),
         (
             "n_bases_per_100kb",
@@ -507,7 +559,7 @@ pub fn assemble_reads_with_gpu(
 
     let quality = summarize_assembly_quality(&contigs);
     info!(
-        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN: {:.1}, Longest: {} bp ({:.2}%), GC/N/Ambiguous bases: {}/{}/{} (fractions {:.2}%/{:.2}%/{:.2}%), N/Ambiguous per 100kb: {:.1}/{:.1}, >=1kb/10kb/50kb/100kb contigs: {}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%)",
+        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN: {:.1}, Longest: {} bp ({:.2}%), GC/N/Ambiguous bases: {}/{}/{} (fractions {:.2}%/{:.2}%/{:.2}%), N-runs: count {}, max {}, mean {:.1} bp ({:.1} per 100kb), N/Ambiguous bases per 100kb: {:.1}/{:.1}, >=1kb/10kb/50kb/100kb contigs: {}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%)",
         quality.total_contigs,
         quality.total_bases,
         quality.avg_length,
@@ -535,6 +587,10 @@ pub fn assemble_reads_with_gpu(
         quality.gc_content * 100.0,
         quality.n_content * 100.0,
         quality.ambiguous_content * 100.0,
+        quality.n_runs,
+        quality.longest_n_run,
+        quality.mean_n_run_length,
+        quality.n_runs_per_100kb,
         quality.n_bases_per_100kb,
         quality.ambiguous_bases_per_100kb,
         quality.contigs_ge_1kb,
@@ -1120,6 +1176,10 @@ mod tests {
         assert!((summary.gc_content - (4.0 / 9.0)).abs() < 1e-12);
         assert!((summary.n_content - (1.0 / 12.0)).abs() < 1e-12);
         assert!((summary.ambiguous_content - (2.0 / 12.0)).abs() < 1e-12);
+        assert_eq!(summary.n_runs, 1);
+        assert_eq!(summary.longest_n_run, 1);
+        assert!((summary.mean_n_run_length - 1.0).abs() < 1e-12);
+        assert!((summary.n_runs_per_100kb - (1.0 * 100_000.0 / 12.0)).abs() < 1e-12);
         assert!((summary.n_bases_per_100kb - (1.0 * 100_000.0 / 12.0)).abs() < 1e-12);
         assert!((summary.ambiguous_bases_per_100kb - (2.0 * 100_000.0 / 12.0)).abs() < 1e-12);
         assert_eq!(summary.contigs_ge_1kb, 0);
@@ -1223,6 +1283,37 @@ mod tests {
         assert!((summary.bases_ge_10kb_frac - (160_000.0 / 161_999.0)).abs() < 1e-12);
         assert!((summary.bases_ge_50kb_frac - (150_000.0 / 161_999.0)).abs() < 1e-12);
         assert!((summary.bases_ge_100kb_frac - (100_000.0 / 161_999.0)).abs() < 1e-12);
+        assert_eq!(summary.n_runs, 1);
+        assert_eq!(summary.longest_n_run, 999);
+        assert!((summary.mean_n_run_length - 999.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn summarize_assembly_quality_reports_n_run_metrics() {
+        let contigs = vec![
+            Contig {
+                id: 0,
+                sequence: "AANNNCC".to_string(),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 1,
+                sequence: "NNAAAN".to_string(),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 2,
+                sequence: "CGT".to_string(),
+                kmer_path: vec![],
+            },
+        ];
+
+        let summary = summarize_assembly_quality(&contigs);
+        assert_eq!(summary.n_bases, 6);
+        assert_eq!(summary.n_runs, 3);
+        assert_eq!(summary.longest_n_run, 3);
+        assert!((summary.mean_n_run_length - 2.0).abs() < 1e-12);
+        assert!((summary.n_runs_per_100kb - (3.0 * 100_000.0 / 16.0)).abs() < 1e-12);
     }
 
     #[test]
@@ -1300,6 +1391,10 @@ mod tests {
             gc_content: 0.5,
             n_content: 0.1,
             ambiguous_content: 0.02,
+            n_runs: 4,
+            longest_n_run: 21,
+            mean_n_run_length: 22.5,
+            n_runs_per_100kb: 4.0 * 100_000.0 / 1234.0,
             n_bases_per_100kb: 90.0 * 100_000.0 / 1234.0,
             ambiguous_bases_per_100kb: 44.0 * 100_000.0 / 1234.0,
             contigs_ge_1kb: 1,
@@ -1339,6 +1434,10 @@ mod tests {
         assert_eq!(parsed["acgt_bases"], 1100);
         assert_eq!(parsed["gc_content"], 0.5);
         assert_eq!(parsed["longest_frac"], 0.340356564);
+        assert_eq!(parsed["n_runs"], 4);
+        assert_eq!(parsed["longest_n_run"], 21);
+        assert_eq!(parsed["mean_n_run_length"], 22.5);
+        assert_eq!(parsed["n_runs_per_100kb"], 4.0 * 100_000.0 / 1234.0);
         assert_eq!(parsed["n_bases_per_100kb"], 90.0 * 100_000.0 / 1234.0);
         assert_eq!(
             parsed["ambiguous_bases_per_100kb"],
@@ -1355,6 +1454,10 @@ mod tests {
         assert!(tsv.contains("acgt_bases\t1100"));
         assert!(tsv.contains("longest_frac\t0.340356564000"));
         assert!(tsv.contains("gc_content\t0.500000000000"));
+        assert!(tsv.contains("n_runs\t4"));
+        assert!(tsv.contains("longest_n_run\t21"));
+        assert!(tsv.contains("mean_n_run_length\t22.500000000000"));
+        assert!(tsv.contains("n_runs_per_100kb\t324.149108589951"));
         assert!(tsv.contains("n_bases_per_100kb\t7293.354943273906"));
         assert!(tsv.contains("ambiguous_bases_per_100kb\t3565.640194489465"));
         assert!(tsv.contains("bases_ge_1kb_frac\t0.810000000000"));
