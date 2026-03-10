@@ -51,15 +51,8 @@ pub fn process_isoforms(
     contigs: &[Contig],
     links: &[(usize, usize, usize)],
     kmer_counts: &HashMap<usize, usize>,
-    _output_path: &str,
-    _gtf_path: Option<&str>,
     max_path_depth: usize,
     min_confidence: f64,
-    _min_tpm: Option<f64>,
-    _strand_aware: bool,
-    _bam_path: Option<&str>,
-    _long_reads: Option<&str>,
-    _get_output_filename: fn(&str, Option<&str>) -> String,
 ) -> Result<Vec<Transcript>> {
     info!(
         "Processing isoforms from {} contigs with {} links",
@@ -151,10 +144,6 @@ mod tests {
             .collect()
     }
 
-    fn passthrough_filename(base: &str, _ext: Option<&str>) -> String {
-        base.to_string()
-    }
-
     #[test]
     fn process_isoforms_uses_overlap_aware_stitching() {
         let contigs = vec![
@@ -166,21 +155,8 @@ mod tests {
         let links = vec![(0, 1, 10), (1, 2, 10), (2, 3, 10)];
         let expression = HashMap::from([(0usize, 12usize), (1, 11), (2, 10), (3, 9)]);
 
-        let transcripts = process_isoforms(
-            &contigs,
-            &links,
-            &expression,
-            "unused",
-            None,
-            8,
-            0.0,
-            None,
-            false,
-            None,
-            None,
-            passthrough_filename,
-        )
-        .expect("isoform processing should succeed");
+        let transcripts = process_isoforms(&contigs, &links, &expression, 8, 0.0)
+            .expect("isoform processing should succeed");
 
         assert_eq!(transcripts.len(), 1);
         assert_eq!(transcripts[0].id, 1);
@@ -218,37 +194,11 @@ mod tests {
 
         let expression = HashMap::from([(0usize, 10usize), (1, 10), (2, 10), (3, 10), (4, 10)]);
 
-        let transcripts_a = process_isoforms(
-            &contigs_a,
-            &links_a,
-            &expression,
-            "unused",
-            None,
-            8,
-            0.0,
-            None,
-            false,
-            None,
-            None,
-            passthrough_filename,
-        )
-        .expect("isoform processing should succeed for ordering A");
+        let transcripts_a = process_isoforms(&contigs_a, &links_a, &expression, 8, 0.0)
+            .expect("isoform processing should succeed for ordering A");
 
-        let transcripts_b = process_isoforms(
-            &contigs_b,
-            &links_b,
-            &expression,
-            "unused",
-            None,
-            8,
-            0.0,
-            None,
-            false,
-            None,
-            None,
-            passthrough_filename,
-        )
-        .expect("isoform processing should succeed for ordering B");
+        let transcripts_b = process_isoforms(&contigs_b, &links_b, &expression, 8, 0.0)
+            .expect("isoform processing should succeed for ordering B");
 
         assert_eq!(
             transcript_signature(&transcripts_a),

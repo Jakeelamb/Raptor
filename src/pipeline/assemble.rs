@@ -812,32 +812,15 @@ pub fn assemble_reads_with_gpu(
         if isoforms {
             info!("Performing isoform inference from assembly graph");
 
-            // Default values for new parameters
-            let min_tpm_value = None; // No TPM filtering by default
-            let strand_aware_value = false; // Non-strand-aware by default
-            let bam_path_value = None; // No BAM file for quantification
-            let long_reads_value = None; // No long reads for polishing
-
             // Derive per-contig expression support from assembled k-mer paths.
             let kmer_counts_converted = derive_contig_expression_map(&contigs, &kmer_counts_u64);
-
-            // Create a function pointer with the expected signature
-            let get_output_filename_fn: fn(&str, Option<&str>) -> String =
-                |base: &str, _ext: Option<&str>| get_output_filename(base, "");
 
             let mut transcripts = crate::pipeline::isoform_processor::process_isoforms(
                 &contigs,
                 &links,
                 &kmer_counts_converted,
-                output_path,
-                gtf_path.as_deref(),
                 max_path_depth,
                 min_confidence,
-                min_tpm_value,
-                strand_aware_value,
-                bam_path_value,
-                long_reads_value,
-                get_output_filename_fn,
             )
             .unwrap_or_else(|e| {
                 warn!("Error processing isoforms: {}", e);
