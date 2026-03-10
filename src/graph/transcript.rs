@@ -321,6 +321,10 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
         length_metrics.contigs_ge_50kb as f64,
     );
     stats.insert(
+        "contigs_ge_100kb".to_string(),
+        length_metrics.contigs_ge_100kb as f64,
+    );
+    stats.insert(
         "bases_ge_1kb".to_string(),
         length_metrics.bases_ge_1kb as f64,
     );
@@ -331,6 +335,10 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
     stats.insert(
         "bases_ge_50kb".to_string(),
         length_metrics.bases_ge_50kb as f64,
+    );
+    stats.insert(
+        "bases_ge_100kb".to_string(),
+        length_metrics.bases_ge_100kb as f64,
     );
 
     // Confidence statistics

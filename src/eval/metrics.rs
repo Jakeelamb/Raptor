@@ -17,9 +17,11 @@ pub struct TranscriptStats {
     pub contigs_ge_1kb: usize,
     pub contigs_ge_10kb: usize,
     pub contigs_ge_50kb: usize,
+    pub contigs_ge_100kb: usize,
     pub bases_ge_1kb: usize,
     pub bases_ge_10kb: usize,
     pub bases_ge_50kb: usize,
+    pub bases_ge_100kb: usize,
 }
 
 #[inline]
@@ -43,9 +45,11 @@ fn empty_transcript_stats() -> TranscriptStats {
         contigs_ge_1kb: 0,
         contigs_ge_10kb: 0,
         contigs_ge_50kb: 0,
+        contigs_ge_100kb: 0,
         bases_ge_1kb: 0,
         bases_ge_10kb: 0,
         bases_ge_50kb: 0,
+        bases_ge_100kb: 0,
     }
 }
 
@@ -177,6 +181,7 @@ pub fn evaluate_lengths_sorted_desc(sorted_lengths: &[usize]) -> TranscriptStats
     let (contigs_ge_1kb, bases_ge_1kb) = count_and_span_at_or_above(sorted_lengths, 1_000);
     let (contigs_ge_10kb, bases_ge_10kb) = count_and_span_at_or_above(sorted_lengths, 10_000);
     let (contigs_ge_50kb, bases_ge_50kb) = count_and_span_at_or_above(sorted_lengths, 50_000);
+    let (contigs_ge_100kb, bases_ge_100kb) = count_and_span_at_or_above(sorted_lengths, 100_000);
 
     TranscriptStats {
         total: sorted_lengths.len(),
@@ -197,9 +202,11 @@ pub fn evaluate_lengths_sorted_desc(sorted_lengths: &[usize]) -> TranscriptStats
         contigs_ge_1kb,
         contigs_ge_10kb,
         contigs_ge_50kb,
+        contigs_ge_100kb,
         bases_ge_1kb,
         bases_ge_10kb,
         bases_ge_50kb,
+        bases_ge_100kb,
     }
 }
 
@@ -238,9 +245,11 @@ mod tests {
         assert_eq!(stats.contigs_ge_1kb, 0);
         assert_eq!(stats.contigs_ge_10kb, 0);
         assert_eq!(stats.contigs_ge_50kb, 0);
+        assert_eq!(stats.contigs_ge_100kb, 0);
         assert_eq!(stats.bases_ge_1kb, 0);
         assert_eq!(stats.bases_ge_10kb, 0);
         assert_eq!(stats.bases_ge_50kb, 0);
+        assert_eq!(stats.bases_ge_100kb, 0);
     }
 
     #[test]
@@ -258,9 +267,18 @@ mod tests {
         assert_eq!(stats.contigs_ge_1kb, 3);
         assert_eq!(stats.contigs_ge_10kb, 2);
         assert_eq!(stats.contigs_ge_50kb, 1);
+        assert_eq!(stats.contigs_ge_100kb, 0);
         assert_eq!(stats.bases_ge_1kb, 61_000);
         assert_eq!(stats.bases_ge_10kb, 60_000);
         assert_eq!(stats.bases_ge_50kb, 50_000);
+        assert_eq!(stats.bases_ge_100kb, 0);
+    }
+
+    #[test]
+    fn evaluate_lengths_reports_100kb_bucket_counts_and_spans() {
+        let stats = evaluate_lengths(&[100_000, 99_999, 1_000]);
+        assert_eq!(stats.contigs_ge_100kb, 1);
+        assert_eq!(stats.bases_ge_100kb, 100_000);
     }
 
     #[test]
@@ -303,9 +321,11 @@ mod tests {
         assert_eq!(observed.contigs_ge_1kb, expected.contigs_ge_1kb);
         assert_eq!(observed.contigs_ge_10kb, expected.contigs_ge_10kb);
         assert_eq!(observed.contigs_ge_50kb, expected.contigs_ge_50kb);
+        assert_eq!(observed.contigs_ge_100kb, expected.contigs_ge_100kb);
         assert_eq!(observed.bases_ge_1kb, expected.bases_ge_1kb);
         assert_eq!(observed.bases_ge_10kb, expected.bases_ge_10kb);
         assert_eq!(observed.bases_ge_50kb, expected.bases_ge_50kb);
+        assert_eq!(observed.bases_ge_100kb, expected.bases_ge_100kb);
     }
 
     #[test]
@@ -329,8 +349,10 @@ mod tests {
         assert_eq!(stats.contigs_ge_1kb, 0);
         assert_eq!(stats.contigs_ge_10kb, 0);
         assert_eq!(stats.contigs_ge_50kb, 0);
+        assert_eq!(stats.contigs_ge_100kb, 0);
         assert_eq!(stats.bases_ge_1kb, 0);
         assert_eq!(stats.bases_ge_10kb, 0);
         assert_eq!(stats.bases_ge_50kb, 0);
+        assert_eq!(stats.bases_ge_100kb, 0);
     }
 }

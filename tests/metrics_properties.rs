@@ -45,9 +45,11 @@ proptest! {
         prop_assert!(stats.au_n + 1e-9 >= stats.avg_length);
         prop_assert!(stats.au_n <= stats.longest as f64 + 1e-9);
         prop_assert!(stats.contigs_ge_50kb <= stats.contigs_ge_10kb);
+        prop_assert!(stats.contigs_ge_100kb <= stats.contigs_ge_50kb);
         prop_assert!(stats.contigs_ge_10kb <= stats.contigs_ge_1kb);
         prop_assert!(stats.contigs_ge_1kb <= stats.total);
         prop_assert!(stats.bases_ge_50kb <= stats.bases_ge_10kb);
+        prop_assert!(stats.bases_ge_100kb <= stats.bases_ge_50kb);
         prop_assert!(stats.bases_ge_10kb <= stats.bases_ge_1kb);
         prop_assert!(stats.bases_ge_1kb <= stats.total_bases);
     }
@@ -80,9 +82,11 @@ proptest! {
         prop_assert_eq!(observed.contigs_ge_1kb, baseline.contigs_ge_1kb);
         prop_assert_eq!(observed.contigs_ge_10kb, baseline.contigs_ge_10kb);
         prop_assert_eq!(observed.contigs_ge_50kb, baseline.contigs_ge_50kb);
+        prop_assert_eq!(observed.contigs_ge_100kb, baseline.contigs_ge_100kb);
         prop_assert_eq!(observed.bases_ge_1kb, baseline.bases_ge_1kb);
         prop_assert_eq!(observed.bases_ge_10kb, baseline.bases_ge_10kb);
         prop_assert_eq!(observed.bases_ge_50kb, baseline.bases_ge_50kb);
+        prop_assert_eq!(observed.bases_ge_100kb, baseline.bases_ge_100kb);
         prop_assert!((observed.avg_length - baseline.avg_length).abs() < 1e-12);
         prop_assert!((observed.au_n - baseline.au_n).abs() < 1e-12);
     }
@@ -133,9 +137,11 @@ proptest! {
         prop_assert_eq!(observed.contigs_ge_1kb, baseline.contigs_ge_1kb);
         prop_assert_eq!(observed.contigs_ge_10kb, baseline.contigs_ge_10kb);
         prop_assert_eq!(observed.contigs_ge_50kb, baseline.contigs_ge_50kb);
+        prop_assert_eq!(observed.contigs_ge_100kb, baseline.contigs_ge_100kb);
         prop_assert_eq!(observed.bases_ge_1kb, baseline.bases_ge_1kb);
         prop_assert_eq!(observed.bases_ge_10kb, baseline.bases_ge_10kb);
         prop_assert_eq!(observed.bases_ge_50kb, baseline.bases_ge_50kb);
+        prop_assert_eq!(observed.bases_ge_100kb, baseline.bases_ge_100kb);
         prop_assert!((observed.avg_length - baseline.avg_length).abs() < 1e-12);
         prop_assert!((observed.au_n - baseline.au_n).abs() < 1e-12);
     }
@@ -166,9 +172,11 @@ proptest! {
         prop_assert_eq!(observed.get("contigs_ge_1kb").copied().unwrap_or(-1.0) as usize, expected.contigs_ge_1kb);
         prop_assert_eq!(observed.get("contigs_ge_10kb").copied().unwrap_or(-1.0) as usize, expected.contigs_ge_10kb);
         prop_assert_eq!(observed.get("contigs_ge_50kb").copied().unwrap_or(-1.0) as usize, expected.contigs_ge_50kb);
+        prop_assert_eq!(observed.get("contigs_ge_100kb").copied().unwrap_or(-1.0) as usize, expected.contigs_ge_100kb);
         prop_assert_eq!(observed.get("bases_ge_1kb").copied().unwrap_or(-1.0) as usize, expected.bases_ge_1kb);
         prop_assert_eq!(observed.get("bases_ge_10kb").copied().unwrap_or(-1.0) as usize, expected.bases_ge_10kb);
         prop_assert_eq!(observed.get("bases_ge_50kb").copied().unwrap_or(-1.0) as usize, expected.bases_ge_50kb);
+        prop_assert_eq!(observed.get("bases_ge_100kb").copied().unwrap_or(-1.0) as usize, expected.bases_ge_100kb);
 
         let mut shuffled = lengths.clone();
         let mut rng = StdRng::seed_from_u64(seed);
@@ -194,9 +202,11 @@ proptest! {
             "contigs_ge_1kb",
             "contigs_ge_10kb",
             "contigs_ge_50kb",
+            "contigs_ge_100kb",
             "bases_ge_1kb",
             "bases_ge_10kb",
             "bases_ge_50kb",
+            "bases_ge_100kb",
         ] {
             let lhs = observed.get(key).copied().unwrap_or(f64::NAN);
             let rhs = shuffled_stats.get(key).copied().unwrap_or(f64::NAN);

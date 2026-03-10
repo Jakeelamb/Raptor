@@ -91,9 +91,11 @@ pub struct AssemblyStats {
     pub contigs_ge_1kb: usize,
     pub contigs_ge_10kb: usize,
     pub contigs_ge_50kb: usize,
+    pub contigs_ge_100kb: usize,
     pub bases_ge_1kb: usize,
     pub bases_ge_10kb: usize,
     pub bases_ge_50kb: usize,
+    pub bases_ge_100kb: usize,
     pub disk_bytes: u64,
 }
 
@@ -146,13 +148,13 @@ impl std::fmt::Display for AssemblyStats {
         writeln!(f, "auN: {:.2} bp", self.au_n)?;
         writeln!(
             f,
-            "Contigs >=1kb/10kb/50kb: {}/{}/{}",
-            self.contigs_ge_1kb, self.contigs_ge_10kb, self.contigs_ge_50kb
+            "Contigs >=1kb/10kb/50kb/100kb: {}/{}/{}/{}",
+            self.contigs_ge_1kb, self.contigs_ge_10kb, self.contigs_ge_50kb, self.contigs_ge_100kb
         )?;
         writeln!(
             f,
-            "Span >=1kb/10kb/50kb: {}/{}/{} bp",
-            self.bases_ge_1kb, self.bases_ge_10kb, self.bases_ge_50kb
+            "Span >=1kb/10kb/50kb/100kb: {}/{}/{}/{} bp",
+            self.bases_ge_1kb, self.bases_ge_10kb, self.bases_ge_50kb, self.bases_ge_100kb
         )?;
         writeln!(f, "Largest: {} bp", self.largest)?;
         writeln!(f, "Disk used: {:.2} GB", self.disk_bytes as f64 / 1e9)?;
@@ -2235,9 +2237,11 @@ impl LargeGenomeAssembler {
         stats.contigs_ge_1kb = contig_stats.contigs_ge_1kb;
         stats.contigs_ge_10kb = contig_stats.contigs_ge_10kb;
         stats.contigs_ge_50kb = contig_stats.contigs_ge_50kb;
+        stats.contigs_ge_100kb = contig_stats.contigs_ge_100kb;
         stats.bases_ge_1kb = contig_stats.bases_ge_1kb;
         stats.bases_ge_10kb = contig_stats.bases_ge_10kb;
         stats.bases_ge_50kb = contig_stats.bases_ge_50kb;
+        stats.bases_ge_100kb = contig_stats.bases_ge_100kb;
 
         Ok(())
     }
@@ -2735,9 +2739,11 @@ mod tests {
         assert_eq!(stats.contigs_ge_1kb, 0);
         assert_eq!(stats.contigs_ge_10kb, 0);
         assert_eq!(stats.contigs_ge_50kb, 0);
+        assert_eq!(stats.contigs_ge_100kb, 0);
         assert_eq!(stats.bases_ge_1kb, 0);
         assert_eq!(stats.bases_ge_10kb, 0);
         assert_eq!(stats.bases_ge_50kb, 0);
+        assert_eq!(stats.bases_ge_100kb, 0);
         assert!((stats.gc_content - (75.0 / 175.0)).abs() < 1e-12);
         assert_eq!(stats.n_content, 0.0);
         assert_eq!(stats.ambiguous_content, 0.0);
@@ -2819,9 +2825,32 @@ mod tests {
         assert_eq!(stats.contigs_ge_1kb, 3);
         assert_eq!(stats.contigs_ge_10kb, 2);
         assert_eq!(stats.contigs_ge_50kb, 1);
+        assert_eq!(stats.contigs_ge_100kb, 0);
         assert_eq!(stats.bases_ge_1kb, 61_000);
         assert_eq!(stats.bases_ge_10kb, 60_000);
         assert_eq!(stats.bases_ge_50kb, 50_000);
+        assert_eq!(stats.bases_ge_100kb, 0);
+    }
+
+    #[test]
+    fn test_write_output_reports_100kb_bucket_metrics() {
+        let output = NamedTempFile::new().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            min_contig_len: 1,
+            num_buckets: Some(4),
+            temp_dir: Some(temp_dir.path().to_str().unwrap().to_string()),
+            ..Default::default()
+        });
+
+        let contigs = vec!["A".repeat(100_000), "C".repeat(99_999)];
+        let mut stats = AssemblyStats::default();
+        assembler
+            .write_output(&contigs, output.path().to_str().unwrap(), &mut stats)
+            .unwrap();
+
+        assert_eq!(stats.contigs_ge_100kb, 1);
+        assert_eq!(stats.bases_ge_100kb, 100_000);
     }
 
     /// Test repeat detection and resolution
