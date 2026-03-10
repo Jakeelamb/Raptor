@@ -68,6 +68,7 @@ pub struct StreamingAssemblyStats {
     pub n95: usize,
     pub n99: usize,
     pub l50: usize,
+    pub l75: usize,
     pub l90: usize,
     pub l95: usize,
     pub l99: usize,
@@ -167,6 +168,7 @@ impl StreamingAssembler {
             n95: length_stats.n95,
             n99: length_stats.n99,
             l50: length_stats.l50,
+            l75: length_stats.l75,
             l90: length_stats.l90,
             l95: length_stats.l95,
             l99: length_stats.l99,
@@ -520,6 +522,8 @@ mod tests {
         assert!(stats.n75 >= stats.n90);
         assert!(stats.n90 >= stats.n95);
         assert!(stats.n95 >= stats.n99);
+        assert!(stats.l50 <= stats.l75);
+        assert!(stats.l75 <= stats.l90);
         assert!(stats.l50 <= stats.l90);
         assert!(stats.l90 <= stats.l95);
         assert!(stats.l95 <= stats.l99);
@@ -545,6 +549,7 @@ mod tests {
         assert_eq!(stats.n95, expected.n95);
         assert_eq!(stats.n99, expected.n99);
         assert_eq!(stats.l50, expected.l50);
+        assert_eq!(stats.l75, expected.l75);
         assert_eq!(stats.l90, expected.l90);
         assert_eq!(stats.l95, expected.l95);
         assert_eq!(stats.l99, expected.l99);

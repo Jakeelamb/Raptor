@@ -17,6 +17,7 @@ pub struct Stats {
     pub n95: usize,
     pub n99: usize,
     pub l50: usize,
+    pub l75: usize,
     pub l90: usize,
     pub l95: usize,
     pub l99: usize,
@@ -82,6 +83,7 @@ pub fn calculate_stats(path: &str) -> Stats {
         n95: length_stats.n95,
         n99: length_stats.n99,
         l50: length_stats.l50,
+        l75: length_stats.l75,
         l90: length_stats.l90,
         l95: length_stats.l95,
         l99: length_stats.l99,
@@ -163,6 +165,7 @@ mod tests {
         assert_eq!(stats.n95, 4);
         assert_eq!(stats.n99, 4);
         assert_eq!(stats.l50, 1);
+        assert_eq!(stats.l75, 2);
         assert_eq!(stats.l90, 2);
         assert_eq!(stats.l95, 3);
         assert_eq!(stats.l99, 3);
@@ -197,6 +200,7 @@ mod tests {
         assert_eq!(stats.n95, 4);
         assert_eq!(stats.n99, 4);
         assert_eq!(stats.l50, 1);
+        assert_eq!(stats.l75, 1);
         assert_eq!(stats.l90, 2);
         assert_eq!(stats.l95, 2);
         assert_eq!(stats.l99, 2);
@@ -246,6 +250,7 @@ mod tests {
             n95: 0,
             n99: 0,
             l50: 0,
+            l75: 0,
             l90: 0,
             l95: 0,
             l99: 0,

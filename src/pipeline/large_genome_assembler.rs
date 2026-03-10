@@ -81,6 +81,7 @@ pub struct AssemblyStats {
     pub n95: usize,
     pub n99: usize,
     pub l50: usize,
+    pub l75: usize,
     pub l90: usize,
     pub l95: usize,
     pub l99: usize,
@@ -138,6 +139,7 @@ impl std::fmt::Display for AssemblyStats {
         writeln!(f, "N95: {} bp", self.n95)?;
         writeln!(f, "N99: {} bp", self.n99)?;
         writeln!(f, "L50: {}", self.l50)?;
+        writeln!(f, "L75: {}", self.l75)?;
         writeln!(f, "L90: {}", self.l90)?;
         writeln!(f, "L95: {}", self.l95)?;
         writeln!(f, "L99: {}", self.l99)?;
@@ -2223,6 +2225,7 @@ impl LargeGenomeAssembler {
         stats.n95 = contig_stats.n95;
         stats.n99 = contig_stats.n99;
         stats.l50 = contig_stats.l50;
+        stats.l75 = contig_stats.l75;
         stats.l90 = contig_stats.l90;
         stats.l95 = contig_stats.l95;
         stats.l99 = contig_stats.l99;
@@ -2724,6 +2727,7 @@ mod tests {
         assert_eq!(stats.n95, 25);
         assert_eq!(stats.n99, 25);
         assert_eq!(stats.l50, 1);
+        assert_eq!(stats.l75, 2);
         assert_eq!(stats.l90, 3);
         assert_eq!(stats.l95, 3);
         assert_eq!(stats.l99, 3);

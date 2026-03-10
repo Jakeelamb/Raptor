@@ -36,6 +36,8 @@ proptest! {
         prop_assert!(stats.n75 >= stats.n90);
         prop_assert!(stats.n90 >= stats.n95);
         prop_assert!(stats.n95 >= stats.n99);
+        prop_assert!(stats.l50 <= stats.l75);
+        prop_assert!(stats.l75 <= stats.l90);
         prop_assert!(stats.l50 <= stats.l90);
         prop_assert!(stats.l90 <= stats.l95);
         prop_assert!(stats.l95 <= stats.l99);
@@ -70,6 +72,7 @@ proptest! {
         prop_assert_eq!(observed.n95, baseline.n95);
         prop_assert_eq!(observed.n99, baseline.n99);
         prop_assert_eq!(observed.l50, baseline.l50);
+        prop_assert_eq!(observed.l75, baseline.l75);
         prop_assert_eq!(observed.l90, baseline.l90);
         prop_assert_eq!(observed.l95, baseline.l95);
         prop_assert_eq!(observed.l99, baseline.l99);
@@ -102,6 +105,7 @@ proptest! {
         prop_assert_eq!(observed.get("n95").copied().unwrap_or(-1.0) as usize, expected.n95);
         prop_assert_eq!(observed.get("n99").copied().unwrap_or(-1.0) as usize, expected.n99);
         prop_assert_eq!(observed.get("l50").copied().unwrap_or(-1.0) as usize, expected.l50);
+        prop_assert_eq!(observed.get("l75").copied().unwrap_or(-1.0) as usize, expected.l75);
         prop_assert_eq!(observed.get("l90").copied().unwrap_or(-1.0) as usize, expected.l90);
         prop_assert_eq!(observed.get("l95").copied().unwrap_or(-1.0) as usize, expected.l95);
         prop_assert_eq!(observed.get("l99").copied().unwrap_or(-1.0) as usize, expected.l99);
@@ -129,6 +133,7 @@ proptest! {
             "n95",
             "n99",
             "l50",
+            "l75",
             "l90",
             "l95",
             "l99",

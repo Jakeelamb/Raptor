@@ -303,6 +303,7 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
     stats.insert("n95".to_string(), length_metrics.n95 as f64);
     stats.insert("n99".to_string(), length_metrics.n99 as f64);
     stats.insert("l50".to_string(), length_metrics.l50 as f64);
+    stats.insert("l75".to_string(), length_metrics.l75 as f64);
     stats.insert("l90".to_string(), length_metrics.l90 as f64);
     stats.insert("l95".to_string(), length_metrics.l95 as f64);
     stats.insert("l99".to_string(), length_metrics.l99 as f64);

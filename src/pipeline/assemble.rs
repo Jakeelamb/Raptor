@@ -561,7 +561,7 @@ pub fn assemble_reads_with_gpu(
                 transcripts.iter().map(|t| t.sequence.len()).collect();
             let stats = evaluate_lengths(&transcript_lengths);
             info!(
-                "Transcript statistics: {} transcripts, {} bp total, Avg: {:.1} bp, N50/N75/N90/N95/N99: {}/{}/{}/{}/{} bp, L50/L90/L95/L99: {}/{}/{}/{}, auN: {:.1}",
+                "Transcript statistics: {} transcripts, {} bp total, Avg: {:.1} bp, N50/N75/N90/N95/N99: {}/{}/{}/{}/{} bp, L50/L75/L90/L95/L99: {}/{}/{}/{}/{}, auN: {:.1}",
                 stats.total,
                 stats.total_bases,
                 stats.avg_length,
@@ -571,6 +571,7 @@ pub fn assemble_reads_with_gpu(
                 stats.n95,
                 stats.n99,
                 stats.l50,
+                stats.l75,
                 stats.l90,
                 stats.l95,
                 stats.l99,

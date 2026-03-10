@@ -8,6 +8,7 @@ pub struct TranscriptStats {
     pub n95: usize,
     pub n99: usize,
     pub l50: usize,
+    pub l75: usize,
     pub l90: usize,
     pub l95: usize,
     pub l99: usize,
@@ -33,6 +34,7 @@ fn empty_transcript_stats() -> TranscriptStats {
         n95: 0,
         n99: 0,
         l50: 0,
+        l75: 0,
         l90: 0,
         l95: 0,
         l99: 0,
@@ -166,7 +168,7 @@ pub fn evaluate_lengths_sorted_desc(sorted_lengths: &[usize]) -> TranscriptStats
         .fold(0usize, |acc, &len| acc.saturating_add(len));
     let avg = total_len as f64 / sorted_lengths.len() as f64;
     let (n50, l50) = nx_lx(sorted_lengths, total_len, 1, 2);
-    let (n75, _) = nx_lx(sorted_lengths, total_len, 3, 4);
+    let (n75, l75) = nx_lx(sorted_lengths, total_len, 3, 4);
     let (n90, l90) = nx_lx(sorted_lengths, total_len, 9, 10);
     let (n95, l95) = nx_lx(sorted_lengths, total_len, 19, 20);
     let (n99, l99) = nx_lx(sorted_lengths, total_len, 99, 100);
@@ -186,6 +188,7 @@ pub fn evaluate_lengths_sorted_desc(sorted_lengths: &[usize]) -> TranscriptStats
         n95,
         n99,
         l50,
+        l75,
         l90,
         l95,
         l99,
@@ -226,6 +229,7 @@ mod tests {
         assert_eq!(stats.n95, 4);
         assert_eq!(stats.n99, 4);
         assert_eq!(stats.l50, 1);
+        assert_eq!(stats.l75, 2);
         assert_eq!(stats.l90, 2);
         assert_eq!(stats.l95, 3);
         assert_eq!(stats.l99, 3);
@@ -290,6 +294,7 @@ mod tests {
         assert_eq!(observed.n95, expected.n95);
         assert_eq!(observed.n99, expected.n99);
         assert_eq!(observed.l50, expected.l50);
+        assert_eq!(observed.l75, expected.l75);
         assert_eq!(observed.l90, expected.l90);
         assert_eq!(observed.l95, expected.l95);
         assert_eq!(observed.l99, expected.l99);
