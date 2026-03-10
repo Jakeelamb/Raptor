@@ -1,5 +1,4 @@
 use crate::graph::assembler::Contig;
-use crate::graph::navigation::traverse_path;
 use crate::graph::stitch::Path;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -94,7 +93,7 @@ fn decode_rle_tag(encoded: &str) -> Option<String> {
 
     let bytes = encoded.as_bytes();
     let mut idx = 0usize;
-    let mut runs = Vec::new();
+    let mut decoded = String::new();
     let mut total_len = 0usize;
 
     while idx < bytes.len() {
@@ -118,11 +117,7 @@ fn decode_rle_tag(encoded: &str) -> Option<String> {
         }
 
         total_len = total_len.checked_add(count)?;
-        runs.push((base, count));
-    }
-
-    let mut decoded = String::with_capacity(total_len);
-    for (base, count) in runs {
+        decoded.try_reserve(count).ok()?;
         decoded.extend(std::iter::repeat(base as char).take(count));
     }
     Some(decoded)
@@ -191,13 +186,14 @@ impl GfaWriter {
     /// Write paths for traversal visualization (using contig k-mer paths)
     pub fn write_paths(&mut self, contigs: &[Contig]) -> Result<()> {
         for (i, contig) in contigs.iter().enumerate() {
-            let segments = contig
-                .kmer_path
-                .iter()
-                .map(|_| format!("contig_{}", i + 1))
-                .collect::<Vec<_>>()
-                .join(",");
-            writeln!(self.writer, "P\tpath_{}\t{}\t*", i + 1, segments)?;
+            write!(self.writer, "P\tpath_{}\t", i + 1)?;
+            for segment_idx in 0..contig.kmer_path.len() {
+                if segment_idx > 0 {
+                    self.writer.write_all(b",")?;
+                }
+                write!(self.writer, "contig_{}", i + 1)?;
+            }
+            self.writer.write_all(b"\t*\n")?;
         }
         Ok(())
     }
@@ -212,11 +208,14 @@ impl GfaWriter {
         });
 
         for path in ordered_paths {
-            // Use our navigation module to get ODGI-style path representation
-            let nav = traverse_path(path, false); // Don't include edges in GFA format
-            let segments = nav.join(",");
-
-            writeln!(self.writer, "P\tpath_{}\t{}\t*", path.id + 1, segments)?;
+            write!(self.writer, "P\tpath_{}\t", path.id + 1)?;
+            for (idx, segment) in path.segments.iter().enumerate() {
+                if idx > 0 {
+                    self.writer.write_all(b",")?;
+                }
+                write!(self.writer, "contig_{}+", segment + 1)?;
+            }
+            self.writer.write_all(b"\t*\n")?;
         }
         Ok(())
     }
@@ -548,6 +547,33 @@ mod tests {
         assert_eq!(
             written_a,
             "P\tpath_1\tcontig_1+,contig_4+\t*\nP\tpath_2\tcontig_3+\t*\nP\tpath_3\tcontig_2+,contig_3+\t*\n"
+        );
+    }
+
+    #[test]
+    fn write_paths_serializes_repeated_segment_ids_without_extra_records() {
+        let contigs = vec![
+            Contig {
+                id: 0,
+                sequence: "ATCG".to_string(),
+                kmer_path: vec![1, 2, 3],
+            },
+            Contig {
+                id: 1,
+                sequence: "GGGG".to_string(),
+                kmer_path: vec![],
+            },
+        ];
+
+        let file = NamedTempFile::new().unwrap();
+        let mut writer = GfaWriter::new(file.path().to_str().unwrap());
+        writer.write_paths(&contigs).unwrap();
+        drop(writer);
+
+        let written = std::fs::read_to_string(file.path()).unwrap();
+        assert_eq!(
+            written,
+            "P\tpath_1\tcontig_1,contig_1,contig_1\t*\nP\tpath_2\t\t*\n"
         );
     }
 }
