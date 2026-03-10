@@ -8,9 +8,11 @@
 //! 5. Extract scaffold paths
 //! 6. Output scaffolds with gap estimates
 
+use crate::eval::metrics::evaluate_lengths_sorted_desc;
 use crate::io::fasta::{open_fasta, FastaWriter};
 use crate::io::fastq::{open_fastq, stream_paired_fastq_records};
 use ahash::{AHashMap, AHashSet};
+use std::cmp::Ordering;
 use std::io::{BufRead, Result};
 use tracing::info;
 
@@ -24,12 +26,16 @@ pub struct ScaffoldStats {
     pub links_after_filter: usize,
     pub num_scaffolds: usize,
     pub scaffold_n50: usize,
+    pub scaffold_n75: usize,
+    pub scaffold_n90: usize,
+    pub scaffold_au_n: f64,
+    pub longest_scaffold: usize,
     pub total_length: usize,
     pub total_gaps: usize,
 }
 
 /// Orientation of a contig in a scaffold
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Orientation {
     Forward,
     Reverse,
@@ -55,6 +61,66 @@ impl ContigLink {
         sorted.sort_unstable();
         sorted[sorted.len() / 2]
     }
+}
+
+#[inline]
+fn median_i32(values: &[i32]) -> i32 {
+    if values.is_empty() {
+        return 0;
+    }
+    let mut scratch = values.to_vec();
+    let mid = scratch.len() / 2;
+    let (_, median, _) = scratch.select_nth_unstable(mid);
+    *median
+}
+
+#[inline]
+fn compare_mapping_hits(a: &(usize, usize, bool), b: &(usize, usize, bool)) -> Ordering {
+    b.1.cmp(&a.1)
+        .then_with(|| a.0.cmp(&b.0))
+        .then_with(|| a.2.cmp(&b.2))
+}
+
+#[inline]
+fn other_contig_id(link: &ContigLink, current: usize) -> usize {
+    if link.contig_a == current {
+        link.contig_b
+    } else {
+        link.contig_a
+    }
+}
+
+#[inline]
+fn compare_extension_candidates(current: usize, a: &ContigLink, b: &ContigLink) -> Ordering {
+    a.support_count
+        .cmp(&b.support_count)
+        .then_with(|| other_contig_id(b, current).cmp(&other_contig_id(a, current)))
+        .then_with(|| a.orientation_a.cmp(&b.orientation_a))
+        .then_with(|| a.orientation_b.cmp(&b.orientation_b))
+}
+
+#[inline]
+fn compare_links(a: &ContigLink, b: &ContigLink) -> Ordering {
+    a.contig_a
+        .cmp(&b.contig_a)
+        .then_with(|| a.contig_b.cmp(&b.contig_b))
+        .then_with(|| b.support_count.cmp(&a.support_count))
+        .then_with(|| a.orientation_a.cmp(&b.orientation_a))
+        .then_with(|| a.orientation_b.cmp(&b.orientation_b))
+}
+
+fn update_scaffold_continuity(stats: &mut ScaffoldStats, scaffold_lengths: &mut [usize]) {
+    scaffold_lengths.sort_unstable_by(|a, b| b.cmp(a));
+    if scaffold_lengths.is_empty() {
+        return;
+    }
+
+    let continuity = evaluate_lengths_sorted_desc(scaffold_lengths);
+    stats.scaffold_n50 = continuity.n50;
+    stats.scaffold_n75 = continuity.n75;
+    stats.scaffold_n90 = continuity.n90;
+    stats.scaffold_au_n = continuity.au_n;
+    stats.longest_scaffold = continuity.longest;
 }
 
 /// A scaffold is a list of oriented contigs with gaps
@@ -145,11 +211,15 @@ impl MinimizerIndex {
             }
         }
 
-        // Return hits with sufficient support (at least 2 minimizer matches)
-        hits.into_iter()
+        // Return hits with sufficient support (at least 2 minimizer matches).
+        // Sort for deterministic tie-breaking across runs and hash seeds.
+        let mut result: Vec<(usize, usize, bool)> = hits
+            .into_iter()
             .filter(|(_, count)| *count >= 2)
             .map(|((contig_id, is_rev), count)| (contig_id, count, is_rev))
-            .collect()
+            .collect();
+        result.sort_unstable_by(compare_mapping_hits);
+        result
     }
 }
 
@@ -250,6 +320,8 @@ pub fn scaffold_contigs(
     // Estimate insert size from first batch of reads
     let mut insert_sizes: Vec<i32> = Vec::new();
     const INSERT_SAMPLE_SIZE: usize = 10000;
+    const INSERT_MEDIAN_REFRESH: usize = 256;
+    let mut estimated_insert = 500i32;
 
     for (r1, r2) in stream_paired_fastq_records(reader1, reader2) {
         stats.reads_processed += 2;
@@ -263,15 +335,21 @@ pub fn scaffold_contigs(
 
         stats.reads_mapped += 2;
 
-        // Get best hit for each read
-        let best1 = hits1.iter().max_by_key(|(_, count, _)| count);
-        let best2 = hits2.iter().max_by_key(|(_, count, _)| count);
+        // Query results are pre-sorted by score and deterministic tiebreakers.
+        let best1 = hits1.first().copied();
+        let best2 = hits2.first().copied();
 
-        if let (Some(&(contig1, _, rev1)), Some(&(contig2, _, rev2))) = (best1, best2) {
+        if let (Some((contig1, _, rev1)), Some((contig2, _, rev2))) = (best1, best2) {
             // Skip if both reads map to the same contig (used for insert size estimation)
             if contig1 == contig2 && insert_sizes.len() < INSERT_SAMPLE_SIZE {
                 // Rough insert size estimate based on read lengths
                 insert_sizes.push((r1.sequence.len() + r2.sequence.len()) as i32);
+                if insert_sizes.len() == 1
+                    || insert_sizes.len() % INSERT_MEDIAN_REFRESH == 0
+                    || insert_sizes.len() == INSERT_SAMPLE_SIZE
+                {
+                    estimated_insert = median_i32(&insert_sizes);
+                }
                 continue;
             }
 
@@ -301,14 +379,6 @@ pub fn scaffold_contigs(
                 });
 
                 // Estimate gap (negative means overlap)
-                let estimated_insert = if !insert_sizes.is_empty() {
-                    let mut sorted = insert_sizes.clone();
-                    sorted.sort_unstable();
-                    sorted[sorted.len() / 2]
-                } else {
-                    500 // Default insert size
-                };
-
                 let gap = estimated_insert - (r1.sequence.len() + r2.sequence.len()) as i32;
                 link.gap_estimates.push(gap);
                 link.support_count += 1;
@@ -327,10 +397,11 @@ pub fn scaffold_contigs(
     info!("Found {} potential links", links.len());
 
     // Filter links by minimum support
-    let filtered_links: Vec<ContigLink> = links
+    let mut filtered_links: Vec<ContigLink> = links
         .into_values()
         .filter(|link| link.support_count >= min_links)
         .collect();
+    filtered_links.sort_unstable_by(compare_links);
     stats.links_after_filter = filtered_links.len();
     info!(
         "Retained {} links with >= {} supporting pairs",
@@ -362,21 +433,12 @@ pub fn scaffold_contigs(
         writer.write_record(&header, &sequence)?;
     }
 
-    // Calculate N50
-    scaffold_lengths.sort_unstable_by(|a, b| b.cmp(a));
-    let half = stats.total_length / 2;
-    let mut cumsum = 0;
-    for len in &scaffold_lengths {
-        cumsum += len;
-        if cumsum >= half {
-            stats.scaffold_n50 = *len;
-            break;
-        }
-    }
+    // Calculate scaffold continuity metrics.
+    update_scaffold_continuity(&mut stats, &mut scaffold_lengths);
 
     info!(
-        "Scaffolding complete: {} scaffolds, N50 = {} bp",
-        stats.num_scaffolds, stats.scaffold_n50
+        "Scaffolding complete: {} scaffolds, N50 = {} bp, N90 = {} bp",
+        stats.num_scaffolds, stats.scaffold_n50, stats.scaffold_n90
     );
     Ok(stats)
 }
@@ -396,7 +458,13 @@ fn build_scaffolds(contigs: &[(String, String)], links: &[ContigLink]) -> Vec<Sc
 
     // Sort contigs by length (start with longest)
     let mut contig_order: Vec<usize> = (0..n).collect();
-    contig_order.sort_unstable_by_key(|&i| std::cmp::Reverse(contigs[i].1.len()));
+    contig_order.sort_unstable_by(|&a, &b| {
+        contigs[b]
+            .1
+            .len()
+            .cmp(&contigs[a].1.len())
+            .then_with(|| a.cmp(&b))
+    });
 
     for start in contig_order {
         if used.contains(&start) {
@@ -416,14 +484,11 @@ fn build_scaffolds(contigs: &[(String, String)], links: &[ContigLink]) -> Vec<Sc
                 links
                     .iter()
                     .filter(|link| {
-                        let other = if link.contig_a == current {
-                            link.contig_b
-                        } else {
-                            link.contig_a
-                        };
+                        let other = other_contig_id(link, current);
                         !used.contains(&other)
                     })
-                    .max_by_key(|link| link.support_count)
+                    .copied()
+                    .max_by(|a, b| compare_extension_candidates(current, a, b))
             });
 
             match next_link {
@@ -460,15 +525,15 @@ fn assemble_scaffold(scaffold: &Scaffold, contigs: &[(String, String)]) -> (Stri
 
     for (i, &(contig_id, orientation)) in scaffold.contigs.iter().enumerate() {
         let contig_seq = &contigs[contig_id].1;
-
-        let seq = match orientation {
-            Orientation::Forward => contig_seq.clone(),
+        match orientation {
+            Orientation::Forward => sequence.push_str(contig_seq),
             Orientation::Reverse => {
-                String::from_utf8(reverse_complement(contig_seq.as_bytes())).unwrap()
+                let rc = reverse_complement(contig_seq.as_bytes());
+                sequence.push_str(
+                    std::str::from_utf8(&rc).expect("reverse complement must remain ASCII DNA"),
+                );
             }
-        };
-
-        sequence.push_str(&seq);
+        }
 
         // Add gap if not the last contig
         if i < scaffold.gaps.len() {
@@ -484,6 +549,9 @@ fn assemble_scaffold(scaffold: &Scaffold, contigs: &[(String, String)]) -> (Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::rngs::StdRng;
+    use rand::seq::SliceRandom;
+    use rand::SeedableRng;
 
     #[test]
     fn test_reverse_complement() {
@@ -509,5 +577,73 @@ mod tests {
 
         let h3 = hash_kmer(b"TGCA");
         assert_ne!(h1, h3);
+    }
+
+    #[test]
+    fn test_compare_mapping_hits_applies_deterministic_tiebreakers() {
+        let mut hits = vec![(2, 5, true), (1, 5, false), (3, 7, false), (0, 5, false)];
+        hits.sort_unstable_by(compare_mapping_hits);
+        assert_eq!(
+            hits,
+            vec![(3, 7, false), (0, 5, false), (1, 5, false), (2, 5, true)]
+        );
+    }
+
+    #[test]
+    fn test_update_scaffold_continuity_populates_extended_metrics() {
+        let mut stats = ScaffoldStats::default();
+        let mut lengths = vec![100, 50, 25];
+        update_scaffold_continuity(&mut stats, &mut lengths);
+
+        assert_eq!(stats.scaffold_n50, 100);
+        assert_eq!(stats.scaffold_n75, 50);
+        assert_eq!(stats.scaffold_n90, 25);
+        assert_eq!(stats.longest_scaffold, 100);
+        assert!((stats.scaffold_au_n - 75.0).abs() < 1e-12);
+    }
+
+    fn make_link(a: usize, b: usize, support_count: usize) -> ContigLink {
+        ContigLink {
+            contig_a: a.min(b),
+            contig_b: a.max(b),
+            orientation_a: Orientation::Forward,
+            orientation_b: Orientation::Forward,
+            gap_estimates: vec![100],
+            support_count,
+        }
+    }
+
+    fn scaffold_fingerprint(scaffolds: &[Scaffold]) -> Vec<Vec<usize>> {
+        scaffolds
+            .iter()
+            .map(|scaffold| scaffold.contigs.iter().map(|(id, _)| *id).collect())
+            .collect()
+    }
+
+    #[test]
+    fn build_scaffolds_is_stable_under_randomized_link_order() {
+        let contigs = vec![
+            ("c0".to_string(), "A".repeat(200)),
+            ("c1".to_string(), "C".repeat(150)),
+            ("c2".to_string(), "G".repeat(150)),
+            ("c3".to_string(), "T".repeat(120)),
+        ];
+
+        let base_links = vec![
+            make_link(0, 1, 10),
+            make_link(0, 2, 10),
+            make_link(1, 3, 8),
+            make_link(2, 3, 8),
+        ];
+
+        let baseline = scaffold_fingerprint(&build_scaffolds(&contigs, &base_links));
+
+        for seed in 0u64..64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut shuffled = base_links.clone();
+            shuffled.shuffle(&mut rng);
+            let observed = scaffold_fingerprint(&build_scaffolds(&contigs, &shuffled));
+            assert_eq!(observed, baseline);
+        }
     }
 }

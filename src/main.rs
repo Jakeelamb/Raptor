@@ -785,6 +785,10 @@ fn main() {
                                 println!("Scaffolding completed:");
                                 println!("  Scaffolds: {}", scaffold_stats.num_scaffolds);
                                 println!("  N50: {} bp", scaffold_stats.scaffold_n50);
+                                println!("  N75: {} bp", scaffold_stats.scaffold_n75);
+                                println!("  N90: {} bp", scaffold_stats.scaffold_n90);
+                                println!("  auN: {:.2} bp", scaffold_stats.scaffold_au_n);
+                                println!("  Longest: {} bp", scaffold_stats.longest_scaffold);
                             }
                             Err(e) => eprintln!("Scaffolding failed: {}", e),
                         }
