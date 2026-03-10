@@ -102,6 +102,7 @@ pub struct AssemblyStats {
     pub avg_contig_len: f64,
     pub median_contig_len: f64,
     pub au_n: f64,
+    pub effective_contig_count: f64,
     pub largest: usize,
     pub contigs_ge_1kb: usize,
     pub contigs_ge_10kb: usize,
@@ -192,7 +193,11 @@ impl std::fmt::Display for AssemblyStats {
         writeln!(f, "L90: {}", self.l90)?;
         writeln!(f, "L95: {}", self.l95)?;
         writeln!(f, "L99: {}", self.l99)?;
-        writeln!(f, "auN: {:.2} bp", self.au_n)?;
+        writeln!(
+            f,
+            "auN/effective count: {:.2} bp / {:.2}",
+            self.au_n, self.effective_contig_count
+        )?;
         writeln!(
             f,
             "Contigs >=1kb/10kb/50kb/100kb/1mb: {}/{}/{}/{}/{}",
@@ -276,6 +281,13 @@ struct BranchCandidate {
     count: u32,
     is_repeat: bool,
     read_support: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SeedCandidate {
+    canonical: u64,
+    oriented: u64,
+    count: u32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1445,51 +1457,57 @@ impl LargeGenomeAssembler {
         let mut used: AHashSet<u64> = AHashSet::with_capacity(kmer_counts.len());
         let mut contigs: Vec<String> = Vec::new();
 
-        // Sort k-mers by count (highest first) for seed selection
-        // But skip repeat k-mers as seeds (they cause fragmentation)
-        // Check if k-mer (or its RC) is still in the adjacency graph after cleaning
-        let mut sorted: Vec<(u64, u32)> = kmer_counts
-            .iter()
-            .filter(|(&kmer, _)| {
-                if repeat_kmers.contains(&kmer) {
-                    return false;
-                }
-                if adjacency.contains_key(&kmer) {
-                    return true;
-                }
-                let rc = KmerU64 {
-                    encoded: kmer,
-                    len: k as u8,
-                }
-                .reverse_complement()
-                .encoded;
-                adjacency.contains_key(&rc)
-            })
-            .map(|(&e, &c)| (e, c))
-            .collect();
-        sorted.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        // Prefer non-repeat seeds, but fall back to repeat seeds if graph cleaning
+        // removed all non-repeat nodes from the surviving adjacency.
+        let mut preferred = Vec::new();
+        let mut repeat_fallback = Vec::new();
+        for (&canonical, &count) in kmer_counts {
+            let Some(oriented) = Self::orient_seed_for_adjacency(canonical, adjacency, k) else {
+                continue;
+            };
 
-        info!("  Extending from {} seed k-mers...", sorted.len());
+            let entry = SeedCandidate {
+                canonical,
+                oriented,
+                count,
+            };
+            if repeat_kmers.contains(&canonical) {
+                repeat_fallback.push(entry);
+            } else {
+                preferred.push(entry);
+            }
+        }
+
+        preferred.sort_unstable_by(|a, b| {
+            b.count
+                .cmp(&a.count)
+                .then_with(|| a.canonical.cmp(&b.canonical))
+        });
+        repeat_fallback.sort_unstable_by(|a, b| {
+            b.count
+                .cmp(&a.count)
+                .then_with(|| a.canonical.cmp(&b.canonical))
+        });
+
+        let using_repeat_fallback = preferred.is_empty();
+        if using_repeat_fallback {
+            info!(
+                "  Non-repeat seeds unavailable after graph cleanup; falling back to {} repeat seeds",
+                repeat_fallback.len()
+            );
+            preferred = std::mem::take(&mut repeat_fallback);
+        }
+
+        info!("  Extending from {} seed k-mers...", preferred.len());
         let mut progress = 0;
 
-        for (seed, _count) in sorted {
-            if used.contains(&seed) {
+        for seed in preferred {
+            if used.contains(&seed.canonical) {
                 continue;
             }
 
-            let seed_for_extension = if adjacency.contains_key(&seed) {
-                seed
-            } else {
-                KmerU64 {
-                    encoded: seed,
-                    len: k as u8,
-                }
-                .reverse_complement()
-                .encoded
-            };
-
             let contig = self.extend_bidirectional_with_coverage(
-                seed_for_extension,
+                seed.oriented,
                 k,
                 adjacency,
                 kmer_counts,
@@ -1512,7 +1530,54 @@ impl LargeGenomeAssembler {
             }
         }
 
+        // Quality/completeness pass: if repeat components remain disconnected from
+        // non-repeat seeds, extend them deterministically as a second pass.
+        if !using_repeat_fallback && !repeat_fallback.is_empty() {
+            info!(
+                "  Running repeat-seed completion pass on {} seeds...",
+                repeat_fallback.len()
+            );
+            let contigs_before = contigs.len();
+            for seed in repeat_fallback {
+                if used.contains(&seed.canonical) {
+                    continue;
+                }
+
+                let contig = self.extend_bidirectional_with_coverage(
+                    seed.oriented,
+                    k,
+                    adjacency,
+                    kmer_counts,
+                    branch_support,
+                    &repeat_kmers,
+                    &mut used,
+                );
+
+                if contig.len() >= min_len {
+                    contigs.push(contig);
+                }
+            }
+            info!(
+                "  Repeat-seed completion pass added {} contigs",
+                contigs.len().saturating_sub(contigs_before)
+            );
+        }
+
         contigs
+    }
+
+    #[inline]
+    fn orient_seed_for_adjacency(
+        canonical: u64,
+        adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+        k: usize,
+    ) -> Option<u64> {
+        if adjacency.contains_key(&canonical) {
+            return Some(canonical);
+        }
+
+        let rc = Self::reverse_complement_kmer(canonical, k);
+        adjacency.contains_key(&rc).then_some(rc)
     }
 
     fn build_weighted_unitig_graph(
@@ -2518,6 +2583,7 @@ impl LargeGenomeAssembler {
         stats.avg_contig_len = contig_stats.avg_length;
         stats.median_contig_len = contig_stats.median_length;
         stats.au_n = contig_stats.au_n;
+        stats.effective_contig_count = contig_stats.effective_count;
         stats.largest = contig_stats.longest;
         stats.contigs_ge_1kb = contig_stats.contigs_ge_1kb;
         stats.contigs_ge_10kb = contig_stats.contigs_ge_10kb;
@@ -3082,6 +3148,19 @@ mod tests {
         assert_eq!(stats.ambiguous_bases_per_100kb, 0.0);
         assert!((stats.avg_contig_len - (175.0 / 3.0)).abs() < 1e-12);
         assert!((stats.au_n - 75.0).abs() < 1e-12);
+        assert!((stats.effective_contig_count - (175.0 / 75.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_assembly_stats_display_includes_effective_count() {
+        let stats = AssemblyStats {
+            au_n: 1234.5,
+            effective_contig_count: 6.75,
+            ..AssemblyStats::default()
+        };
+
+        let rendered = stats.to_string();
+        assert!(rendered.contains("auN/effective count: 1234.50 bp / 6.75"));
     }
 
     #[test]
@@ -3961,6 +4040,139 @@ mod tests {
                 baseline = Some(contigs);
             }
         }
+    }
+
+    #[test]
+    fn test_build_contigs_from_graph_falls_back_to_repeat_seeds_after_cleanup() {
+        let k = 3;
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: 1,
+            ..Default::default()
+        });
+
+        let mut counts = AHashMap::new();
+        for kmer in ["AAA", "AAC", "ACC"] {
+            let canonical = KmerU64::from_str(kmer).unwrap().canonical().encoded;
+            counts.insert(canonical, 20);
+        }
+        // Add many low-coverage entries that are not present in the cleaned adjacency.
+        // This forces repeat detection to classify the surviving graph nodes as repeats.
+        for decoy in 1_000_000u64..1_000_020u64 {
+            counts.insert(decoy, 2);
+        }
+
+        let valid_kmers: AHashSet<u64> = ["AAA", "AAC", "ACC"]
+            .into_iter()
+            .map(|kmer| KmerU64::from_str(kmer).unwrap().canonical().encoded)
+            .collect();
+        let adjacency = assembler.build_adjacency(&valid_kmers, k);
+        let branch_support: AHashMap<(u64, u64), u32> = AHashMap::new();
+        let contigs = assembler.build_contigs_from_graph(&counts, &adjacency, &branch_support, k);
+
+        assert!(
+            !contigs.is_empty(),
+            "repeat-seed fallback should still produce contigs"
+        );
+        assert!(
+            contigs.iter().all(|contig| contig.len() >= k),
+            "all emitted contigs should be at least k bases long"
+        );
+    }
+
+    #[test]
+    fn test_repeat_seed_fallback_is_stable_under_shuffled_count_insertion() {
+        let k = 3;
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: 1,
+            ..Default::default()
+        });
+
+        let mut entries: Vec<(u64, u32)> = ["AAA", "AAC", "ACC"]
+            .into_iter()
+            .map(|kmer| (KmerU64::from_str(kmer).unwrap().canonical().encoded, 20u32))
+            .collect();
+        for decoy in 1_000_000u64..1_000_020u64 {
+            entries.push((decoy, 2));
+        }
+
+        let valid_kmers: AHashSet<u64> = ["AAA", "AAC", "ACC"]
+            .into_iter()
+            .map(|kmer| KmerU64::from_str(kmer).unwrap().canonical().encoded)
+            .collect();
+        let adjacency = assembler.build_adjacency(&valid_kmers, k);
+        let branch_support: AHashMap<(u64, u64), u32> = AHashMap::new();
+
+        let mut rng = StdRng::seed_from_u64(0xFEED_FACE_u64);
+        let mut baseline: Option<Vec<String>> = None;
+
+        for _ in 0..64 {
+            entries.shuffle(&mut rng);
+            let mut counts = AHashMap::new();
+            for &(kmer, count) in &entries {
+                counts.insert(kmer, count);
+            }
+
+            let contigs =
+                assembler.build_contigs_from_graph(&counts, &adjacency, &branch_support, k);
+            if let Some(expected) = &baseline {
+                assert_eq!(&contigs, expected);
+            } else {
+                baseline = Some(contigs);
+            }
+        }
+    }
+
+    #[test]
+    fn test_build_contigs_from_graph_runs_repeat_completion_after_non_repeat_pass() {
+        let k = 3;
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: 1,
+            ..Default::default()
+        });
+
+        let mut counts = AHashMap::new();
+        for kmer in ["AAA", "AAT"] {
+            let canonical = KmerU64::from_str(kmer).unwrap().canonical().encoded;
+            counts.insert(canonical, 6);
+        }
+        for kmer in ["CCC", "CCG"] {
+            let canonical = KmerU64::from_str(kmer).unwrap().canonical().encoded;
+            counts.insert(canonical, 20);
+        }
+        // Keep median low enough that the high-coverage component is tagged as repeat.
+        for decoy in 2_000_000u64..2_000_020u64 {
+            counts.insert(decoy, 2);
+        }
+
+        let valid_kmers: AHashSet<u64> = ["AAA", "AAT", "CCC", "CCG"]
+            .into_iter()
+            .map(|kmer| KmerU64::from_str(kmer).unwrap().canonical().encoded)
+            .collect();
+        let adjacency = assembler.build_adjacency(&valid_kmers, k);
+        let branch_support: AHashMap<(u64, u64), u32> = AHashMap::new();
+        let contigs = assembler.build_contigs_from_graph(&counts, &adjacency, &branch_support, k);
+
+        assert!(contigs.len() >= 2);
+        assert!(
+            contigs
+                .iter()
+                .any(|contig| contig == "AAAT" || contig == "ATTT"),
+            "non-repeat component should be assembled: {:?}",
+            contigs
+        );
+        assert!(
+            contigs
+                .iter()
+                .any(|contig| contig == "CCCG" || contig == "CGGG"),
+            "repeat completion pass should recover repeat component: {:?}",
+            contigs
+        );
     }
 
     #[test]
