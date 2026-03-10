@@ -60,15 +60,21 @@ pub struct Stats {
 }
 
 pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
-    let reader = try_open_fasta(path)?;
+    let mut reader = try_open_fasta(path)?;
     let mut lengths = vec![];
     let mut in_sequence = false;
     let mut current_len = 0usize;
     let mut composition = BaseComposition::default();
+    let mut line = String::new();
 
-    for line_result in reader.lines() {
-        let line = line_result?;
-        if line.starts_with('>') {
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
+
+        let trimmed_line = line.trim_end_matches(['\n', '\r']);
+        if trimmed_line.starts_with('>') {
             // If we were in a sequence, add its final length.
             if in_sequence {
                 lengths.push(current_len);
@@ -76,8 +82,13 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
             in_sequence = true;
             current_len = 0;
         } else if in_sequence {
-            let seq = line.trim().as_bytes();
-            current_len += seq.len();
+            let seq = trimmed_line.trim().as_bytes();
+            current_len = current_len.checked_add(seq.len()).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("contig length overflow while reading {}", path),
+                )
+            })?;
             composition.add_sequence(seq);
         }
     }
@@ -184,6 +195,7 @@ pub fn update_with_graph_stats(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use std::io::Write;
     use tempfile::{NamedTempFile, TempDir};
 
@@ -479,6 +491,61 @@ mod tests {
         match calculate_stats(missing.to_str().unwrap()) {
             Ok(_) => panic!("expected not found error for missing FASTA"),
             Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::NotFound),
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn calculate_stats_is_invariant_to_sequence_line_wrapping(
+            contigs in prop::collection::vec("[ACGTNacgtnYRyr]{0,80}", 1..12)
+        ) {
+            let mut single_line = NamedTempFile::new().unwrap();
+            let mut wrapped = NamedTempFile::new().unwrap();
+
+            for (idx, sequence) in contigs.iter().enumerate() {
+                writeln!(single_line, ">contig_{}", idx).unwrap();
+                writeln!(single_line, "{}", sequence).unwrap();
+
+                writeln!(wrapped, ">contig_{}", idx).unwrap();
+                let width = (idx % 7) + 1;
+                if sequence.is_empty() {
+                    writeln!(wrapped).unwrap();
+                } else {
+                    for chunk in sequence.as_bytes().chunks(width) {
+                        writeln!(wrapped, "{}", std::str::from_utf8(chunk).unwrap()).unwrap();
+                    }
+                }
+            }
+
+            let stats_a = calculate_stats(single_line.path().to_str().unwrap()).unwrap();
+            let stats_b = calculate_stats(wrapped.path().to_str().unwrap()).unwrap();
+
+            prop_assert_eq!(stats_a.total_contigs, stats_b.total_contigs);
+            prop_assert_eq!(stats_a.total_length, stats_b.total_length);
+            prop_assert_eq!(stats_a.gc_bases, stats_b.gc_bases);
+            prop_assert_eq!(stats_a.acgt_bases, stats_b.acgt_bases);
+            prop_assert_eq!(stats_a.n_bases, stats_b.n_bases);
+            prop_assert_eq!(stats_a.ambiguous_bases, stats_b.ambiguous_bases);
+            prop_assert_eq!(stats_a.n25, stats_b.n25);
+            prop_assert_eq!(stats_a.n50, stats_b.n50);
+            prop_assert_eq!(stats_a.n75, stats_b.n75);
+            prop_assert_eq!(stats_a.n90, stats_b.n90);
+            prop_assert_eq!(stats_a.n95, stats_b.n95);
+            prop_assert_eq!(stats_a.n99, stats_b.n99);
+            prop_assert_eq!(stats_a.l25, stats_b.l25);
+            prop_assert_eq!(stats_a.l50, stats_b.l50);
+            prop_assert_eq!(stats_a.l75, stats_b.l75);
+            prop_assert_eq!(stats_a.l90, stats_b.l90);
+            prop_assert_eq!(stats_a.l95, stats_b.l95);
+            prop_assert_eq!(stats_a.l99, stats_b.l99);
+            prop_assert!((stats_a.average_length - stats_b.average_length).abs() < 1e-12);
+            prop_assert!((stats_a.median_length - stats_b.median_length).abs() < 1e-12);
+            prop_assert!((stats_a.gc_content - stats_b.gc_content).abs() < 1e-12);
+            prop_assert!((stats_a.n_content - stats_b.n_content).abs() < 1e-12);
+            prop_assert!((stats_a.ambiguous_content - stats_b.ambiguous_content).abs() < 1e-12);
+            prop_assert!((stats_a.au_n - stats_b.au_n).abs() < 1e-12);
         }
     }
 }
