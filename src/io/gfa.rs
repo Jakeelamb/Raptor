@@ -169,7 +169,14 @@ impl GfaWriter {
 
     /// Write overlaps/links between contigs
     pub fn write_links(&mut self, links: &[(usize, usize, usize)]) -> Result<()> {
-        for (from, to, overlap) in links {
+        let mut ordered_links = links.to_vec();
+        ordered_links.sort_unstable_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.1.cmp(&b.1))
+                .then_with(|| a.2.cmp(&b.2))
+        });
+
+        for (from, to, overlap) in ordered_links {
             writeln!(
                 self.writer,
                 "L\tcontig_{}\t+\tcontig_{}\t+\t{}M",
@@ -197,7 +204,14 @@ impl GfaWriter {
 
     /// Write assembly paths from Path objects
     pub fn write_assembly_paths(&mut self, paths: &[Path]) -> Result<()> {
-        for path in paths {
+        let mut ordered_paths: Vec<&Path> = paths.iter().collect();
+        ordered_paths.sort_unstable_by(|a, b| {
+            a.id.cmp(&b.id)
+                .then_with(|| a.segments.cmp(&b.segments))
+                .then_with(|| a.overlaps.cmp(&b.overlaps))
+        });
+
+        for path in ordered_paths {
             // Use our navigation module to get ODGI-style path representation
             let nav = traverse_path(path, false); // Don't include edges in GFA format
             let segments = nav.join(",");
@@ -303,6 +317,7 @@ pub fn read_gfa_links(gfa_path: &str) -> Result<Vec<(usize, usize, usize)>> {
 mod tests {
     use super::{decode_rle_tag, parse_overlap_size, read_gfa_contigs, read_gfa_links, GfaWriter};
     use crate::graph::assembler::Contig;
+    use crate::graph::stitch::Path;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -466,5 +481,73 @@ mod tests {
         let observed_sequences: Vec<String> = observed.into_iter().map(|c| c.sequence).collect();
         let expected_sequences: Vec<String> = contigs.into_iter().map(|c| c.sequence).collect();
         assert_eq!(observed_sequences, expected_sequences);
+    }
+
+    #[test]
+    fn write_links_is_stable_under_input_reordering() {
+        let links_a = vec![(2, 0, 4), (0, 2, 3), (0, 1, 2)];
+        let links_b = vec![(0, 1, 2), (2, 0, 4), (0, 2, 3)];
+
+        let file_a = NamedTempFile::new().unwrap();
+        let mut writer_a = GfaWriter::new(file_a.path().to_str().unwrap());
+        writer_a.write_links(&links_a).unwrap();
+        drop(writer_a);
+
+        let file_b = NamedTempFile::new().unwrap();
+        let mut writer_b = GfaWriter::new(file_b.path().to_str().unwrap());
+        writer_b.write_links(&links_b).unwrap();
+        drop(writer_b);
+
+        let written_a = std::fs::read_to_string(file_a.path()).unwrap();
+        let written_b = std::fs::read_to_string(file_b.path()).unwrap();
+        assert_eq!(written_a, written_b);
+        assert_eq!(
+            written_a,
+            "L\tcontig_1\t+\tcontig_2\t+\t2M\nL\tcontig_1\t+\tcontig_3\t+\t3M\nL\tcontig_3\t+\tcontig_1\t+\t4M\n"
+        );
+    }
+
+    #[test]
+    fn write_assembly_paths_is_stable_under_input_reordering() {
+        let paths_a = vec![
+            Path {
+                id: 2,
+                segments: vec![1, 2],
+                overlaps: vec![4],
+            },
+            Path {
+                id: 0,
+                segments: vec![0, 3],
+                overlaps: vec![2],
+            },
+            Path {
+                id: 1,
+                segments: vec![2],
+                overlaps: Vec::new(),
+            },
+        ];
+        let paths_b = vec![
+            paths_a[1].clone(),
+            paths_a[2].clone(),
+            paths_a[0].clone(),
+        ];
+
+        let file_a = NamedTempFile::new().unwrap();
+        let mut writer_a = GfaWriter::new(file_a.path().to_str().unwrap());
+        writer_a.write_assembly_paths(&paths_a).unwrap();
+        drop(writer_a);
+
+        let file_b = NamedTempFile::new().unwrap();
+        let mut writer_b = GfaWriter::new(file_b.path().to_str().unwrap());
+        writer_b.write_assembly_paths(&paths_b).unwrap();
+        drop(writer_b);
+
+        let written_a = std::fs::read_to_string(file_a.path()).unwrap();
+        let written_b = std::fs::read_to_string(file_b.path()).unwrap();
+        assert_eq!(written_a, written_b);
+        assert_eq!(
+            written_a,
+            "P\tpath_1\tcontig_1+,contig_4+\t*\nP\tpath_2\tcontig_3+\t*\nP\tpath_3\tcontig_2+,contig_3+\t*\n"
+        );
     }
 }
