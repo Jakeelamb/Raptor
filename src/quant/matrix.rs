@@ -62,9 +62,20 @@ pub fn read_tpm_matrix(path: &str) -> std::io::Result<HashMap<String, Vec<f64>>>
         ));
     }
 
+    let sample_headers = &headers[1..];
+    let mut seen_samples = std::collections::HashSet::with_capacity(sample_headers.len());
+    for &sample in sample_headers {
+        if !seen_samples.insert(sample) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Duplicate sample column: {}", sample),
+            ));
+        }
+    }
+
     // Initialize result map
     let mut result: HashMap<String, Vec<f64>> = HashMap::new();
-    for &h in headers.iter().skip(1) {
+    for &h in sample_headers {
         // Skip transcript_id column
         result.insert(h.to_string(), Vec::new());
     }
@@ -74,21 +85,19 @@ pub fn read_tpm_matrix(path: &str) -> std::io::Result<HashMap<String, Vec<f64>>>
         let line = line?;
         let fields: Vec<&str> = line.split('\t').collect();
 
-        if fields.len() < headers.len() {
-            continue; // Skip invalid lines
-        }
-
-        // Parse each sample's TPM value
-        for (idx, &sample) in headers.iter().skip(1).enumerate() {
+        // Parse each sample's TPM value.
+        // Missing/invalid values are padded with 0.0 to keep row alignment deterministic.
+        for (idx, &sample) in sample_headers.iter().enumerate() {
             let col_idx = idx + 1; // +1 because we skipped the first column
-            if col_idx < fields.len() {
-                if let Ok(tpm) = fields[col_idx].parse::<f64>() {
-                    result.get_mut(sample).unwrap().push(tpm);
-                } else {
-                    // Add 0.0 for invalid/empty values
-                    result.get_mut(sample).unwrap().push(0.0);
-                }
-            }
+            let parsed = fields
+                .get(col_idx)
+                .and_then(|raw| raw.parse::<f64>().ok())
+                .filter(|value| value.is_finite())
+                .unwrap_or(0.0);
+            result
+                .get_mut(sample)
+                .expect("sample header exists")
+                .push(parsed);
         }
     }
 
@@ -129,6 +138,7 @@ pub fn write_isoform_counts_matrix(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use tempfile::NamedTempFile;
 
     fn make_transcript(id: usize) -> Transcript {
@@ -188,5 +198,72 @@ mod tests {
         assert_eq!(lines[1], "transcript_1\t5.00");
         assert_eq!(lines[2], "transcript_2\t0.00");
         assert_eq!(lines[3], "transcript_3\t0.00");
+    }
+
+    #[test]
+    fn read_tpm_matrix_pads_missing_and_invalid_values_per_row() {
+        let file = NamedTempFile::new().unwrap();
+        std::fs::write(
+            file.path(),
+            "transcript_id\ta\tb\n\
+             transcript_1\t1.25\t2.50\n\
+             transcript_2\t3.00\n\
+             transcript_3\tnan\t4.75\n\
+             transcript_4\tbad\t\n",
+        )
+        .unwrap();
+
+        let parsed = read_tpm_matrix(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(parsed.get("a"), Some(&vec![1.25, 3.0, 0.0, 0.0]));
+        assert_eq!(parsed.get("b"), Some(&vec![2.5, 0.0, 4.75, 0.0]));
+    }
+
+    #[test]
+    fn read_tpm_matrix_rejects_duplicate_sample_columns() {
+        let file = NamedTempFile::new().unwrap();
+        std::fs::write(
+            file.path(),
+            "transcript_id\ts1\ts1\ntranscript_1\t1.0\t2.0\n",
+        )
+        .unwrap();
+
+        let err = read_tpm_matrix(file.path().to_str().unwrap()).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("Duplicate sample column"));
+    }
+
+    fn round_two(v: f64) -> f64 {
+        (v * 100.0).round() / 100.0
+    }
+
+    proptest! {
+        #[test]
+        fn write_then_read_counts_matrix_round_trips_to_two_decimal_precision(
+            tx_count in 1usize..20,
+            sample_data in prop::collection::btree_map("[a-z]{1,6}", prop::collection::vec(-1_000.0f64..1_000.0, 1..20), 1..6)
+        ) {
+            let transcripts: Vec<Transcript> = (0..tx_count).map(make_transcript).collect();
+            let mut samples = HashMap::new();
+
+            for (name, mut values) in sample_data {
+                values.truncate(tx_count);
+                while values.len() < tx_count {
+                    values.push(0.0);
+                }
+                samples.insert(name, values);
+            }
+
+            let out = NamedTempFile::new().unwrap();
+            write_counts_matrix(&samples, &transcripts, out.path().to_str().unwrap()).unwrap();
+            let parsed = read_tpm_matrix(out.path().to_str().unwrap()).unwrap();
+
+            for (name, expected_values) in samples {
+                let observed = parsed.get(&name).expect("sample present after round-trip");
+                prop_assert_eq!(observed.len(), tx_count);
+                for (observed_v, expected_v) in observed.iter().zip(expected_values.iter()) {
+                    prop_assert!((observed_v - round_two(*expected_v)).abs() < 1e-9);
+                }
+            }
+        }
     }
 }
