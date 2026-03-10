@@ -16,7 +16,9 @@ proptest! {
         prop_assert_eq!(stats.total_bases, total);
         prop_assert!(stats.n50 >= stats.n75);
         prop_assert!(stats.n75 >= stats.n90);
+        prop_assert!(stats.n90 >= stats.n95);
         prop_assert!(stats.l50 <= stats.l90);
+        prop_assert!(stats.l90 <= stats.l95);
         prop_assert!(stats.longest >= stats.n50);
         prop_assert!(stats.au_n + 1e-9 >= stats.avg_length);
         prop_assert!(stats.au_n <= stats.longest as f64 + 1e-9);
@@ -39,8 +41,10 @@ proptest! {
         prop_assert_eq!(observed.n50, baseline.n50);
         prop_assert_eq!(observed.n75, baseline.n75);
         prop_assert_eq!(observed.n90, baseline.n90);
+        prop_assert_eq!(observed.n95, baseline.n95);
         prop_assert_eq!(observed.l50, baseline.l50);
         prop_assert_eq!(observed.l90, baseline.l90);
+        prop_assert_eq!(observed.l95, baseline.l95);
         prop_assert_eq!(observed.longest, baseline.longest);
         prop_assert!((observed.avg_length - baseline.avg_length).abs() < 1e-12);
         prop_assert!((observed.au_n - baseline.au_n).abs() < 1e-12);

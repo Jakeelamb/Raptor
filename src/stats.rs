@@ -10,8 +10,10 @@ pub struct Stats {
     pub n50: usize,
     pub n75: usize,
     pub n90: usize,
+    pub n95: usize,
     pub l50: usize,
     pub l90: usize,
+    pub l95: usize,
     pub au_n: f64,
     pub longest_contig: usize,
     // Graph-related stats
@@ -100,6 +102,7 @@ pub fn calculate_stats(path: &str) -> Stats {
     let (n50, l50) = nx_lx(&lengths, total, 1, 2);
     let (n75, _) = nx_lx(&lengths, total, 3, 4);
     let (n90, l90) = nx_lx(&lengths, total, 9, 10);
+    let (n95, l95) = nx_lx(&lengths, total, 19, 20);
     let au_n = compute_au_n(&lengths, total);
     let longest_contig = lengths.first().copied().unwrap_or(0);
 
@@ -110,8 +113,10 @@ pub fn calculate_stats(path: &str) -> Stats {
         n50,
         n75,
         n90,
+        n95,
         l50,
         l90,
+        l95,
         au_n,
         longest_contig,
         path_count: None,
@@ -172,8 +177,10 @@ mod tests {
         assert_eq!(stats.n50, 24);
         assert_eq!(stats.n75, 20);
         assert_eq!(stats.n90, 20);
+        assert_eq!(stats.n95, 4);
         assert_eq!(stats.l50, 1);
         assert_eq!(stats.l90, 2);
+        assert_eq!(stats.l95, 3);
         assert!((stats.au_n - 20.6666666667).abs() < 1e-6);
         assert_eq!(stats.longest_contig, 24);
     }
@@ -193,8 +200,10 @@ mod tests {
         assert_eq!(stats.n50, 12);
         assert_eq!(stats.n75, 12);
         assert_eq!(stats.n90, 4);
+        assert_eq!(stats.n95, 4);
         assert_eq!(stats.l50, 1);
         assert_eq!(stats.l90, 2);
+        assert_eq!(stats.l95, 2);
         assert!((stats.au_n - 10.0).abs() < 1e-6);
         assert_eq!(stats.longest_contig, 12);
     }
