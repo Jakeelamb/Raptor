@@ -2,7 +2,6 @@
 use crate::io::fastq::FastqRecord;
 use crate::kmer::cms::CountMinSketch;
 use crate::kmer::nthash::NtHashIterator;
-use rand::Rng;
 
 /// Statistics about a read's k-mer abundance
 #[derive(Debug, Clone, Copy)]
@@ -58,10 +57,9 @@ pub fn should_keep_read(
         return false;
     }
 
-    // Sort abundances and find median
-    abundances.sort_unstable();
     let median_idx = abundances.len() / 2;
-    let median_abund = abundances[median_idx];
+    let (_, median_abund, _) = abundances.select_nth_unstable(median_idx);
+    let median_abund = *median_abund;
 
     // Skip reads with low abundance (potential errors)
     if median_abund < min_abund {
@@ -70,9 +68,8 @@ pub fn should_keep_read(
 
     // Keep high-abundance reads with probability target/abundance
     if median_abund > target {
-        let mut rng = rand::thread_rng();
         let keep_prob = target as f64 / median_abund as f64;
-        return rng.gen::<f64>() < keep_prob;
+        return deterministic_roll(record) < keep_prob;
     }
 
     // Always keep reads at or below target abundance
@@ -93,14 +90,105 @@ pub fn should_keep_read_pair(
         && should_keep_read(r2, cms, k, target, min_abund)
 }
 
-fn median(values: &mut [u16]) -> u16 {
-    values.sort_unstable();
-    let mid = values.len() / 2;
-    if values.len() % 2 == 0 {
-        // Even number of elements, take average of middle two
-        (values[mid - 1] + values[mid]) / 2
-    } else {
-        // Odd number of elements, take middle one
-        values[mid]
+#[inline]
+fn deterministic_roll(record: &FastqRecord) -> f64 {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0001_0000_01b3;
+
+    fn mix(mut hash: u64, bytes: &[u8]) -> u64 {
+        for &b in bytes {
+            hash ^= b as u64;
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+        hash
+    }
+
+    let mut hash = FNV_OFFSET;
+    hash = mix(hash, record.header.as_bytes());
+    hash = hash.wrapping_mul(FNV_PRIME) ^ 0xff;
+    hash = mix(hash, record.sequence.as_bytes());
+    hash = hash.wrapping_mul(FNV_PRIME) ^ 0xfe;
+    hash = mix(hash, record.quality.as_bytes());
+
+    // Map top 53 bits to [0, 1) for stable float comparisons.
+    const INV_2POW53: f64 = 1.0 / ((1u64 << 53) as f64);
+    ((hash >> 11) as f64) * INV_2POW53
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_keep_read;
+    use crate::io::fastq::FastqRecord;
+    use crate::kmer::cms::CountMinSketch;
+    use crate::kmer::nthash::NtHashIterator;
+
+    fn build_record(header: &str, sequence: &str) -> FastqRecord {
+        FastqRecord {
+            header: header.to_string(),
+            sequence: sequence.to_string(),
+            plus: "+".to_string(),
+            quality: "I".repeat(sequence.len()),
+        }
+    }
+
+    fn build_cms_with_depth(
+        sequence: &str,
+        k: usize,
+        depth: usize,
+        repeats: usize,
+    ) -> CountMinSketch {
+        let mut cms = CountMinSketch::new(depth, 1 << 15);
+        for _ in 0..repeats {
+            for (_, hash) in NtHashIterator::new(sequence.as_bytes(), k) {
+                cms.insert_hash(hash);
+            }
+        }
+        cms
+    }
+
+    #[test]
+    fn downsampling_decision_is_deterministic_per_read() {
+        let record = build_record("@read_42", "ACGTACGTACGTACGTACGTACGTACGT");
+        let cms = build_cms_with_depth(&record.sequence, 7, 4, 120);
+
+        let baseline = should_keep_read(&record, &cms, 7, 20, 2);
+        for _ in 0..64 {
+            assert_eq!(should_keep_read(&record, &cms, 7, 20, 2), baseline);
+        }
+    }
+
+    #[test]
+    fn deterministic_downsampling_preserves_expected_fraction_across_many_reads() {
+        let sequence = "TGCATGCATGCATGCATGCATGCATGCA";
+        let cms = build_cms_with_depth(sequence, 7, 4, 100);
+        let target = 10;
+        let min_abund = 2;
+        let mut abundances: Vec<u16> = NtHashIterator::new(sequence.as_bytes(), 7)
+            .map(|(_, hash)| cms.estimate_hash(hash))
+            .collect();
+        let mid = abundances.len() / 2;
+        let (_, median_abund, _) = abundances.select_nth_unstable(mid);
+        let expected = target as f64 / *median_abund as f64;
+
+        let mut kept = 0usize;
+        let mut total = 0usize;
+        for i in 0..2000 {
+            let header = format!("@read_{i}");
+            let record = build_record(&header, sequence);
+            if should_keep_read(&record, &cms, 7, target, min_abund) {
+                kept += 1;
+            }
+            total += 1;
+        }
+
+        let observed = kept as f64 / total as f64;
+        assert!((observed - expected).abs() < 0.05);
+    }
+
+    #[test]
+    fn short_reads_are_rejected() {
+        let record = build_record("@short", "ACGT");
+        let cms = CountMinSketch::new(4, 1024);
+        assert!(!should_keep_read(&record, &cms, 7, 20, 2));
     }
 }
