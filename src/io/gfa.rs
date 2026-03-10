@@ -10,8 +10,15 @@ pub struct GfaWriter {
     writer: BufWriter<File>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SegmentRecord<'a> {
+    id: &'a str,
+    sequence: &'a str,
+    rle_tag: Option<&'a str>,
+}
+
 #[inline]
-fn parse_segment_line(line: &str) -> Option<(&str, &str)> {
+fn parse_segment_line(line: &str) -> Option<SegmentRecord<'_>> {
     if !line.starts_with("S\t") {
         return None;
     }
@@ -21,7 +28,13 @@ fn parse_segment_line(line: &str) -> Option<(&str, &str)> {
     debug_assert_eq!(record_type, "S");
     let id = fields.next()?;
     let sequence = fields.next()?;
-    Some((id, sequence))
+    let rle_tag = fields.find_map(|field| field.strip_prefix("RN:Z:"));
+
+    Some(SegmentRecord {
+        id,
+        sequence,
+        rle_tag,
+    })
 }
 
 #[inline]
@@ -73,6 +86,48 @@ fn parse_overlap_size(cigar: &str) -> Option<usize> {
     }
 }
 
+#[inline]
+fn decode_rle_tag(encoded: &str) -> Option<String> {
+    if encoded.is_empty() {
+        return Some(String::new());
+    }
+
+    let bytes = encoded.as_bytes();
+    let mut idx = 0usize;
+    let mut runs = Vec::new();
+    let mut total_len = 0usize;
+
+    while idx < bytes.len() {
+        let base = *bytes.get(idx)?;
+        if !base.is_ascii_alphabetic() {
+            return None;
+        }
+        idx += 1;
+
+        let digit_start = idx;
+        let mut count = 0usize;
+        while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+            count = count
+                .checked_mul(10)?
+                .checked_add((bytes[idx] - b'0') as usize)?;
+            idx += 1;
+        }
+
+        if idx == digit_start || count == 0 {
+            return None;
+        }
+
+        total_len = total_len.checked_add(count)?;
+        runs.push((base, count));
+    }
+
+    let mut decoded = String::with_capacity(total_len);
+    for (base, count) in runs {
+        decoded.extend(std::iter::repeat(base as char).take(count));
+    }
+    Some(decoded)
+}
+
 fn collect_segment_id_map(gfa_path: &str) -> Result<HashMap<String, usize>> {
     let file = File::open(gfa_path)?;
     let reader = BufReader::new(file);
@@ -80,12 +135,12 @@ fn collect_segment_id_map(gfa_path: &str) -> Result<HashMap<String, usize>> {
 
     for line in reader.lines() {
         let line = line?;
-        let Some((id, _sequence)) = parse_segment_line(&line) else {
+        let Some(segment) = parse_segment_line(&line) else {
             continue;
         };
 
         let fallback_idx = id_map.len();
-        if let Entry::Vacant(slot) = id_map.entry(id.to_string()) {
+        if let Entry::Vacant(slot) = id_map.entry(segment.id.to_string()) {
             slot.insert(fallback_idx);
         }
     }
@@ -179,16 +234,22 @@ pub fn read_gfa_contigs(gfa_path: &str) -> Result<Vec<Contig>> {
 
     for line in reader.lines() {
         let line = line?;
-        let Some((id, sequence)) = parse_segment_line(&line) else {
+        let Some(segment) = parse_segment_line(&line) else {
             continue;
         };
 
+        let sequence = if segment.sequence == "*" {
+            segment.rle_tag.and_then(decode_rle_tag).unwrap_or_default()
+        } else {
+            segment.sequence.to_string()
+        };
+
         let next_idx = id_map.len();
-        if let Entry::Vacant(slot) = id_map.entry(id.to_string()) {
+        if let Entry::Vacant(slot) = id_map.entry(segment.id.to_string()) {
             slot.insert(next_idx);
             contigs.push(Contig {
                 id: next_idx,
-                sequence: sequence.to_string(),
+                sequence,
                 kmer_path: Vec::new(),
             });
         }
@@ -233,7 +294,8 @@ pub fn read_gfa_links(gfa_path: &str) -> Result<Vec<(usize, usize, usize)>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_overlap_size, read_gfa_contigs, read_gfa_links};
+    use super::{decode_rle_tag, parse_overlap_size, read_gfa_contigs, read_gfa_links, GfaWriter};
+    use crate::graph::assembler::Contig;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -308,5 +370,68 @@ mod tests {
         assert_eq!(parse_overlap_size("12I"), None);
         assert_eq!(parse_overlap_size("12S10M"), None);
         assert_eq!(parse_overlap_size("M12"), None);
+    }
+
+    #[test]
+    fn decode_rle_tag_parses_multi_digit_runs() {
+        assert_eq!(
+            decode_rle_tag("A4C3T12"),
+            Some("AAAACCCTTTTTTTTTTTT".to_string())
+        );
+        assert_eq!(decode_rle_tag("N1"), Some("N".to_string()));
+        assert_eq!(decode_rle_tag(""), Some(String::new()));
+    }
+
+    #[test]
+    fn decode_rle_tag_rejects_malformed_inputs() {
+        assert_eq!(decode_rle_tag("A"), None);
+        assert_eq!(decode_rle_tag("A0"), None);
+        assert_eq!(decode_rle_tag("3A"), None);
+        assert_eq!(decode_rle_tag("A2-"), None);
+    }
+
+    #[test]
+    fn read_gfa_contigs_decodes_rle_sequence_tag_when_sequence_is_unknown() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "H\tVN:Z:1.0").unwrap();
+        writeln!(file, "S\tseg_1\t*\tRN:Z:A4C2T1").unwrap();
+        writeln!(file, "S\tseg_2\tACGT").unwrap();
+
+        let contigs = read_gfa_contigs(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(contigs.len(), 2);
+        assert_eq!(contigs[0].sequence, "AAAACCT");
+        assert_eq!(contigs[1].sequence, "ACGT");
+    }
+
+    #[test]
+    fn read_gfa_contigs_rle_writer_round_trip_preserves_sequences() {
+        let contigs = vec![
+            Contig {
+                id: 10,
+                sequence: "AAAACCCCG".to_string(),
+                kmer_path: Vec::new(),
+            },
+            Contig {
+                id: 42,
+                sequence: "TTTTGG".to_string(),
+                kmer_path: Vec::new(),
+            },
+            Contig {
+                id: 100,
+                sequence: String::new(),
+                kmer_path: Vec::new(),
+            },
+        ];
+
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().to_str().unwrap();
+        let mut writer = GfaWriter::new(path);
+        writer.write_rle_segments(&contigs).unwrap();
+        drop(writer);
+
+        let observed = read_gfa_contigs(path).unwrap();
+        let observed_sequences: Vec<String> = observed.into_iter().map(|c| c.sequence).collect();
+        let expected_sequences: Vec<String> = contigs.into_iter().map(|c| c.sequence).collect();
+        assert_eq!(observed_sequences, expected_sequences);
     }
 }
