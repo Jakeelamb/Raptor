@@ -876,6 +876,6 @@ mod tests {
 
         // Reconvergence node must remain in the graph after collapsing one branch.
         assert!(adjacency.get_predecessors(acc).is_some());
-        assert!(adjacency.get_predecessors(acc).unwrap().len() >= 1);
+        assert!(!adjacency.get_predecessors(acc).unwrap().is_empty());
     }
 }
