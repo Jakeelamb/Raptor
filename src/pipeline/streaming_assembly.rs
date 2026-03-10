@@ -321,7 +321,7 @@ impl StreamingAssembler {
         contigs: &[Contig],
         output_path: &str,
     ) -> std::io::Result<(usize, usize, TranscriptStats)> {
-        let mut writer = FastaWriter::new(output_path);
+        let mut writer = FastaWriter::try_new(output_path)?;
 
         let mut lengths: Vec<usize> = Vec::with_capacity(contigs.len());
 
@@ -589,5 +589,26 @@ mod tests {
             StreamingAssembler::parse_proc_status_kib(status, "VmSize:"),
             None
         );
+    }
+
+    #[test]
+    fn write_contigs_returns_error_for_invalid_output_path() {
+        let assembler = StreamingAssembler::new(StreamingAssemblyConfig {
+            k: 3,
+            min_kmer_count: 1,
+            min_contig_len: 1,
+            num_buckets: Some(4),
+            max_ram: None,
+            temp_dir: None,
+        });
+        let tmp = tempdir().unwrap();
+        let contigs = vec![Contig {
+            id: 0,
+            sequence: "ACGT".to_string(),
+            kmer_path: Vec::new(),
+        }];
+
+        let result = assembler.write_contigs(&contigs, tmp.path().to_str().unwrap());
+        assert!(result.is_err());
     }
 }

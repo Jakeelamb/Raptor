@@ -483,7 +483,7 @@ pub fn scaffold_contigs(
 
     // Write output
     info!("Writing {} scaffolds to {}", scaffolds.len(), output_path);
-    let mut writer = FastaWriter::new(output_path);
+    let mut writer = FastaWriter::try_new(output_path)?;
     let mut scaffold_lengths: Vec<usize> = Vec::new();
 
     for (i, scaffold) in scaffolds.iter().enumerate() {
@@ -620,6 +620,8 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
     use rand::SeedableRng;
+    use std::io::Write;
+    use tempfile::{NamedTempFile, TempDir};
 
     #[test]
     fn test_reverse_complement() {
@@ -771,5 +773,34 @@ mod tests {
             let observed = scaffold_fingerprint(&build_scaffolds(&contigs, &shuffled));
             assert_eq!(observed, baseline);
         }
+    }
+
+    #[test]
+    fn scaffold_contigs_returns_error_for_invalid_output_path() {
+        let mut contigs = NamedTempFile::new().unwrap();
+        writeln!(contigs, ">contig_1").unwrap();
+        writeln!(contigs, "ACGTACGTACGT").unwrap();
+
+        let mut reads1 = NamedTempFile::new().unwrap();
+        writeln!(reads1, "@r1").unwrap();
+        writeln!(reads1, "ACGTACGT").unwrap();
+        writeln!(reads1, "+").unwrap();
+        writeln!(reads1, "IIIIIIII").unwrap();
+
+        let mut reads2 = NamedTempFile::new().unwrap();
+        writeln!(reads2, "@r2").unwrap();
+        writeln!(reads2, "ACGTACGT").unwrap();
+        writeln!(reads2, "+").unwrap();
+        writeln!(reads2, "IIIIIIII").unwrap();
+
+        let output_dir = TempDir::new().unwrap();
+        let result = scaffold_contigs(
+            contigs.path().to_str().unwrap(),
+            reads1.path().to_str().unwrap(),
+            reads2.path().to_str().unwrap(),
+            output_dir.path().to_str().unwrap(),
+            1,
+        );
+        assert!(result.is_err());
     }
 }

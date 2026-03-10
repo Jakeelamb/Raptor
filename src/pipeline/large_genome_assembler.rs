@@ -2352,7 +2352,7 @@ impl LargeGenomeAssembler {
         path: &str,
         stats: &mut AssemblyStats,
     ) -> std::io::Result<()> {
-        let mut writer = FastaWriter::new(path);
+        let mut writer = FastaWriter::try_new(path)?;
 
         // Filter and sort by length
         let mut valid: Vec<&String> = contigs
@@ -3049,6 +3049,23 @@ mod tests {
         assert_eq!(stats.bases_ge_100kb, 100_000);
         assert!((stats.contigs_ge_100kb_frac - 0.5).abs() < 1e-12);
         assert!((stats.bases_ge_100kb_frac - (100_000.0 / 199_999.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_write_output_returns_error_for_invalid_output_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            min_contig_len: 1,
+            num_buckets: Some(4),
+            temp_dir: Some(temp_dir.path().to_str().unwrap().to_string()),
+            ..Default::default()
+        });
+
+        let contigs = vec!["ACGT".to_string()];
+        let mut stats = AssemblyStats::default();
+        let result =
+            assembler.write_output(&contigs, temp_dir.path().to_str().unwrap(), &mut stats);
+        assert!(result.is_err());
     }
 
     /// Test repeat detection and resolution

@@ -488,7 +488,7 @@ pub fn integrate_long_reads(
 
     // Write output
     info!("Writing {} contigs to {}", final_contigs.len(), output_path);
-    let mut writer = FastaWriter::new(output_path);
+    let mut writer = FastaWriter::try_new(output_path)?;
     for (header, seq) in &final_contigs {
         let seq_str = String::from_utf8_lossy(seq);
         writer.write_record(header, &seq_str)?;
@@ -506,7 +506,7 @@ pub fn integrate_long_reads(
 mod tests {
     use super::*;
     use std::io::Write;
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, TempDir};
 
     #[test]
     fn test_reverse_complement() {
@@ -689,5 +689,27 @@ mod tests {
         assert_eq!(stats.long_reads_processed, 1);
         assert_eq!(stats.long_reads_mapped, 1);
         assert_eq!(stats.output_contigs, 1);
+    }
+
+    #[test]
+    fn integrate_long_reads_returns_error_for_invalid_output_path() {
+        let mut contigs = NamedTempFile::new().expect("temp contig fasta");
+        writeln!(contigs, ">contig_1").expect("write header");
+        writeln!(contigs, "ACGTACGTACGT").expect("write sequence");
+
+        let mut reads = NamedTempFile::new().expect("temp long-read fastq");
+        writeln!(reads, "@read_1").expect("write read id");
+        writeln!(reads, "ACGTACGT").expect("write read seq");
+        writeln!(reads, "+").expect("write plus line");
+        writeln!(reads, "IIIIIIII").expect("write quality");
+
+        let output_dir = TempDir::new().expect("temp output directory");
+        let result = integrate_long_reads(
+            contigs.path().to_str().expect("utf8 contigs path"),
+            reads.path().to_str().expect("utf8 reads path"),
+            output_dir.path().to_str().expect("utf8 output dir"),
+            LongReadConfig::default(),
+        );
+        assert!(result.is_err());
     }
 }

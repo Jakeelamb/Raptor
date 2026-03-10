@@ -310,7 +310,7 @@ pub fn polish_contigs(
 
     // Write polished contigs
     info!("Writing polished contigs to {}", output_path);
-    let mut writer = FastaWriter::new(output_path);
+    let mut writer = FastaWriter::try_new(output_path)?;
     for (header, seq) in &contigs {
         let seq_str = String::from_utf8_lossy(seq);
         writer.write_record(header, &seq_str)?;
@@ -386,6 +386,8 @@ fn apply_corrections(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::{NamedTempFile, TempDir};
 
     #[test]
     fn test_pileup_column() {
@@ -414,5 +416,28 @@ mod tests {
         // Should find the contig
         let result = index.map_read(b"ACGTACGTACGTACGTACGT");
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn polish_contigs_returns_error_for_invalid_output_path() {
+        let mut contigs = NamedTempFile::new().unwrap();
+        writeln!(contigs, ">contig_1").unwrap();
+        writeln!(contigs, "ACGTACGTACGT").unwrap();
+
+        let mut reads = NamedTempFile::new().unwrap();
+        writeln!(reads, "@read_1").unwrap();
+        writeln!(reads, "ACGTACGT").unwrap();
+        writeln!(reads, "+").unwrap();
+        writeln!(reads, "IIIIIIII").unwrap();
+
+        let output_dir = TempDir::new().unwrap();
+        let result = polish_contigs(
+            contigs.path().to_str().unwrap(),
+            reads.path().to_str().unwrap(),
+            None,
+            output_dir.path().to_str().unwrap(),
+            1,
+        );
+        assert!(result.is_err());
     }
 }
