@@ -871,6 +871,70 @@ impl LargeGenomeAssembler {
         (median / 10).clamp(2, 5)
     }
 
+    #[inline]
+    fn canonical_kmer(encoded: u64, k: usize) -> u64 {
+        KmerU64 {
+            encoded,
+            len: k as u8,
+        }
+        .canonical()
+        .encoded
+    }
+
+    #[inline]
+    fn reverse_complement_kmer(encoded: u64, k: usize) -> u64 {
+        KmerU64 {
+            encoded,
+            len: k as u8,
+        }
+        .reverse_complement()
+        .encoded
+    }
+
+    fn remove_kmers_and_prune_adjacency(
+        adjacency: &mut AHashMap<u64, ([bool; 4], [bool; 4])>,
+        kmers_to_remove: &AHashSet<u64>,
+        k: usize,
+    ) {
+        if kmers_to_remove.is_empty() || adjacency.is_empty() {
+            return;
+        }
+
+        let mut removed_orientations = AHashSet::with_capacity(kmers_to_remove.len() * 2);
+        for &kmer in kmers_to_remove {
+            let canonical = Self::canonical_kmer(kmer, k);
+            removed_orientations.insert(canonical);
+            removed_orientations.insert(Self::reverse_complement_kmer(canonical, k));
+        }
+
+        for &kmer in &removed_orientations {
+            adjacency.remove(&kmer);
+        }
+
+        if adjacency.is_empty() {
+            return;
+        }
+
+        let bases = [b'A', b'C', b'G', b'T'];
+        for (&node, (left_ext, right_ext)) in adjacency.iter_mut() {
+            for (idx, is_valid) in left_ext.iter_mut().enumerate() {
+                if !*is_valid {
+                    continue;
+                }
+                *is_valid = extend_left(node, bases[idx], k)
+                    .is_some_and(|next| !removed_orientations.contains(&next));
+            }
+
+            for (idx, is_valid) in right_ext.iter_mut().enumerate() {
+                if !*is_valid {
+                    continue;
+                }
+                *is_valid = extend_right(node, bases[idx], k)
+                    .is_some_and(|next| !removed_orientations.contains(&next));
+            }
+        }
+    }
+
     /// Remove tips: dead-end paths shorter than max_tip_len
     ///
     /// Tips are typically caused by sequencing errors at read ends.
@@ -886,10 +950,22 @@ impl LargeGenomeAssembler {
         let max_tip_len = self.config.max_tip_len;
         let bases = [b'A', b'C', b'G', b'T'];
         let mut tips_removed = 0;
-        let mut to_remove: Vec<u64> = Vec::new();
+        let mut to_remove: AHashSet<u64> = AHashSet::new();
 
-        // Find tip starting points: k-mers with exactly 1 neighbor total
-        for (&kmer, &(left, right)) in adjacency.iter() {
+        // Iterate canonical k-mers in sorted order to keep traversal deterministic.
+        let mut candidates: Vec<u64> = adjacency
+            .keys()
+            .copied()
+            .map(|kmer| Self::canonical_kmer(kmer, k))
+            .collect();
+        candidates.sort_unstable();
+        candidates.dedup();
+
+        // Find tip starting points: k-mers with exactly 1 neighbor total.
+        for kmer in candidates {
+            let Some(&(left, right)) = adjacency.get(&kmer) else {
+                continue;
+            };
             let left_count: usize = left.iter().filter(|&&b| b).count();
             let right_count: usize = right.iter().filter(|&&b| b).count();
 
@@ -904,31 +980,17 @@ impl LargeGenomeAssembler {
 
                 if tip_length > 0 && tip_length <= max_tip_len {
                     // Check if tip has lower coverage than the branch point
-                    let tip_count = kmer_counts
-                        .get(
-                            &KmerU64 {
-                                encoded: kmer,
-                                len: k as u8,
-                            }
-                            .canonical()
-                            .encoded,
-                        )
-                        .copied()
-                        .unwrap_or(0);
+                    let tip_count = kmer_counts.get(&kmer).copied().unwrap_or(0);
 
                     // Only remove if low coverage (likely error)
-                    if tip_count <= min_count.saturating_mul(2) {
-                        to_remove.push(kmer);
+                    if tip_count <= min_count.saturating_mul(2) && to_remove.insert(kmer) {
                         tips_removed += 1;
                     }
                 }
             }
         }
 
-        // Remove tips from adjacency
-        for kmer in to_remove {
-            adjacency.remove(&kmer);
-        }
+        Self::remove_kmers_and_prune_adjacency(adjacency, &to_remove, k);
 
         tips_removed
     }
@@ -1014,16 +1076,18 @@ impl LargeGenomeAssembler {
         let mut bubbles_popped = 0;
         let mut to_remove: AHashSet<u64> = AHashSet::new();
 
-        // Find branch points: k-mers with 2+ extensions in same direction
-        let branch_points: Vec<u64> = adjacency
+        // Find canonical branch points in deterministic order.
+        let mut branch_points: Vec<u64> = adjacency
             .iter()
             .filter(|(_, (left, right))| {
                 let left_count: usize = left.iter().filter(|&&b| b).count();
                 let right_count: usize = right.iter().filter(|&&b| b).count();
                 left_count >= 2 || right_count >= 2
             })
-            .map(|(&k, _)| k)
+            .map(|(&node, _)| Self::canonical_kmer(node, k))
             .collect();
+        branch_points.sort_unstable();
+        branch_points.dedup();
 
         for branch in branch_points {
             let (left_ext, right_ext) = adjacency
@@ -1051,7 +1115,9 @@ impl LargeGenomeAssembler {
                     &bases,
                     false,
                 ) {
-                    to_remove.extend(bubble_kmers);
+                    for bubble_kmer in bubble_kmers {
+                        to_remove.insert(Self::canonical_kmer(bubble_kmer, k));
+                    }
                     bubbles_popped += 1;
                 }
             }
@@ -1075,16 +1141,15 @@ impl LargeGenomeAssembler {
                     &bases,
                     true,
                 ) {
-                    to_remove.extend(bubble_kmers);
+                    for bubble_kmer in bubble_kmers {
+                        to_remove.insert(Self::canonical_kmer(bubble_kmer, k));
+                    }
                     bubbles_popped += 1;
                 }
             }
         }
 
-        // Remove bubble k-mers from adjacency
-        for kmer in to_remove {
-            adjacency.remove(&kmer);
-        }
+        Self::remove_kmers_and_prune_adjacency(adjacency, &to_remove, k);
 
         bubbles_popped
     }
@@ -3543,5 +3608,97 @@ mod tests {
             let observed = canonicalize_adjacency(&assembler.build_adjacency(&valid_kmers, k));
             assert_eq!(observed, baseline);
         }
+    }
+
+    #[test]
+    fn test_remove_kmers_and_prune_adjacency_removes_both_orientations_and_dangling_edges() {
+        let k = 4;
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: 1,
+            ..Default::default()
+        });
+
+        let core = KmerU64::from_str("ACGA").unwrap().encoded;
+        let tip = KmerU64::from_str("CGAT").unwrap().canonical().encoded;
+        let tip_rc = KmerU64 {
+            encoded: tip,
+            len: k as u8,
+        }
+        .reverse_complement()
+        .encoded;
+
+        let mut valid_kmers = AHashSet::new();
+        valid_kmers.insert(KmerU64::from_str("ACGA").unwrap().canonical().encoded);
+        valid_kmers.insert(tip);
+
+        let mut adjacency = assembler.build_adjacency(&valid_kmers, k);
+        let (_, right_before) = adjacency.get(&core).copied().unwrap();
+        assert!(
+            right_before[3],
+            "expected ACGA --T--> CGAT edge before removal"
+        );
+
+        let mut to_remove = AHashSet::new();
+        to_remove.insert(tip);
+        LargeGenomeAssembler::remove_kmers_and_prune_adjacency(&mut adjacency, &to_remove, k);
+
+        assert!(!adjacency.contains_key(&tip));
+        assert!(!adjacency.contains_key(&tip_rc));
+
+        let (_, right_after) = adjacency.get(&core).copied().unwrap();
+        assert!(
+            !right_after[3],
+            "expected dangling ACGA --T--> CGAT edge to be pruned"
+        );
+    }
+
+    #[test]
+    fn test_pop_bubbles_is_stable_under_shuffled_kmer_insertion_order() {
+        let k = 3;
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: 1,
+            ..Default::default()
+        });
+
+        let mut entries: Vec<(u64, u32)> = [
+            ("AAA", 20u32),
+            ("AAC", 10u32),
+            ("AAG", 10u32),
+            ("ACC", 20u32),
+        ]
+        .into_iter()
+        .map(|(kmer, count)| (KmerU64::from_str(kmer).unwrap().canonical().encoded, count))
+        .collect();
+        entries.sort_unstable_by_key(|(kmer, _)| *kmer);
+        entries.dedup_by_key(|(kmer, _)| *kmer);
+
+        let mut rng = StdRng::seed_from_u64(0xBADD_CAFE);
+        let mut baseline: Option<(usize, Vec<(u64, [bool; 4], [bool; 4])>)> = None;
+
+        for _ in 0..64 {
+            entries.shuffle(&mut rng);
+            let mut counts = AHashMap::new();
+            for &(kmer, count) in &entries {
+                counts.insert(kmer, count);
+            }
+
+            let valid_kmers: AHashSet<u64> = counts.keys().copied().collect();
+            let mut adjacency = assembler.build_adjacency(&valid_kmers, k);
+            let popped = assembler.pop_bubbles(&mut adjacency, &counts, k);
+            let snapshot = canonicalize_adjacency(&adjacency);
+
+            if let Some((expected_popped, expected_snapshot)) = &baseline {
+                assert_eq!(popped, *expected_popped);
+                assert_eq!(snapshot, *expected_snapshot);
+            } else {
+                baseline = Some((popped, snapshot));
+            }
+        }
+
+        assert!(baseline.is_some(), "baseline should be captured");
     }
 }
