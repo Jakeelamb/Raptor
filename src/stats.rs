@@ -3,7 +3,7 @@ use crate::io::fasta::try_open_fasta;
 use serde::Serialize;
 use std::io::BufRead;
 
-const TSV_HEADER: &str = "contigs\ttotal_len\tavg_len\tmedian_len\tgc_bases\tacgt_bases\tn_bases\tambiguous_bases\tmean_rle_ratio\tlength_weighted_rle_ratio\ttotal_rle_runs\tgc_content\tn_content\tambiguous_content\tn10\tn25\tn50\tn75\tn90\tn95\tn99\tl10\tl25\tl50\tl75\tl90\tl95\tl99\taun\teffective_contig_count\tungapped_effective_contig_count\tlongest\tcontigs_ge_1kb\tcontigs_ge_10kb\tcontigs_ge_50kb\tcontigs_ge_100kb\tcontigs_ge_1mb\tbases_ge_1kb\tbases_ge_10kb\tbases_ge_50kb\tbases_ge_100kb\tbases_ge_1mb\tcontigs_ge_1kb_frac\tcontigs_ge_10kb_frac\tcontigs_ge_50kb_frac\tcontigs_ge_100kb_frac\tcontigs_ge_1mb_frac\tbases_ge_1kb_frac\tbases_ge_10kb_frac\tbases_ge_50kb_frac\tbases_ge_100kb_frac\tbases_ge_1mb_frac\tn_run_count\tmax_n_run\tcontigs_with_n\tcontigs_with_ambiguous\tcontigs_all_acgt\tcontigs_with_n_frac\tcontigs_with_ambiguous_frac\tcontigs_all_acgt_frac";
+const TSV_HEADER: &str = "contigs\ttotal_len\tavg_len\tmedian_len\tgc_bases\tacgt_bases\tn_bases\tambiguous_bases\tmean_rle_ratio\tlength_weighted_rle_ratio\ttotal_rle_runs\tgc_content\tn_content\tambiguous_content\tn10\tn25\tn50\tn75\tn90\tn95\tn99\tl10\tl25\tl50\tl75\tl90\tl95\tl99\taun\teffective_contig_count\tungapped_effective_contig_count\tungapped_total_len\tungapped_n50\tungapped_aun\tlongest\tcontigs_ge_1kb\tcontigs_ge_10kb\tcontigs_ge_50kb\tcontigs_ge_100kb\tcontigs_ge_1mb\tbases_ge_1kb\tbases_ge_10kb\tbases_ge_50kb\tbases_ge_100kb\tbases_ge_1mb\tcontigs_ge_1kb_frac\tcontigs_ge_10kb_frac\tcontigs_ge_50kb_frac\tcontigs_ge_100kb_frac\tcontigs_ge_1mb_frac\tbases_ge_1kb_frac\tbases_ge_10kb_frac\tbases_ge_50kb_frac\tbases_ge_100kb_frac\tbases_ge_1mb_frac\tn_run_count\tmax_n_run\tcontigs_with_n\tcontigs_with_ambiguous\tcontigs_all_acgt\tcontigs_with_n_frac\tcontigs_with_ambiguous_frac\tcontigs_all_acgt_frac";
 
 #[derive(Serialize)]
 pub struct Stats {
@@ -199,6 +199,9 @@ pub fn tsv_row(stats: &Stats) -> String {
         format!("{:.2}", stats.au_n),
         format!("{:.6}", stats.effective_contig_count),
         format!("{:.6}", stats.ungapped_effective_contig_count),
+        stats.ungapped_total_length.to_string(),
+        stats.ungapped_n50.to_string(),
+        format!("{:.2}", stats.ungapped_au_n),
         stats.longest_contig.to_string(),
         stats.contigs_ge_1kb.to_string(),
         stats.contigs_ge_10kb.to_string(),
@@ -658,6 +661,34 @@ mod tests {
         assert_eq!(row_by_name.get("l90").copied(), Some("2"));
         assert_eq!(row_by_name.get("l95").copied(), Some("3"));
         assert_eq!(row_by_name.get("l99").copied(), Some("3"));
+        assert_eq!(row_by_name.get("ungapped_total_len").copied(), Some("48"));
+        assert_eq!(row_by_name.get("ungapped_n50").copied(), Some("24"));
+        assert_eq!(row_by_name.get("ungapped_aun").copied(), Some("20.67"));
+    }
+
+    #[test]
+    fn stats_tsv_row_reports_ungapped_metrics_with_gaps() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, ">contig_1").unwrap();
+        writeln!(file, "AAANNN").unwrap(); // len 6, ungapped len 3
+        writeln!(file, ">contig_2").unwrap();
+        writeln!(file, "GGGG").unwrap(); // len 4, ungapped len 4
+
+        let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
+        let header_cols: Vec<&str> = tsv_header().split('\t').collect();
+        let row = tsv_row(&stats);
+        let row_cols: Vec<&str> = row.split('\t').collect();
+        let row_by_name: HashMap<&str, &str> = header_cols
+            .iter()
+            .copied()
+            .zip(row_cols.iter().copied())
+            .collect();
+
+        assert_eq!(row_by_name.get("total_len").copied(), Some("10"));
+        assert_eq!(row_by_name.get("ungapped_total_len").copied(), Some("7"));
+        assert_eq!(row_by_name.get("n50").copied(), Some("6"));
+        assert_eq!(row_by_name.get("ungapped_n50").copied(), Some("4"));
+        assert_eq!(row_by_name.get("ungapped_aun").copied(), Some("3.57"));
     }
 
     #[test]
