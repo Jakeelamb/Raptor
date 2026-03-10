@@ -289,6 +289,13 @@ pub fn read_gfa_links(gfa_path: &str) -> Result<Vec<(usize, usize, usize)>> {
         links.push((from_idx, to_idx, overlap_size));
     }
 
+    // Keep link output deterministic regardless of record order in input GFA.
+    links.sort_unstable_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+    });
+
     Ok(links)
 }
 
@@ -341,6 +348,32 @@ mod tests {
 
         let links = read_gfa_links(file.path().to_str().unwrap()).unwrap();
         assert_eq!(links, vec![(0, 1, 12)]);
+    }
+
+    #[test]
+    fn read_gfa_links_is_stable_under_link_record_reordering() {
+        let mut file_a = NamedTempFile::new().unwrap();
+        writeln!(file_a, "H\tVN:Z:1.0").unwrap();
+        writeln!(file_a, "S\tseg_a\tAAAA").unwrap();
+        writeln!(file_a, "S\tseg_b\tCCCC").unwrap();
+        writeln!(file_a, "S\tseg_c\tGGGG").unwrap();
+        writeln!(file_a, "L\tseg_c\t+\tseg_a\t+\t4M").unwrap();
+        writeln!(file_a, "L\tseg_a\t+\tseg_b\t+\t2M").unwrap();
+        writeln!(file_a, "L\tseg_a\t+\tseg_c\t+\t3M").unwrap();
+
+        let mut file_b = NamedTempFile::new().unwrap();
+        writeln!(file_b, "H\tVN:Z:1.0").unwrap();
+        writeln!(file_b, "S\tseg_a\tAAAA").unwrap();
+        writeln!(file_b, "S\tseg_b\tCCCC").unwrap();
+        writeln!(file_b, "S\tseg_c\tGGGG").unwrap();
+        writeln!(file_b, "L\tseg_a\t+\tseg_c\t+\t3M").unwrap();
+        writeln!(file_b, "L\tseg_c\t+\tseg_a\t+\t4M").unwrap();
+        writeln!(file_b, "L\tseg_a\t+\tseg_b\t+\t2M").unwrap();
+
+        let links_a = read_gfa_links(file_a.path().to_str().unwrap()).unwrap();
+        let links_b = read_gfa_links(file_b.path().to_str().unwrap()).unwrap();
+        assert_eq!(links_a, links_b);
+        assert_eq!(links_a, vec![(0, 1, 2), (0, 2, 3), (2, 0, 4)]);
     }
 
     #[test]
