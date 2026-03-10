@@ -151,23 +151,71 @@ impl OptimizedDiskCounter {
         let num_buckets = self.config.num_buckets;
         let mask = (num_buckets - 1) as u64;
 
-        // Collect sequences into chunks for parallel processing
-        let seqs: Vec<Vec<u8>> = sequences.map(|s| s.as_ref().to_vec()).collect();
-
-        if self.config.parallel_distribution && seqs.len() > self.config.chunk_size {
-            self.distribute_parallel(&seqs, k, num_buckets, mask)
+        if self.config.parallel_distribution {
+            self.distribute_parallel(sequences, k, num_buckets, mask)
         } else {
-            self.distribute_sequential(&seqs, k, num_buckets, mask)
+            self.distribute_sequential(sequences, k, num_buckets, mask)
         }
     }
 
-    fn distribute_sequential(
-        &mut self,
-        sequences: &[Vec<u8>],
+    #[inline]
+    fn bucket_sequence(
+        seq: &[u8],
         k: usize,
         num_buckets: usize,
         bucket_mask: u64,
-    ) -> std::io::Result<()> {
+        use_mask_bucket: bool,
+        rolling_mask: u64,
+        bucket_data: &mut [Vec<u64>],
+    ) -> u64 {
+        if seq.len() < k {
+            return 0;
+        }
+
+        let mut rolling = 0u64;
+        let mut valid_run = 0usize;
+        let mut total = 0u64;
+
+        for &base in seq {
+            if let Some(base_bits) = encode_base_2bit(base) {
+                rolling = ((rolling << 2) | base_bits) & rolling_mask;
+                valid_run += 1;
+
+                if valid_run >= k {
+                    let canonical = KmerU64 {
+                        encoded: rolling,
+                        len: k as u8,
+                    }
+                    .canonical()
+                    .encoded;
+                    let bucket_id = if use_mask_bucket {
+                        (canonical & bucket_mask) as usize
+                    } else {
+                        (canonical % num_buckets as u64) as usize
+                    };
+                    bucket_data[bucket_id].push(canonical);
+                    total += 1;
+                }
+            } else {
+                rolling = 0;
+                valid_run = 0;
+            }
+        }
+
+        total
+    }
+
+    fn distribute_sequential<I, S>(
+        &mut self,
+        sequences: I,
+        k: usize,
+        num_buckets: usize,
+        bucket_mask: u64,
+    ) -> std::io::Result<()>
+    where
+        I: Iterator<Item = S>,
+        S: AsRef<[u8]>,
+    {
         // Accumulate k-mers in memory per bucket
         let mut bucket_data: Vec<Vec<u64>> = (0..num_buckets).map(|_| Vec::new()).collect();
         let use_mask_bucket = num_buckets.is_power_of_two();
@@ -179,38 +227,21 @@ impl OptimizedDiskCounter {
         let mut total = 0u64;
 
         for seq in sequences {
-            if seq.len() < k {
-                continue;
-            }
-
-            let mut rolling = 0u64;
-            let mut valid_run = 0usize;
-
-            for &base in seq {
-                if let Some(base_bits) = encode_base_2bit(base) {
-                    rolling = ((rolling << 2) | base_bits) & rolling_mask;
-                    valid_run += 1;
-
-                    if valid_run >= k {
-                        let canonical = KmerU64 {
-                            encoded: rolling,
-                            len: k as u8,
-                        }
-                        .canonical()
-                        .encoded;
-                        let bucket_id = if use_mask_bucket {
-                            (canonical & bucket_mask) as usize
-                        } else {
-                            (canonical % num_buckets as u64) as usize
-                        };
-                        bucket_data[bucket_id].push(canonical);
-                        total += 1;
-                    }
-                } else {
-                    rolling = 0;
-                    valid_run = 0;
-                }
-            }
+            let seq_total = Self::bucket_sequence(
+                seq.as_ref(),
+                k,
+                num_buckets,
+                bucket_mask,
+                use_mask_bucket,
+                rolling_mask,
+                &mut bucket_data,
+            );
+            total = total.checked_add(seq_total).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "total k-mer count overflowed u64 during distribution",
+                )
+            })?;
         }
 
         // Write buckets with optional compression
@@ -220,13 +251,75 @@ impl OptimizedDiskCounter {
         Ok(())
     }
 
-    fn distribute_parallel(
-        &mut self,
+    fn count_parallel_chunk(
         sequences: &[Vec<u8>],
         k: usize,
         num_buckets: usize,
         bucket_mask: u64,
-    ) -> std::io::Result<()> {
+        use_mask_bucket: bool,
+        rolling_mask: u64,
+    ) -> std::io::Result<(Vec<Vec<u64>>, u64)> {
+        if sequences.is_empty() {
+            return Ok(((0..num_buckets).map(|_| Vec::new()).collect(), 0));
+        }
+
+        let worker_chunks = rayon::current_num_threads().max(1);
+        let sub_chunk_size = (sequences.len() / worker_chunks).max(1);
+
+        let partial_results: Vec<(Vec<Vec<u64>>, u64)> = sequences
+            .par_chunks(sub_chunk_size)
+            .map(|chunk| -> std::io::Result<(Vec<Vec<u64>>, u64)> {
+                let mut bucket_data: Vec<Vec<u64>> = (0..num_buckets).map(|_| Vec::new()).collect();
+                let mut total = 0u64;
+                for seq in chunk {
+                    let seq_total = Self::bucket_sequence(
+                        seq,
+                        k,
+                        num_buckets,
+                        bucket_mask,
+                        use_mask_bucket,
+                        rolling_mask,
+                        &mut bucket_data,
+                    );
+                    total = total.checked_add(seq_total).ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "chunk k-mer count overflowed u64 during parallel distribution",
+                        )
+                    })?;
+                }
+                Ok((bucket_data, total))
+            })
+            .collect::<std::io::Result<Vec<_>>>()?;
+
+        let mut merged: Vec<Vec<u64>> = (0..num_buckets).map(|_| Vec::new()).collect();
+        let mut total = 0u64;
+        for (partial_buckets, partial_total) in partial_results {
+            total = total.checked_add(partial_total).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "chunk merge k-mer count overflowed u64 during parallel distribution",
+                )
+            })?;
+            for (bucket_idx, bucket) in partial_buckets.into_iter().enumerate() {
+                merged[bucket_idx].extend(bucket);
+            }
+        }
+
+        Ok((merged, total))
+    }
+
+    fn distribute_parallel<I, S>(
+        &mut self,
+        sequences: I,
+        k: usize,
+        num_buckets: usize,
+        bucket_mask: u64,
+    ) -> std::io::Result<()>
+    where
+        I: Iterator<Item = S>,
+        S: AsRef<[u8]>,
+    {
         let chunk_size = self.config.chunk_size;
         let use_mask_bucket = num_buckets.is_power_of_two();
         let rolling_mask = if k >= 32 {
@@ -235,57 +328,49 @@ impl OptimizedDiskCounter {
             (1u64 << (k * 2)) - 1
         };
 
-        // Process chunks in parallel
-        let chunk_results: Vec<Vec<Vec<u64>>> = sequences
-            .par_chunks(chunk_size)
-            .map(|chunk| {
-                let mut bucket_data: Vec<Vec<u64>> = (0..num_buckets).map(|_| Vec::new()).collect();
-
-                for seq in chunk {
-                    if seq.len() < k {
-                        continue;
-                    }
-
-                    let mut rolling = 0u64;
-                    let mut valid_run = 0usize;
-
-                    for &base in seq {
-                        if let Some(base_bits) = encode_base_2bit(base) {
-                            rolling = ((rolling << 2) | base_bits) & rolling_mask;
-                            valid_run += 1;
-
-                            if valid_run >= k {
-                                let canonical = KmerU64 {
-                                    encoded: rolling,
-                                    len: k as u8,
-                                }
-                                .canonical()
-                                .encoded;
-                                let bucket_id = if use_mask_bucket {
-                                    (canonical & bucket_mask) as usize
-                                } else {
-                                    (canonical % num_buckets as u64) as usize
-                                };
-                                bucket_data[bucket_id].push(canonical);
-                            }
-                        } else {
-                            rolling = 0;
-                            valid_run = 0;
-                        }
-                    }
-                }
-
-                bucket_data
-            })
-            .collect();
-
-        // Merge results from all chunks
         let mut merged: Vec<Vec<u64>> = (0..num_buckets).map(|_| Vec::new()).collect();
         let mut total = 0u64;
+        let mut buffered: Vec<Vec<u8>> = Vec::with_capacity(chunk_size.max(1));
 
-        for chunk_buckets in chunk_results {
+        for sequence in sequences {
+            buffered.push(sequence.as_ref().to_vec());
+            if buffered.len() >= chunk_size {
+                let (chunk_buckets, chunk_total) = Self::count_parallel_chunk(
+                    &buffered,
+                    k,
+                    num_buckets,
+                    bucket_mask,
+                    use_mask_bucket,
+                    rolling_mask,
+                )?;
+                total = total.checked_add(chunk_total).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "total k-mer count overflowed u64 during parallel distribution",
+                    )
+                })?;
+                for (i, bucket) in chunk_buckets.into_iter().enumerate() {
+                    merged[i].extend(bucket);
+                }
+                buffered.clear();
+            }
+        }
+        if !buffered.is_empty() {
+            let (chunk_buckets, chunk_total) = Self::count_parallel_chunk(
+                &buffered,
+                k,
+                num_buckets,
+                bucket_mask,
+                use_mask_bucket,
+                rolling_mask,
+            )?;
+            total = total.checked_add(chunk_total).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "total k-mer count overflowed u64 during parallel distribution",
+                )
+            })?;
             for (i, bucket) in chunk_buckets.into_iter().enumerate() {
-                total += bucket.len() as u64;
                 merged[i].extend(bucket);
             }
         }
@@ -452,7 +537,15 @@ impl OptimizedDiskCounter {
 
         for &kmer in &kmers[1..] {
             if kmer == current {
-                count = count.saturating_add(1);
+                count = count.checked_add(1).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "k-mer count overflow for encoded value {} (exceeds u32)",
+                            current
+                        ),
+                    )
+                })?;
             } else {
                 if count >= min_count {
                     counts.insert(current, count);
@@ -512,6 +605,15 @@ impl Drop for OptimizedDiskCounter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    fn run_counter(config: OptimizedDiskConfig, seqs: &[&[u8]]) -> AHashMap<u64, u32> {
+        let mut counter = OptimizedDiskCounter::new(config).expect("counter should construct");
+        counter
+            .distribute(seqs.iter().copied())
+            .expect("distribution should succeed");
+        counter.count_all().expect("counting should succeed")
+    }
 
     #[test]
     fn test_optimized_counter_compressed() {
@@ -588,6 +690,130 @@ mod tests {
 
         let counts = counter.count_all().unwrap();
         assert!(!counts.is_empty());
+    }
+
+    #[test]
+    fn parallel_distribution_matches_sequential_with_non_power_of_two_buckets() {
+        let temp = TempDir::new().expect("create temp dir");
+        let seqs: Vec<&[u8]> = vec![
+            b"ACGTACGTACGTACGT",
+            b"NNNNACGTACGTNNNN",
+            b"TGCATGCATGCATGCA",
+            b"ACGTACGTACGTACGT",
+            b"TTTTCCCCAAAAGGGG",
+            b"GATANNNNCATG",
+            b"CCCCCCCCCCCCCCCC",
+        ];
+
+        let sequential = run_counter(
+            OptimizedDiskConfig {
+                k: 7,
+                num_buckets: 3,
+                min_count: 1,
+                temp_dir: temp.path().join("seq_non_pow2"),
+                compression_enabled: false,
+                parallel_distribution: false,
+                chunk_size: 2,
+            },
+            &seqs,
+        );
+
+        let parallel = run_counter(
+            OptimizedDiskConfig {
+                k: 7,
+                num_buckets: 3,
+                min_count: 1,
+                temp_dir: temp.path().join("par_non_pow2"),
+                compression_enabled: false,
+                parallel_distribution: true,
+                chunk_size: 2,
+            },
+            &seqs,
+        );
+
+        assert_eq!(parallel, sequential);
+    }
+
+    #[test]
+    fn compressed_and_uncompressed_modes_produce_identical_counts() {
+        let temp = TempDir::new().expect("create temp dir");
+        let seqs: Vec<&[u8]> = vec![
+            b"ACGTACGTACGTACGT",
+            b"ACGTACGTACGTACGT",
+            b"TGCATGCATGCATGCA",
+            b"GATTACAGATTACA",
+            b"TTTTTTTTTTTTTTTT",
+        ];
+
+        let compressed = run_counter(
+            OptimizedDiskConfig {
+                k: 9,
+                num_buckets: 8,
+                min_count: 1,
+                temp_dir: temp.path().join("compressed"),
+                compression_enabled: true,
+                parallel_distribution: true,
+                chunk_size: 2,
+            },
+            &seqs,
+        );
+
+        let uncompressed = run_counter(
+            OptimizedDiskConfig {
+                k: 9,
+                num_buckets: 8,
+                min_count: 1,
+                temp_dir: temp.path().join("uncompressed"),
+                compression_enabled: false,
+                parallel_distribution: true,
+                chunk_size: 2,
+            },
+            &seqs,
+        );
+
+        assert_eq!(compressed, uncompressed);
+    }
+
+    #[test]
+    fn parallel_distribution_is_input_order_invariant() {
+        let temp = TempDir::new().expect("create temp dir");
+        let seqs_a: Vec<&[u8]> = vec![
+            b"ACGTACGTACGTACGT",
+            b"NNNNACGTACGTNNNN",
+            b"TGCATGCATGCATGCA",
+            b"TTTTCCCCAAAAGGGG",
+            b"GATANNNNCATG",
+            b"CCCCCCCCCCCCCCCC",
+        ];
+        let seqs_b: Vec<&[u8]> = seqs_a.iter().copied().rev().collect();
+
+        let counts_a = run_counter(
+            OptimizedDiskConfig {
+                k: 7,
+                num_buckets: 8,
+                min_count: 1,
+                temp_dir: temp.path().join("order_a"),
+                compression_enabled: true,
+                parallel_distribution: true,
+                chunk_size: 3,
+            },
+            &seqs_a,
+        );
+
+        let counts_b = run_counter(
+            OptimizedDiskConfig {
+                k: 7,
+                num_buckets: 8,
+                min_count: 1,
+                temp_dir: temp.path().join("order_b"),
+                compression_enabled: true,
+                parallel_distribution: true,
+                chunk_size: 3,
+            },
+            &seqs_b,
+        );
+
+        assert_eq!(counts_a, counts_b);
     }
 
     #[test]
