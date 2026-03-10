@@ -86,6 +86,7 @@ pub struct AssemblyStats {
     pub l95: usize,
     pub l99: usize,
     pub avg_contig_len: f64,
+    pub median_contig_len: f64,
     pub au_n: f64,
     pub largest: usize,
     pub contigs_ge_1kb: usize,
@@ -143,6 +144,7 @@ impl std::fmt::Display for AssemblyStats {
             self.ambiguous_content * 100.0
         )?;
         writeln!(f, "Mean contig: {:.2} bp", self.avg_contig_len)?;
+        writeln!(f, "Median contig: {:.2} bp", self.median_contig_len)?;
         writeln!(f, "N50: {} bp", self.n50)?;
         writeln!(f, "N75: {} bp", self.n75)?;
         writeln!(f, "N90: {} bp", self.n90)?;
@@ -2318,6 +2320,7 @@ impl LargeGenomeAssembler {
         stats.l95 = contig_stats.l95;
         stats.l99 = contig_stats.l99;
         stats.avg_contig_len = contig_stats.avg_length;
+        stats.median_contig_len = contig_stats.median_length;
         stats.au_n = contig_stats.au_n;
         stats.largest = contig_stats.longest;
         stats.contigs_ge_1kb = contig_stats.contigs_ge_1kb;
@@ -2839,6 +2842,7 @@ mod tests {
         assert_eq!(stats.l95, 3);
         assert_eq!(stats.l99, 3);
         assert_eq!(stats.largest, 100);
+        assert_eq!(stats.median_contig_len, 50.0);
         assert_eq!(stats.contigs_ge_1kb, 0);
         assert_eq!(stats.contigs_ge_10kb, 0);
         assert_eq!(stats.contigs_ge_50kb, 0);
