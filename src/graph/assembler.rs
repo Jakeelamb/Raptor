@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 /// Base lookup table for decoding 2-bit encoded nucleotides
 /// A=00, C=01, G=10, T=11
-const BASES: [char; 4] = ['A', 'C', 'G', 'T'];
+const BASE_BYTES: [u8; 4] = [b'A', b'C', b'G', b'T'];
 
 #[derive(Debug, Clone)]
 pub struct Contig {
@@ -176,8 +176,7 @@ pub fn greedy_assembly_u64(
         }
 
         // Start new contig from seed
-        let seed_str = decode_kmer(seed_kmer, k);
-        let mut contig = seed_str;
+        let mut contig = decode_kmer(seed_kmer, k).into_bytes();
         let mut path = vec![seed_kmer];
         used.insert(seed_kmer);
 
@@ -202,7 +201,7 @@ pub fn greedy_assembly_u64(
             if let Some((next, _)) = best_next {
                 // Extend contig by one base (last base of next k-mer)
                 // OPTIMIZED: Extract last 2 bits directly instead of decoding entire k-mer
-                let extension = BASES[(next & 0b11) as usize];
+                let extension = BASE_BYTES[(next & 0b11) as usize];
                 contig.push(extension);
                 path.push(next);
                 used.insert(next);
@@ -214,7 +213,7 @@ pub fn greedy_assembly_u64(
 
         // Extend left (backward) from seed
         current = seed_kmer;
-        let mut left_bases: Vec<char> = Vec::new();
+        let mut left_bases: Vec<u8> = Vec::new();
         let mut left_path: Vec<u64> = Vec::new();
         while let Some(neighbors) = adjacency.get_predecessors(current) {
             let mut best_prev: Option<(u64, u32)> = None;
@@ -235,7 +234,7 @@ pub fn greedy_assembly_u64(
                 // Prepend first base of prev k-mer
                 // OPTIMIZED: Extract first base by shifting right by (k-1)*2 bits
                 let shift = (k - 1) * 2;
-                let extension = BASES[((prev >> shift) & 0b11) as usize];
+                let extension = BASE_BYTES[((prev >> shift) & 0b11) as usize];
                 left_bases.push(extension);
                 left_path.push(prev);
                 used.insert(prev);
@@ -247,11 +246,9 @@ pub fn greedy_assembly_u64(
 
         if !left_bases.is_empty() {
             left_bases.reverse();
-            let mut prefixed_contig = String::with_capacity(left_bases.len() + contig.len());
-            for base in left_bases {
-                prefixed_contig.push(base);
-            }
-            prefixed_contig.push_str(&contig);
+            let mut prefixed_contig = Vec::with_capacity(left_bases.len() + contig.len());
+            prefixed_contig.extend_from_slice(&left_bases);
+            prefixed_contig.extend_from_slice(&contig);
             contig = prefixed_contig;
         }
 
@@ -264,7 +261,8 @@ pub fn greedy_assembly_u64(
         if contig.len() >= min_len {
             contigs.push(Contig {
                 id: contigs.len(),
-                sequence: contig,
+                sequence: String::from_utf8(contig)
+                    .expect("contig bytes only contain valid DNA characters"),
                 kmer_path: path,
             });
         }

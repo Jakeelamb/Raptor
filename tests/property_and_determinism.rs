@@ -209,3 +209,43 @@ fn cleanup_graph_is_stable_under_randomized_kmer_and_edge_insertion_order() {
         assert_eq!(observed_graph, baseline_graph);
     }
 }
+
+#[test]
+fn cleanup_graph_collapses_bubble_without_tip_removal_under_randomized_edge_order() {
+    let k = 3;
+    let kmers = vec![("AAA", 20), ("AAC", 10), ("AAG", 10), ("ACC", 20)];
+    let edges = vec![
+        ("AAA", "AAC", 10),
+        ("AAA", "AAG", 10),
+        ("AAC", "ACC", 10),
+        ("AAG", "ACC", 10),
+    ];
+
+    let mut expected_counts = AHashMap::new();
+    for (seq, count) in &kmers {
+        expected_counts.insert(encode_kmer(seq).unwrap(), *count);
+    }
+    let aaa = encode_kmer("AAA").unwrap();
+    let aac = encode_kmer("AAC").unwrap();
+    let acc = encode_kmer("ACC").unwrap();
+
+    let mut rng = StdRng::seed_from_u64(0x00B0_BB1E_u64);
+    for _ in 0..128 {
+        let mut shuffled_edges = edges.clone();
+        shuffled_edges.shuffle(&mut rng);
+        let mut adjacency = AdjacencyTableU64::new(k as u8);
+        for (from, to, count) in &shuffled_edges {
+            adjacency.add_edge(encode_kmer(from).unwrap(), encode_kmer(to).unwrap(), *count);
+        }
+
+        let summary = cleanup_graph(&mut adjacency, &expected_counts, k, 3);
+        assert_eq!(summary, (0, 1));
+
+        let mut observed_graph = canonicalize_adjacency(&adjacency);
+        observed_graph.sort_unstable_by_key(|(node, _)| *node);
+        assert_eq!(
+            observed_graph,
+            vec![(aaa, vec![(aac, 10)]), (aac, vec![(acc, 10)])]
+        );
+    }
+}

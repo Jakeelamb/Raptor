@@ -61,6 +61,10 @@ harness = false
 name = "isoform_paths"
 harness = false
 
+[[bench]]
+name = "greedy_assembly"
+harness = false
+
 [[bin]]
 name = "raptor"
 path = "src/main.rs"
