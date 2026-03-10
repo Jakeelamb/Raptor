@@ -82,6 +82,9 @@ pub struct AssemblyStats {
     pub n_run_count: usize,
     pub max_n_run: usize,
     pub mean_n_run_length: f64,
+    pub n_runs_per_100kb: f64,
+    pub n_bases_per_100kb: f64,
+    pub ambiguous_bases_per_100kb: f64,
     pub n10: usize,
     pub n25: usize,
     pub n50: usize,
@@ -163,6 +166,11 @@ impl std::fmt::Display for AssemblyStats {
             f,
             "N runs: {} (max {}, mean {:.2} bp)",
             self.n_run_count, self.max_n_run, self.mean_n_run_length
+        )?;
+        writeln!(
+            f,
+            "N/ambig per 100kb: runs={:.2}, N={:.2}, ambiguous={:.2}",
+            self.n_runs_per_100kb, self.n_bases_per_100kb, self.ambiguous_bases_per_100kb
         )?;
         writeln!(f, "Mean contig: {:.2} bp", self.avg_contig_len)?;
         writeln!(f, "Median contig: {:.2} bp", self.median_contig_len)?;
@@ -296,6 +304,15 @@ impl NRunSummary {
         } else {
             total_n_bases as f64 / self.run_count as f64
         }
+    }
+}
+
+#[inline]
+fn per_100kb(count: usize, total_bases: usize) -> f64 {
+    if total_bases == 0 {
+        0.0
+    } else {
+        count as f64 * 100_000.0 / total_bases as f64
     }
 }
 
@@ -2478,6 +2495,9 @@ impl LargeGenomeAssembler {
         stats.n_run_count = n_runs.run_count;
         stats.max_n_run = n_runs.max_run;
         stats.mean_n_run_length = n_runs.mean_run_length(composition.n_bases);
+        stats.n_runs_per_100kb = per_100kb(stats.n_run_count, total_bases);
+        stats.n_bases_per_100kb = per_100kb(composition.n_bases, total_bases);
+        stats.ambiguous_bases_per_100kb = per_100kb(composition.ambiguous_bases, total_bases);
         stats.n10 = contig_stats.n10;
         stats.n25 = contig_stats.n25;
         stats.n50 = contig_stats.n50;
@@ -3046,6 +3066,9 @@ mod tests {
         assert_eq!(stats.n_run_count, 0);
         assert_eq!(stats.max_n_run, 0);
         assert_eq!(stats.mean_n_run_length, 0.0);
+        assert_eq!(stats.n_runs_per_100kb, 0.0);
+        assert_eq!(stats.n_bases_per_100kb, 0.0);
+        assert_eq!(stats.ambiguous_bases_per_100kb, 0.0);
         assert!((stats.avg_contig_len - (175.0 / 3.0)).abs() < 1e-12);
         assert!((stats.au_n - 75.0).abs() < 1e-12);
     }
@@ -3078,6 +3101,9 @@ mod tests {
         assert_eq!(stats.n_run_count, 1);
         assert_eq!(stats.max_n_run, 2);
         assert!((stats.mean_n_run_length - 2.0).abs() < 1e-12);
+        assert!((stats.n_runs_per_100kb - 10_000.0).abs() < 1e-12);
+        assert!((stats.n_bases_per_100kb - 20_000.0).abs() < 1e-12);
+        assert!((stats.ambiguous_bases_per_100kb - 20_000.0).abs() < 1e-12);
     }
 
     #[test]
@@ -3105,6 +3131,9 @@ mod tests {
         assert_eq!(stats.n_run_count, 3);
         assert_eq!(stats.max_n_run, 4);
         assert!((stats.mean_n_run_length - 3.0).abs() < 1e-12);
+        assert!((stats.n_runs_per_100kb - (3.0 * 100_000.0 / 14.0)).abs() < 1e-12);
+        assert!((stats.n_bases_per_100kb - (9.0 * 100_000.0 / 14.0)).abs() < 1e-12);
+        assert_eq!(stats.ambiguous_bases_per_100kb, 0.0);
     }
 
     #[test]
