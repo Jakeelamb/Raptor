@@ -345,8 +345,9 @@ struct NRunSummary {
 
 impl NRunSummary {
     #[inline]
-    fn add_sequence(&mut self, sequence: &[u8]) {
+    fn add_sequence_and_count_ungapped(&mut self, sequence: &[u8]) -> usize {
         let mut run_len = 0usize;
+        let mut ungapped_bases = 0usize;
         for &base in sequence {
             if matches!(base, b'N' | b'n') {
                 run_len += 1;
@@ -354,6 +355,9 @@ impl NRunSummary {
                 self.run_count += 1;
                 self.max_run = self.max_run.max(run_len);
                 run_len = 0;
+                ungapped_bases += 1;
+            } else {
+                ungapped_bases += 1;
             }
         }
 
@@ -361,6 +365,8 @@ impl NRunSummary {
             self.run_count += 1;
             self.max_run = self.max_run.max(run_len);
         }
+
+        ungapped_bases
     }
 
     #[inline]
@@ -2703,13 +2709,9 @@ impl LargeGenomeAssembler {
             writer.write_record(&format!("contig_{} len={}", i + 1, contig.len()), contig)?;
             lengths.push(contig.len());
             let sequence = contig.as_bytes();
-            let ungapped_len = sequence
-                .iter()
-                .filter(|&&base| !matches!(base, b'N' | b'n'))
-                .count();
+            let ungapped_len = n_runs.add_sequence_and_count_ungapped(sequence);
             ungapped_lengths.push(ungapped_len);
             composition.add_sequence(sequence);
-            n_runs.add_sequence(sequence);
         }
 
         let contig_stats = evaluate_lengths_sorted_desc(&lengths);
