@@ -72,16 +72,24 @@ fn main() {
 
             if let Some(input2_path) = input2 {
                 // For paired-end reads
-                pipeline::normalize::normalize_paired(
+                if let Err(err) = pipeline::normalize::normalize_paired(
                     &input1,
                     &input2_path,
                     &output,
                     gpu,
                     streaming,
-                );
+                ) {
+                    eprintln!("Normalization failed: {}", err);
+                    return;
+                }
             } else {
                 // For single-end reads
-                pipeline::normalize::normalize_single(&input1, &output, gpu, streaming);
+                if let Err(err) =
+                    pipeline::normalize::normalize_single(&input1, &output, gpu, streaming)
+                {
+                    eprintln!("Normalization failed: {}", err);
+                    return;
+                }
             }
 
             println!(

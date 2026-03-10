@@ -337,14 +337,18 @@ pub enum FastqWriter {
 }
 
 impl FastqWriter {
-    pub fn new(path: &str) -> Self {
-        let file = File::create(path).expect("Unable to create output FASTQ file");
+    pub fn try_new(path: &str) -> io::Result<Self> {
+        let file = File::create(path)?;
         if path.ends_with(".gz") {
             let encoder = GzEncoder::new(file, Compression::default());
-            FastqWriter::Compressed(BufWriter::new(encoder))
+            Ok(FastqWriter::Compressed(BufWriter::new(encoder)))
         } else {
-            FastqWriter::Plain(BufWriter::new(file))
+            Ok(FastqWriter::Plain(BufWriter::new(file)))
         }
+    }
+
+    pub fn new(path: &str) -> Self {
+        Self::try_new(path).expect("Unable to create output FASTQ file")
     }
 
     pub fn write_record(&mut self, record: &FastqRecord) -> io::Result<()> {
