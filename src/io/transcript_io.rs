@@ -149,7 +149,9 @@ pub fn write_transcript_stats(
     stats: &std::collections::HashMap<String, f64>,
 ) -> io::Result<()> {
     let file = File::create(path)?;
-    serde_json::to_writer_pretty(file, stats)?;
+    let sorted_stats: std::collections::BTreeMap<String, f64> =
+        stats.iter().map(|(k, v)| (k.clone(), *v)).collect();
+    serde_json::to_writer_pretty(file, &sorted_stats)?;
     Ok(())
 }
 
@@ -274,5 +276,36 @@ mod tests {
         assert!(contents.contains("1"));
         assert!(contents.contains("2"));
         assert!(contents.contains("3"));
+    }
+
+    #[test]
+    fn test_write_transcript_stats_is_deterministic_across_insertion_order() {
+        let mut stats_a = std::collections::HashMap::new();
+        stats_a.insert("n50".to_string(), 800.0);
+        stats_a.insert("count".to_string(), 2.0);
+        stats_a.insert("mean_length".to_string(), 500.0);
+
+        let mut stats_b = std::collections::HashMap::new();
+        stats_b.insert("mean_length".to_string(), 500.0);
+        stats_b.insert("count".to_string(), 2.0);
+        stats_b.insert("n50".to_string(), 800.0);
+
+        let file_a = NamedTempFile::new().unwrap();
+        let file_b = NamedTempFile::new().unwrap();
+        write_transcript_stats(file_a.path().to_str().unwrap(), &stats_a).unwrap();
+        write_transcript_stats(file_b.path().to_str().unwrap(), &stats_b).unwrap();
+
+        let mut json_a = String::new();
+        let mut json_b = String::new();
+        File::open(file_a.path())
+            .unwrap()
+            .read_to_string(&mut json_a)
+            .unwrap();
+        File::open(file_b.path())
+            .unwrap()
+            .read_to_string(&mut json_b)
+            .unwrap();
+
+        assert_eq!(json_a, json_b);
     }
 }
