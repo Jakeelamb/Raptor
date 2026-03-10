@@ -161,6 +161,10 @@ pub fn match_kmers_with_overlap(
     let q = query.as_bytes();
     let t = target.as_bytes();
 
+    if q.len() < min_overlap || t.len() < min_overlap {
+        return None;
+    }
+
     let max_shift = cmp::min(q.len(), t.len()) - min_overlap;
 
     for shift in 0..=max_shift {
@@ -258,6 +262,15 @@ fn find_best_overlap(
 /// Bit-parallel edit distance (Myers' algorithm)
 pub fn edit_distance_bp(a: &str, b: &str, max_dist: usize) -> Option<usize> {
     let m = a.len();
+
+    if m == 0 {
+        return if b.len() <= max_dist {
+            Some(b.len())
+        } else {
+            None
+        };
+    }
+
     if m > 64 {
         return None;
     } // Limited to 64-bit

@@ -67,6 +67,10 @@ fn test_match_kmers_with_overlap() {
     // No valid overlap (too many mismatches)
     let result = match_kmers_with_overlap("ATCGAT", "GGGCCC", 4, 0);
     assert_eq!(result, None);
+
+    // min_overlap longer than either sequence should never panic and returns no match
+    let result = match_kmers_with_overlap("ATCG", "ATCG", 5, 0);
+    assert_eq!(result, None);
 }
 
 #[test]
@@ -101,6 +105,11 @@ fn test_edit_distance_bp() {
     if let Some(dist) = result6 {
         assert!(dist <= 12);
     }
+
+    // Empty pattern is valid and should produce insertion-only distance
+    assert_eq!(edit_distance_bp("", "", 0), Some(0));
+    assert_eq!(edit_distance_bp("", "ATCG", 4), Some(4));
+    assert_eq!(edit_distance_bp("", "ATCG", 3), None);
 }
 
 #[test]
