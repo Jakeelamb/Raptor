@@ -150,6 +150,22 @@ fn compare_links(a: &ContigLink, b: &ContigLink) -> Ordering {
         .then_with(|| a.orientation_b.cmp(&b.orientation_b))
 }
 
+#[inline]
+fn select_next_link<'a>(
+    current: usize,
+    links: &'a [&'a ContigLink],
+    used: &AHashSet<usize>,
+) -> Option<&'a ContigLink> {
+    links
+        .iter()
+        .filter(|link| {
+            let other = other_contig_id(link, current);
+            !used.contains(&other)
+        })
+        .copied()
+        .max_by(|a, b| compare_extension_candidates(current, a, b))
+}
+
 fn update_scaffold_continuity(stats: &mut ScaffoldStats, scaffold_lengths: &mut [usize]) {
     scaffold_lengths.sort_unstable_by(|a, b| b.cmp(a));
     if scaffold_lengths.is_empty() {
@@ -549,16 +565,9 @@ fn build_scaffolds(contigs: &[(String, String)], links: &[ContigLink]) -> Vec<Sc
         // Extend right
         let mut current = start;
         loop {
-            let next_link = adj.get(&current).and_then(|links| {
-                links
-                    .iter()
-                    .filter(|link| {
-                        let other = other_contig_id(link, current);
-                        !used.contains(&other)
-                    })
-                    .copied()
-                    .max_by(|a, b| compare_extension_candidates(current, a, b))
-            });
+            let next_link = adj
+                .get(&current)
+                .and_then(|links| select_next_link(current, links, &used));
 
             match next_link {
                 Some(link) => {
@@ -579,6 +588,46 @@ fn build_scaffolds(contigs: &[(String, String)], links: &[ContigLink]) -> Vec<Sc
                 }
                 None => break,
             }
+        }
+
+        // Extend left from the same seed to avoid splitting linear chains
+        // when the chosen seed lies in the middle of the true scaffold.
+        let mut left_contigs_rev: Vec<(usize, Orientation)> = Vec::new();
+        let mut left_gaps_rev: Vec<i32> = Vec::new();
+        current = start;
+        loop {
+            let next_link = adj
+                .get(&current)
+                .and_then(|links| select_next_link(current, links, &used));
+
+            match next_link {
+                Some(link) => {
+                    let other = if link.contig_a == current {
+                        link.contig_b
+                    } else {
+                        link.contig_a
+                    };
+                    let orientation = if link.contig_a == current {
+                        link.orientation_b
+                    } else {
+                        link.orientation_a
+                    };
+                    left_contigs_rev.push((other, orientation));
+                    left_gaps_rev.push(link.median_gap().max(1)); // At least 1 N for gap
+                    used.insert(other);
+                    current = other;
+                }
+                None => break,
+            }
+        }
+
+        if !left_contigs_rev.is_empty() {
+            left_contigs_rev.reverse();
+            left_gaps_rev.reverse();
+            left_contigs_rev.extend(scaffold.contigs);
+            left_gaps_rev.extend(scaffold.gaps);
+            scaffold.contigs = left_contigs_rev;
+            scaffold.gaps = left_gaps_rev;
         }
 
         scaffolds.push(scaffold);
@@ -774,6 +823,28 @@ mod tests {
             let observed = scaffold_fingerprint(&build_scaffolds(&contigs, &shuffled));
             assert_eq!(observed, baseline);
         }
+    }
+
+    #[test]
+    fn build_scaffolds_extends_both_directions_from_internal_seed() {
+        let contigs = vec![
+            ("c0".to_string(), "A".repeat(200)),
+            ("c1".to_string(), "C".repeat(500)),
+            ("c2".to_string(), "G".repeat(180)),
+        ];
+        let links = vec![make_link(0, 1, 10), make_link(1, 2, 8)];
+
+        let scaffolds = build_scaffolds(&contigs, &links);
+        assert_eq!(scaffolds.len(), 1);
+        assert_eq!(
+            scaffolds[0].contigs,
+            vec![
+                (2, Orientation::Forward),
+                (1, Orientation::Forward),
+                (0, Orientation::Forward)
+            ]
+        );
+        assert_eq!(scaffolds[0].gaps, vec![100, 100]);
     }
 
     #[test]
