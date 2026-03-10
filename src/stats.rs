@@ -289,12 +289,12 @@ mod tests {
         writeln!(file, ">contig_1").unwrap();
         writeln!(file, "GCGCNNNN").unwrap(); // 4 GC, 4 N
         writeln!(file, ">contig_2").unwrap();
-        writeln!(file, "atry").unwrap(); // 1 A, 1 T, 2 ambiguous
+        writeln!(file, "atuy").unwrap(); // 1 A, 1 T, 1 U, 1 ambiguous
 
         let stats = calculate_stats(file.path().to_str().unwrap());
         assert_eq!(stats.total_length, 12);
-        assert!((stats.gc_content - (4.0 / 6.0)).abs() < 1e-12);
+        assert!((stats.gc_content - (4.0 / 7.0)).abs() < 1e-12);
         assert!((stats.n_content - (4.0 / 12.0)).abs() < 1e-12);
-        assert!((stats.ambiguous_content - (2.0 / 12.0)).abs() < 1e-12);
+        assert!((stats.ambiguous_content - (1.0 / 12.0)).abs() < 1e-12);
     }
 }

@@ -60,7 +60,7 @@ impl BaseComposition {
     pub fn add_sequence(&mut self, seq: &[u8]) {
         for &base in seq {
             match base {
-                b'A' | b'a' | b'T' | b't' => self.acgt_bases += 1,
+                b'A' | b'a' | b'T' | b't' | b'U' | b'u' => self.acgt_bases += 1,
                 b'G' | b'g' | b'C' | b'c' => {
                     self.gc_bases += 1;
                     self.acgt_bases += 1;
@@ -262,15 +262,15 @@ mod tests {
     #[test]
     fn base_composition_classifies_bases_consistently() {
         let mut composition = BaseComposition::default();
-        composition.add_sequence(b"GgCcAaTtNnRY");
+        composition.add_sequence(b"GgCcAaTtUuNnRY");
 
         assert_eq!(composition.gc_bases, 4);
-        assert_eq!(composition.acgt_bases, 8);
+        assert_eq!(composition.acgt_bases, 10);
         assert_eq!(composition.n_bases, 2);
         assert_eq!(composition.ambiguous_bases, 2);
-        assert!((composition.gc_content() - 0.5).abs() < 1e-12);
-        assert!((composition.n_content(12) - (2.0 / 12.0)).abs() < 1e-12);
-        assert!((composition.ambiguous_content(12) - (2.0 / 12.0)).abs() < 1e-12);
+        assert!((composition.gc_content() - 0.4).abs() < 1e-12);
+        assert!((composition.n_content(14) - (2.0 / 14.0)).abs() < 1e-12);
+        assert!((composition.ambiguous_content(14) - (2.0 / 14.0)).abs() < 1e-12);
     }
 
     #[test]
