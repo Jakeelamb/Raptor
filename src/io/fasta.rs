@@ -14,29 +14,38 @@ pub enum FastaWriter {
     Compressed(BufWriter<GzEncoder<File>>),
 }
 
-/// Open a FASTA file for reading, handles gzipped files automatically
-pub fn open_fasta(path: &str) -> Box<dyn BufRead> {
-    let file = File::open(path).expect("Unable to open FASTA file");
+/// Open a FASTA file for reading, handles gzipped files automatically.
+pub fn try_open_fasta(path: &str) -> Result<Box<dyn BufRead>> {
+    let file = File::open(path)?;
     if path.ends_with(".gz") {
-        Box::new(BufReader::new(MultiGzDecoder::new(file)))
+        Ok(Box::new(BufReader::new(MultiGzDecoder::new(file))))
     } else {
-        Box::new(BufReader::new(file))
+        Ok(Box::new(BufReader::new(file)))
     }
 }
 
+/// Open a FASTA file for reading, handles gzipped files automatically
+pub fn open_fasta(path: &str) -> Box<dyn BufRead> {
+    try_open_fasta(path).expect("Unable to open FASTA file")
+}
+
 impl FastaWriter {
-    pub fn new(path: &str) -> Self {
+    pub fn try_new(path: &str) -> Result<Self> {
         let path_ref = Path::new(path);
         if let Some(parent) = path_ref.parent().filter(|p| !p.as_os_str().is_empty()) {
-            fs::create_dir_all(parent).expect("Unable to create FASTA parent directory");
+            fs::create_dir_all(parent)?;
         }
-        let file = File::create(path_ref).expect("Unable to create FASTA file");
+        let file = File::create(path_ref)?;
         if path.ends_with(".gz") {
             let encoder = GzEncoder::new(file, Compression::default());
-            FastaWriter::Compressed(BufWriter::new(encoder))
+            Ok(FastaWriter::Compressed(BufWriter::new(encoder)))
         } else {
-            FastaWriter::Plain(BufWriter::new(file))
+            Ok(FastaWriter::Plain(BufWriter::new(file)))
         }
+    }
+
+    pub fn new(path: &str) -> Self {
+        Self::try_new(path).expect("Unable to create FASTA file")
     }
 
     pub fn write_record(&mut self, header: &str, sequence: &str) -> Result<()> {

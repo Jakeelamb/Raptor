@@ -4,6 +4,6 @@
 pub type Stats = crate::stats::Stats;
 
 #[inline]
-pub fn calculate_stats(path: &str) -> Stats {
+pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
     crate::stats::calculate_stats(path)
 }

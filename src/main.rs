@@ -189,7 +189,13 @@ fn main() {
             info!("Calculating assembly statistics for: {}", input);
             use stats::{calculate_graph_stats, calculate_stats, update_with_graph_stats};
 
-            let mut stats = calculate_stats(&input);
+            let mut stats = match calculate_stats(&input) {
+                Ok(stats) => stats,
+                Err(err) => {
+                    eprintln!("Failed to calculate stats for {}: {}", input, err);
+                    return;
+                }
+            };
 
             // Add graph complexity stats if requested
             if graph {

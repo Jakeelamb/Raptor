@@ -1,5 +1,5 @@
 use crate::eval::metrics::{evaluate_lengths, BaseComposition};
-use crate::io::fasta::open_fasta;
+use crate::io::fasta::try_open_fasta;
 use serde::Serialize;
 use std::io::BufRead;
 
@@ -49,14 +49,15 @@ pub struct Stats {
     pub graph_branchiness: Option<f64>,
 }
 
-pub fn calculate_stats(path: &str) -> Stats {
-    let reader = open_fasta(path);
+pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
+    let reader = try_open_fasta(path)?;
     let mut lengths = vec![];
     let mut in_sequence = false;
     let mut current_len = 0usize;
     let mut composition = BaseComposition::default();
 
-    for line in reader.lines().map_while(Result::ok) {
+    for line_result in reader.lines() {
+        let line = line_result?;
         if line.starts_with('>') {
             // If we were in a sequence, add its final length.
             if in_sequence {
@@ -81,7 +82,7 @@ pub fn calculate_stats(path: &str) -> Stats {
     let n_content = composition.n_content(length_stats.total_bases);
     let ambiguous_content = composition.ambiguous_content(length_stats.total_bases);
 
-    Stats {
+    Ok(Stats {
         total_contigs: length_stats.total,
         total_length: length_stats.total_bases,
         average_length: length_stats.avg_length,
@@ -123,7 +124,7 @@ pub fn calculate_stats(path: &str) -> Stats {
         graph_max_depth: None,
         graph_bubble_count: None,
         graph_branchiness: None,
-    }
+    })
 }
 
 /// Generate and display graph complexity stats from a GFA file
@@ -160,7 +161,7 @@ pub fn update_with_graph_stats(
 mod tests {
     use super::*;
     use std::io::Write;
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, TempDir};
 
     #[test]
     fn test_calculate_stats() {
@@ -173,7 +174,7 @@ mod tests {
         writeln!(file, ">contig_3").unwrap();
         writeln!(file, "ATCG").unwrap(); // 4 bp
 
-        let stats = calculate_stats(file.path().to_str().unwrap());
+        let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
 
         assert_eq!(stats.total_contigs, 3);
         assert_eq!(stats.total_length, 48);
@@ -221,7 +222,7 @@ mod tests {
         writeln!(file, ">contig_2").unwrap();
         writeln!(file, "GCTA").unwrap(); // 4 bp
 
-        let stats = calculate_stats(file.path().to_str().unwrap());
+        let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
         assert_eq!(stats.total_contigs, 2);
         assert_eq!(stats.total_length, 16);
         assert_eq!(stats.median_length, 8.0);
@@ -270,7 +271,7 @@ mod tests {
         writeln!(file, ">contig_4").unwrap();
         writeln!(file, "{}", "T".repeat(999)).unwrap();
 
-        let stats = calculate_stats(file.path().to_str().unwrap());
+        let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
         assert_eq!(stats.contigs_ge_1kb, 3);
         assert_eq!(stats.contigs_ge_10kb, 2);
         assert_eq!(stats.contigs_ge_50kb, 1);
@@ -297,7 +298,7 @@ mod tests {
         writeln!(file, ">contig_2").unwrap();
         writeln!(file, "{}", "C".repeat(99_999)).unwrap();
 
-        let stats = calculate_stats(file.path().to_str().unwrap());
+        let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
         assert_eq!(stats.contigs_ge_100kb, 1);
         assert_eq!(stats.bases_ge_100kb, 100_000);
         assert!((stats.contigs_ge_100kb_frac - 0.5).abs() < 1e-12);
@@ -376,7 +377,7 @@ mod tests {
         writeln!(file, ">contig_2").unwrap();
         writeln!(file, "atuy").unwrap(); // 1 A, 1 T, 1 U, 1 ambiguous
 
-        let stats = calculate_stats(file.path().to_str().unwrap());
+        let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
         assert_eq!(stats.total_length, 12);
         assert!((stats.gc_content - (4.0 / 7.0)).abs() < 1e-12);
         assert!((stats.n_content - (4.0 / 12.0)).abs() < 1e-12);
@@ -393,7 +394,7 @@ mod tests {
         writeln!(file, "G").unwrap();
         writeln!(file, ">contig_4").unwrap(); // empty contig at EOF
 
-        let stats = calculate_stats(file.path().to_str().unwrap());
+        let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
         assert_eq!(stats.total_contigs, 4);
         assert_eq!(stats.total_length, 3);
         assert!((stats.average_length - 0.75).abs() < 1e-12);
@@ -408,5 +409,16 @@ mod tests {
         assert_eq!(stats.l90, 2);
         assert_eq!(stats.l95, 2);
         assert_eq!(stats.l99, 2);
+    }
+
+    #[test]
+    fn test_calculate_stats_returns_not_found_for_missing_fasta() {
+        let temp_dir = TempDir::new().unwrap();
+        let missing = temp_dir.path().join("missing.fasta");
+
+        match calculate_stats(missing.to_str().unwrap()) {
+            Ok(_) => panic!("expected not found error for missing FASTA"),
+            Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::NotFound),
+        }
     }
 }
