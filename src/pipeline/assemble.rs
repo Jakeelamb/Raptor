@@ -845,7 +845,7 @@ pub fn assemble_reads_with_gpu(
             let mut transcript_lengths: Vec<usize> =
                 transcripts.iter().map(|t| t.sequence.len()).collect();
             let stats = evaluate_lengths_in_place(&mut transcript_lengths);
-    info!(
+            info!(
         "Transcript statistics: {} transcripts, {} bp total, Avg: {:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN: {:.1}",
                 stats.total,
                 stats.total_bases,
