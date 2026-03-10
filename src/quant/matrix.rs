@@ -83,14 +83,22 @@ pub fn read_tpm_matrix(path: &str) -> std::io::Result<HashMap<String, Vec<f64>>>
     // Process each data row
     for line in lines {
         let line = line?;
-        let fields: Vec<&str> = line.split('\t').collect();
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let mut fields = line.split('\t');
+        let transcript_id = fields.next().unwrap_or("").trim();
+        if transcript_id.is_empty() {
+            continue;
+        }
 
         // Parse each sample's TPM value.
         // Missing/invalid values are padded with 0.0 to keep row alignment deterministic.
-        for (idx, &sample) in sample_headers.iter().enumerate() {
-            let col_idx = idx + 1; // +1 because we skipped the first column
+        for &sample in sample_headers {
             let parsed = fields
-                .get(col_idx)
+                .next()
                 .and_then(|raw| raw.parse::<f64>().ok())
                 .filter(|value| value.is_finite())
                 .unwrap_or(0.0);
@@ -232,6 +240,25 @@ mod tests {
         let err = read_tpm_matrix(file.path().to_str().unwrap()).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("Duplicate sample column"));
+    }
+
+    #[test]
+    fn read_tpm_matrix_ignores_blank_and_comment_rows() {
+        let file = NamedTempFile::new().unwrap();
+        std::fs::write(
+            file.path(),
+            "transcript_id\ta\tb\n\
+             \n\
+             # this is a comment\n\
+             transcript_1\t1.0\t2.0\n\
+             \t\n\
+             transcript_2\t3.5\t4.5\n",
+        )
+        .unwrap();
+
+        let parsed = read_tpm_matrix(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(parsed.get("a"), Some(&vec![1.0, 3.5]));
+        assert_eq!(parsed.get("b"), Some(&vec![2.0, 4.5]));
     }
 
     fn round_two(v: f64) -> f64 {
