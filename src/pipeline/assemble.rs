@@ -441,7 +441,7 @@ pub fn assemble_reads_with_gpu(
 
                     // Update TPMs to match filtered transcripts
                     let tpm_path = format!("{}_isoform.tpm.tsv", output_path);
-                    write_tpm_table(&transcripts, &filtered_tpms, &tpm_path);
+                    write_tpm_table(&transcripts, &filtered_tpms, &tpm_path)?;
                     info!("TPM values written to {}", tpm_path);
 
                     // Write transcript metrics to JSON if requested
@@ -458,7 +458,7 @@ pub fn assemble_reads_with_gpu(
                     }
                 } else {
                     let tpm_path = format!("{}_isoform.tpm.tsv", output_path);
-                    write_tpm_table(&transcripts, &tpms, &tpm_path);
+                    write_tpm_table(&transcripts, &tpms, &tpm_path)?;
                     info!("TPM values written to {}", tpm_path);
 
                     // Write transcript metrics to JSON if requested

@@ -64,8 +64,12 @@ pub fn write_transcript_metrics(
     tpms: &[f64],
     output: &str,
 ) -> io::Result<()> {
+    let mut ordered: Vec<(usize, &Transcript)> = transcripts.iter().enumerate().collect();
+    ordered.sort_unstable_by(|a, b| a.1.id.cmp(&b.1.id).then_with(|| a.0.cmp(&b.0)));
+
     let mut metrics = Vec::with_capacity(transcripts.len());
-    for (tx, &tpm) in transcripts.iter().zip(tpms) {
+    for (idx, tx) in ordered {
+        let tpm = tpms.get(idx).copied().unwrap_or(0.0);
         metrics.push(TranscriptMetrics {
             id: format!("transcript_{}", tx.id),
             length: tx.sequence.len(),
@@ -82,7 +86,9 @@ pub fn write_transcript_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::transcript::Transcript;
     use crate::kmer::kmer::encode_kmer;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_generate_metadata() {
@@ -141,5 +147,41 @@ mod tests {
                 kmer_path: vec![encode_kmer("GCT").unwrap(), encode_kmer("CTA").unwrap()],
             },
         ]
+    }
+
+    fn make_transcript(id: usize, sequence: &str, confidence: f64) -> Transcript {
+        Transcript {
+            id,
+            sequence: sequence.to_string(),
+            path: vec![id],
+            confidence,
+            length: sequence.len(),
+            strand: '+',
+            tpm: None,
+            splicing: "linear".to_string(),
+        }
+    }
+
+    #[test]
+    fn write_transcript_metrics_is_sorted_by_id_and_pads_missing_tpms() {
+        let transcripts = vec![
+            make_transcript(8, "ACGT", 0.9),
+            make_transcript(3, "AAAAAA", 0.8),
+            make_transcript(5, "CC", 0.7),
+        ];
+        let output = NamedTempFile::new().unwrap();
+
+        write_transcript_metrics(&transcripts, &[42.5], output.path().to_str().unwrap()).unwrap();
+        let json = std::fs::read_to_string(output.path()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let rows = parsed.as_array().unwrap();
+
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["id"], "transcript_3");
+        assert_eq!(rows[0]["tpm"], 0.0);
+        assert_eq!(rows[1]["id"], "transcript_5");
+        assert_eq!(rows[1]["tpm"], 0.0);
+        assert_eq!(rows[2]["id"], "transcript_8");
+        assert_eq!(rows[2]["tpm"], 42.5);
     }
 }
