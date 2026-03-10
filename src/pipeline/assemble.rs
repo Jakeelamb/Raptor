@@ -1,4 +1,4 @@
-use crate::accel::{create_backend, CpuBackend};
+use crate::accel::CpuBackend;
 use crate::eval::metrics::evaluate_lengths_in_place;
 use crate::graph::assembler::greedy_assembly_u64;
 use crate::graph::overlap::find_overlaps;
@@ -135,9 +135,10 @@ pub fn assemble_reads_with_gpu(
     let num_sequences = sequences.len();
     info!("Loaded {} sequences", num_sequences);
 
-    // Create the appropriate compute backend
-    let backend = create_backend(use_gpu, num_sequences, num_sequences / 10 + 100);
-    info!("Using compute backend: {}", backend.name());
+    if use_gpu {
+        info!("GPU requested; current assembly path uses CPU k-mer/graph kernels");
+    }
+    info!("Using CPU backend for k-mer counting and graph build");
 
     // Determine k-mer size from a bounded prefix sample without cloning.
     let sample_size = sequences.len().min(10_000);
@@ -315,16 +316,13 @@ pub fn assemble_reads_with_gpu(
         let min_overlap = (k / 2).max(15); // Use at least half of k but minimum 15bp
         let max_mismatches = 3; // Allow up to 3 mismatches in the overlap
 
-        // Use backend for overlap detection (currently unused, kept for future integration)
-        info!("Finding overlaps using {}", backend.name());
-        let _backend_overlaps = backend.find_overlaps(&contig_seqs, min_overlap, max_mismatches);
+        info!("Finding overlaps (single pass)");
 
         let builder = OverlapGraphBuilder::new(min_overlap, max_mismatches, max_mismatches);
         let graph = builder.build_overlap_graph(&contig_seqs);
         let (_, paths) = builder.stitch_contigs(&graph);
 
-        // Convert backend overlaps to the link format expected by GFA writers
-        // Also use the original find_overlaps for compatibility with existing code
+        // Use canonical overlap detection path to build graph links.
         let links = find_overlaps(&contigs, min_overlap, max_mismatches);
 
         info!("Found {} overlaps", links.len());
