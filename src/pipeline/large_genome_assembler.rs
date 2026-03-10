@@ -2267,52 +2267,22 @@ impl LargeGenomeAssembler {
                 .copied()
                 .unwrap_or(([false; 4], [false; 4]));
 
-            // Find valid extensions that haven't been used
-            let extensions: Vec<usize> = right_ext
-                .iter()
-                .enumerate()
-                .filter(|(i, &valid)| {
-                    if !valid {
-                        return false;
-                    }
-                    // Check if this extension leads to an unused k-mer
-                    if let Some(next) = extend_right(current_oriented, bases[*i], k) {
-                        let next_kmer = KmerU64 {
-                            encoded: next,
-                            len: k as u8,
-                        };
-                        let next_canonical = next_kmer.canonical().encoded;
-                        !used.contains(&next_canonical)
-                    } else {
-                        false
-                    }
-                })
-                .map(|(i, _)| i)
-                .collect();
-
-            if extensions.len() != 1 {
+            let Some((base_idx, next)) = Self::select_unique_unused_linear_extension(
+                current_oriented,
+                &right_ext,
+                k,
+                used,
+                false,
+            ) else {
                 break; // Stop at branch or dead end
-            }
+            };
 
-            let base_idx = extensions[0];
-            let base = bases[base_idx];
+            contig.push(bases[base_idx]);
+            used.insert(Self::canonical_encoded(next, k));
 
-            if let Some(next) = extend_right(current_oriented, base, k) {
-                let next_kmer = KmerU64 {
-                    encoded: next,
-                    len: k as u8,
-                };
-                let next_canonical = next_kmer.canonical().encoded;
-
-                contig.push(base);
-                used.insert(next_canonical);
-
-                // Continue with the ACTUAL extended k-mer (not canonical)
-                // This preserves correct directionality
-                right_kmer = next;
-            } else {
-                break;
-            }
+            // Continue with the ACTUAL extended k-mer (not canonical)
+            // This preserves correct directionality
+            right_kmer = next;
         }
 
         // Extend left
@@ -2327,49 +2297,21 @@ impl LargeGenomeAssembler {
                 .copied()
                 .unwrap_or(([false; 4], [false; 4]));
 
-            let extensions: Vec<usize> = left_ext
-                .iter()
-                .enumerate()
-                .filter(|(i, &valid)| {
-                    if !valid {
-                        return false;
-                    }
-                    if let Some(next) = extend_left(current_oriented, bases[*i], k) {
-                        let next_kmer = KmerU64 {
-                            encoded: next,
-                            len: k as u8,
-                        };
-                        let next_canonical = next_kmer.canonical().encoded;
-                        !used.contains(&next_canonical)
-                    } else {
-                        false
-                    }
-                })
-                .map(|(i, _)| i)
-                .collect();
-
-            if extensions.len() != 1 {
+            let Some((base_idx, next)) = Self::select_unique_unused_linear_extension(
+                current_oriented,
+                &left_ext,
+                k,
+                used,
+                true,
+            ) else {
                 break;
-            }
+            };
 
-            let base_idx = extensions[0];
-            let base = bases[base_idx];
+            left_extension.push(bases[base_idx]);
+            used.insert(Self::canonical_encoded(next, k));
 
-            if let Some(next) = extend_left(current_oriented, base, k) {
-                let next_kmer = KmerU64 {
-                    encoded: next,
-                    len: k as u8,
-                };
-                let next_canonical = next_kmer.canonical().encoded;
-
-                left_extension.push(base);
-                used.insert(next_canonical);
-
-                // Continue with ACTUAL extended k-mer
-                left_kmer = next;
-            } else {
-                break;
-            }
+            // Continue with ACTUAL extended k-mer
+            left_kmer = next;
         }
 
         if !left_extension.is_empty() {
@@ -2502,6 +2444,43 @@ impl LargeGenomeAssembler {
             .get(&Self::canonical_encoded(encoded, k))
             .copied()
             .unwrap_or(1)
+    }
+
+    fn select_unique_unused_linear_extension(
+        current_kmer: u64,
+        extension_flags: &[bool; 4],
+        k: usize,
+        used: &AHashSet<u64>,
+        going_left: bool,
+    ) -> Option<(usize, u64)> {
+        const BASES: [u8; 4] = [b'A', b'C', b'G', b'T'];
+        let mut selected: Option<(usize, u64)> = None;
+
+        for (base_idx, &valid) in extension_flags.iter().enumerate() {
+            if !valid {
+                continue;
+            }
+
+            let next = if going_left {
+                extend_left(current_kmer, BASES[base_idx], k)
+            } else {
+                extend_right(current_kmer, BASES[base_idx], k)
+            };
+            let Some(next) = next else {
+                continue;
+            };
+
+            if used.contains(&Self::canonical_encoded(next, k)) {
+                continue;
+            }
+
+            if selected.is_some() {
+                return None;
+            }
+            selected = Some((base_idx, next));
+        }
+
+        selected
     }
 
     fn collect_branch_candidates(
@@ -4777,5 +4756,40 @@ mod tests {
 
         assert_eq!(path, vec![start, tcga]);
         assert_eq!(end, tcga);
+    }
+
+    #[test]
+    fn test_select_unique_unused_linear_extension_requires_exactly_one_choice() {
+        let k = 4;
+        let current = KmerU64::from_str("ACGA").unwrap().encoded;
+        let mut used = AHashSet::new();
+
+        let mut only_t = [false; 4];
+        only_t[3] = true;
+        let selected = LargeGenomeAssembler::select_unique_unused_linear_extension(
+            current, &only_t, k, &used, false,
+        )
+        .expect("single valid unused extension should be selected");
+        assert_eq!(selected.0, 3);
+        let expected_next = extend_right(current, b'T', k).expect("valid T extension");
+        assert_eq!(selected.1, expected_next);
+
+        let mut branch = [false; 4];
+        branch[0] = true;
+        branch[3] = true;
+        assert_eq!(
+            LargeGenomeAssembler::select_unique_unused_linear_extension(
+                current, &branch, k, &used, false
+            ),
+            None
+        );
+
+        used.insert(LargeGenomeAssembler::canonical_encoded(expected_next, k));
+        assert_eq!(
+            LargeGenomeAssembler::select_unique_unused_linear_extension(
+                current, &only_t, k, &used, false
+            ),
+            None
+        );
     }
 }
