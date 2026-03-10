@@ -43,6 +43,8 @@ struct AssemblyQualitySummary {
     gc_content: f64,
     n_content: f64,
     ambiguous_content: f64,
+    n_bases_per_100kb: f64,
+    ambiguous_bases_per_100kb: f64,
     contigs_ge_1kb: usize,
     contigs_ge_10kb: usize,
     contigs_ge_50kb: usize,
@@ -59,6 +61,15 @@ struct AssemblyQualitySummary {
     bases_ge_10kb_frac: f64,
     bases_ge_50kb_frac: f64,
     bases_ge_100kb_frac: f64,
+}
+
+#[inline]
+fn per_100kb(count: usize, total_bases: usize) -> f64 {
+    if total_bases == 0 {
+        0.0
+    } else {
+        count as f64 * 100_000.0 / total_bases as f64
+    }
 }
 
 #[inline]
@@ -106,6 +117,8 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
         gc_content: composition.gc_content(),
         n_content: composition.n_content(length_stats.total_bases),
         ambiguous_content: composition.ambiguous_content(length_stats.total_bases),
+        n_bases_per_100kb: per_100kb(composition.n_bases, length_stats.total_bases),
+        ambiguous_bases_per_100kb: per_100kb(composition.ambiguous_bases, length_stats.total_bases),
         contigs_ge_1kb: length_stats.contigs_ge_1kb,
         contigs_ge_10kb: length_stats.contigs_ge_10kb,
         contigs_ge_50kb: length_stats.contigs_ge_50kb,
@@ -174,6 +187,14 @@ fn write_assembly_quality_reports(
         (
             "ambiguous_content",
             format!("{:.12}", quality.ambiguous_content),
+        ),
+        (
+            "n_bases_per_100kb",
+            format!("{:.12}", quality.n_bases_per_100kb),
+        ),
+        (
+            "ambiguous_bases_per_100kb",
+            format!("{:.12}", quality.ambiguous_bases_per_100kb),
         ),
         ("contigs_ge_1kb", quality.contigs_ge_1kb.to_string()),
         ("contigs_ge_10kb", quality.contigs_ge_10kb.to_string()),
@@ -486,7 +507,7 @@ pub fn assemble_reads_with_gpu(
 
     let quality = summarize_assembly_quality(&contigs);
     info!(
-        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN: {:.1}, Longest: {} bp ({:.2}%), GC/N/Ambiguous bases: {}/{}/{} (fractions {:.2}%/{:.2}%/{:.2}%), >=1kb/10kb/50kb/100kb contigs: {}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%)",
+        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN: {:.1}, Longest: {} bp ({:.2}%), GC/N/Ambiguous bases: {}/{}/{} (fractions {:.2}%/{:.2}%/{:.2}%), N/Ambiguous per 100kb: {:.1}/{:.1}, >=1kb/10kb/50kb/100kb contigs: {}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%)",
         quality.total_contigs,
         quality.total_bases,
         quality.avg_length,
@@ -514,6 +535,8 @@ pub fn assemble_reads_with_gpu(
         quality.gc_content * 100.0,
         quality.n_content * 100.0,
         quality.ambiguous_content * 100.0,
+        quality.n_bases_per_100kb,
+        quality.ambiguous_bases_per_100kb,
         quality.contigs_ge_1kb,
         quality.contigs_ge_10kb,
         quality.contigs_ge_50kb,
@@ -1097,6 +1120,8 @@ mod tests {
         assert!((summary.gc_content - (4.0 / 9.0)).abs() < 1e-12);
         assert!((summary.n_content - (1.0 / 12.0)).abs() < 1e-12);
         assert!((summary.ambiguous_content - (2.0 / 12.0)).abs() < 1e-12);
+        assert!((summary.n_bases_per_100kb - (1.0 * 100_000.0 / 12.0)).abs() < 1e-12);
+        assert!((summary.ambiguous_bases_per_100kb - (2.0 * 100_000.0 / 12.0)).abs() < 1e-12);
         assert_eq!(summary.contigs_ge_1kb, 0);
         assert_eq!(summary.contigs_ge_1kb_frac, 0.0);
         assert_eq!(summary.bases_ge_1kb_frac, 0.0);
@@ -1275,6 +1300,8 @@ mod tests {
             gc_content: 0.5,
             n_content: 0.1,
             ambiguous_content: 0.02,
+            n_bases_per_100kb: 90.0 * 100_000.0 / 1234.0,
+            ambiguous_bases_per_100kb: 44.0 * 100_000.0 / 1234.0,
             contigs_ge_1kb: 1,
             contigs_ge_10kb: 0,
             contigs_ge_50kb: 0,
@@ -1312,6 +1339,11 @@ mod tests {
         assert_eq!(parsed["acgt_bases"], 1100);
         assert_eq!(parsed["gc_content"], 0.5);
         assert_eq!(parsed["longest_frac"], 0.340356564);
+        assert_eq!(parsed["n_bases_per_100kb"], 90.0 * 100_000.0 / 1234.0);
+        assert_eq!(
+            parsed["ambiguous_bases_per_100kb"],
+            44.0 * 100_000.0 / 1234.0
+        );
 
         let tsv = std::fs::read_to_string(&tsv_path).expect("read tsv report");
         let mut lines = tsv.lines();
@@ -1323,6 +1355,8 @@ mod tests {
         assert!(tsv.contains("acgt_bases\t1100"));
         assert!(tsv.contains("longest_frac\t0.340356564000"));
         assert!(tsv.contains("gc_content\t0.500000000000"));
+        assert!(tsv.contains("n_bases_per_100kb\t7293.354943273906"));
+        assert!(tsv.contains("ambiguous_bases_per_100kb\t3565.640194489465"));
         assert!(tsv.contains("bases_ge_1kb_frac\t0.810000000000"));
     }
 }
