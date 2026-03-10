@@ -13,6 +13,7 @@ use raptor::graph::isoform_traverse::find_directed_paths;
 use raptor::graph::transcript::{stitch_isoform, Transcript};
 use raptor::io::gfa::{read_gfa_contigs, read_gfa_links, GfaWriter};
 use raptor::kmer::kmer::{encode_kmer, reverse_complement, KmerU64};
+use std::collections::{BTreeSet, HashMap};
 use std::io::Write;
 use tempfile::NamedTempFile;
 
@@ -439,7 +440,12 @@ fn gfa_link_parsing_skips_unknown_segments_and_keeps_indices_in_bounds() {
             writeln!(file, "S\t{}\tACGT", id).unwrap();
         }
 
-        let mut expected_links = 0usize;
+        let segment_index: HashMap<&str, usize> = segment_ids
+            .iter()
+            .enumerate()
+            .map(|(idx, id)| (id.as_str(), idx))
+            .collect();
+        let mut expected_links = BTreeSet::new();
         let link_count = rng.gen_range(0..=64usize);
         for i in 0..link_count {
             let from_known = rng.gen_bool(0.8);
@@ -472,7 +478,10 @@ fn gfa_link_parsing_skips_unknown_segments_and_keeps_indices_in_bounds() {
 
             writeln!(file, "L\t{}\t+\t{}\t+\t{}", from_id, to_id, cigar).unwrap();
             if from_known && to_known && valid_cigar {
-                expected_links += 1;
+                let overlap_size = if cigar == "*" { 0 } else { overlap };
+                let from_idx = *segment_index.get(from_id.as_str()).unwrap();
+                let to_idx = *segment_index.get(to_id.as_str()).unwrap();
+                expected_links.insert((from_idx, to_idx, overlap_size));
             }
         }
 
@@ -483,7 +492,8 @@ fn gfa_link_parsing_skips_unknown_segments_and_keeps_indices_in_bounds() {
         assert_eq!(observed_ids, expected_ids);
 
         let links = read_gfa_links(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(links.len(), expected_links);
+        let observed_links: BTreeSet<(usize, usize, usize)> = links.iter().copied().collect();
+        assert_eq!(observed_links, expected_links);
         assert!(links
             .iter()
             .all(|(from, to, _)| *from < contigs.len() && *to < contigs.len()));

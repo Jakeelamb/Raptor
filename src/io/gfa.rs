@@ -308,6 +308,8 @@ pub fn read_gfa_links(gfa_path: &str) -> Result<Vec<(usize, usize, usize)>> {
             .then_with(|| a.1.cmp(&b.1))
             .then_with(|| a.2.cmp(&b.2))
     });
+    // Collapse repeated records to avoid duplicate overlaps downstream.
+    links.dedup();
 
     Ok(links)
 }
@@ -388,6 +390,21 @@ mod tests {
         let links_b = read_gfa_links(file_b.path().to_str().unwrap()).unwrap();
         assert_eq!(links_a, links_b);
         assert_eq!(links_a, vec![(0, 1, 2), (0, 2, 3), (2, 0, 4)]);
+    }
+
+    #[test]
+    fn read_gfa_links_deduplicates_duplicate_records() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "H\tVN:Z:1.0").unwrap();
+        writeln!(file, "S\tseg_a\tAAAA").unwrap();
+        writeln!(file, "S\tseg_b\tCCCC").unwrap();
+        writeln!(file, "L\tseg_a\t+\tseg_b\t+\t3M").unwrap();
+        writeln!(file, "L\tseg_a\t+\tseg_b\t+\t3M").unwrap();
+        writeln!(file, "L\tseg_b\t+\tseg_a\t+\t2M").unwrap();
+        writeln!(file, "L\tseg_b\t+\tseg_a\t+\t2M").unwrap();
+
+        let links = read_gfa_links(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(links, vec![(0, 1, 3), (1, 0, 2)]);
     }
 
     #[test]
