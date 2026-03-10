@@ -25,6 +25,18 @@ pub struct PathStats {
     /// N90 of path lengths in segments
     pub path_n90: usize,
 
+    /// N95 of path lengths in segments
+    pub path_n95: usize,
+
+    /// L50 of path lengths in segments
+    pub path_l50: usize,
+
+    /// L90 of path lengths in segments
+    pub path_l90: usize,
+
+    /// L95 of path lengths in segments
+    pub path_l95: usize,
+
     /// auN of path lengths in segments
     pub path_au_n: f64,
 
@@ -188,6 +200,10 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
         median_length: path_length_stats.median_length,
         path_n50: path_length_stats.n50,
         path_n90: path_length_stats.n90,
+        path_n95: path_length_stats.n95,
+        path_l50: path_length_stats.l50,
+        path_l90: path_length_stats.l90,
+        path_l95: path_length_stats.l95,
         path_au_n: path_length_stats.au_n,
         branch_count: branch_nodes.len(),
         max_depth,
@@ -476,6 +492,10 @@ mod tests {
         assert_eq!(stats.median_length, 2.0);
         assert_eq!(stats.path_n50, 2);
         assert_eq!(stats.path_n90, 2);
+        assert_eq!(stats.path_n95, 2);
+        assert_eq!(stats.path_l50, 2);
+        assert_eq!(stats.path_l90, 3);
+        assert_eq!(stats.path_l95, 3);
         assert!((stats.path_au_n - (17.0 / 7.0)).abs() < 1e-12);
         // The branch count should be 3 because:
         // - Node 1 appears in two paths (path1, path2)
@@ -501,6 +521,10 @@ mod tests {
         assert_eq!(stats.median_length, 3.0);
         assert_eq!(stats.path_n50, 3);
         assert_eq!(stats.path_n90, 3);
+        assert_eq!(stats.path_n95, 3);
+        assert_eq!(stats.path_l50, 1);
+        assert_eq!(stats.path_l90, 1);
+        assert_eq!(stats.path_l95, 1);
         assert_eq!(stats.path_au_n, 3.0);
         assert_eq!(stats.branch_count, 0);
         assert_eq!(stats.max_depth, 2);
@@ -524,6 +548,10 @@ mod tests {
         assert_eq!(stats.median_length, 2.0);
         assert_eq!(stats.path_n50, 2);
         assert_eq!(stats.path_n90, 2);
+        assert_eq!(stats.path_n95, 2);
+        assert_eq!(stats.path_l50, 1);
+        assert_eq!(stats.path_l90, 1);
+        assert_eq!(stats.path_l95, 1);
         assert_eq!(stats.path_au_n, 2.0);
         assert_eq!(stats.branch_count, 0);
         assert_eq!(stats.max_depth, 1);
@@ -545,6 +573,10 @@ mod tests {
         assert_eq!(stats.median_length, 2.0);
         assert_eq!(stats.path_n50, 2);
         assert_eq!(stats.path_n90, 2);
+        assert_eq!(stats.path_n95, 2);
+        assert_eq!(stats.path_l50, 1);
+        assert_eq!(stats.path_l90, 1);
+        assert_eq!(stats.path_l95, 1);
         assert_eq!(stats.path_au_n, 2.0);
     }
 
@@ -581,6 +613,10 @@ mod tests {
         assert_eq!(stats.median_length, 2.5);
         assert_eq!(stats.path_n50, 3);
         assert_eq!(stats.path_n90, 2);
+        assert_eq!(stats.path_n95, 2);
+        assert_eq!(stats.path_l50, 1);
+        assert_eq!(stats.path_l90, 2);
+        assert_eq!(stats.path_l95, 2);
         assert!((stats.path_au_n - 2.6).abs() < 1e-12);
         assert_eq!(stats.branch_count, 2);
     }
@@ -599,6 +635,10 @@ mod tests {
         assert_eq!(stats.total_paths, 2);
         assert_eq!(stats.path_n50, 3);
         assert_eq!(stats.path_n90, 2);
+        assert_eq!(stats.path_n95, 2);
+        assert_eq!(stats.path_l50, 1);
+        assert_eq!(stats.path_l90, 2);
+        assert_eq!(stats.path_l95, 2);
         assert!((stats.path_au_n - 2.6).abs() < 1e-12);
         assert_eq!(stats.branch_count, 2);
     }

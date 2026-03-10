@@ -64,6 +64,10 @@ pub struct Stats {
     pub graph_path_median_length: Option<f64>,
     pub graph_path_n50: Option<usize>,
     pub graph_path_n90: Option<usize>,
+    pub graph_path_n95: Option<usize>,
+    pub graph_path_l50: Option<usize>,
+    pub graph_path_l90: Option<usize>,
+    pub graph_path_l95: Option<usize>,
     pub graph_path_au_n: Option<f64>,
 }
 
@@ -242,6 +246,10 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         graph_path_median_length: None,
         graph_path_n50: None,
         graph_path_n90: None,
+        graph_path_n95: None,
+        graph_path_l50: None,
+        graph_path_l90: None,
+        graph_path_l95: None,
         graph_path_au_n: None,
     })
 }
@@ -277,6 +285,10 @@ pub fn update_with_graph_stats(
     stats.graph_path_median_length = Some(graph_stats.median_length);
     stats.graph_path_n50 = Some(graph_stats.path_n50);
     stats.graph_path_n90 = Some(graph_stats.path_n90);
+    stats.graph_path_n95 = Some(graph_stats.path_n95);
+    stats.graph_path_l50 = Some(graph_stats.path_l50);
+    stats.graph_path_l90 = Some(graph_stats.path_l90);
+    stats.graph_path_l95 = Some(graph_stats.path_l95);
     stats.graph_path_au_n = Some(graph_stats.path_au_n);
 }
 
@@ -518,6 +530,10 @@ mod tests {
             graph_path_median_length: None,
             graph_path_n50: None,
             graph_path_n90: None,
+            graph_path_n95: None,
+            graph_path_l50: None,
+            graph_path_l90: None,
+            graph_path_l95: None,
             graph_path_au_n: None,
         };
         let graph_stats = crate::graph::complexity::PathStats {
@@ -526,6 +542,10 @@ mod tests {
             median_length: 3.0,
             path_n50: 4,
             path_n90: 2,
+            path_n95: 2,
+            path_l50: 3,
+            path_l90: 6,
+            path_l95: 7,
             path_au_n: 3.2,
             branch_count: 2,
             max_depth: 5,
@@ -544,6 +564,10 @@ mod tests {
         assert_eq!(stats.graph_path_median_length, Some(3.0));
         assert_eq!(stats.graph_path_n50, Some(4));
         assert_eq!(stats.graph_path_n90, Some(2));
+        assert_eq!(stats.graph_path_n95, Some(2));
+        assert_eq!(stats.graph_path_l50, Some(3));
+        assert_eq!(stats.graph_path_l90, Some(6));
+        assert_eq!(stats.graph_path_l95, Some(7));
         assert_eq!(stats.graph_path_au_n, Some(3.2));
     }
 
