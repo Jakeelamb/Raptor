@@ -79,12 +79,14 @@ pub struct AssemblyStats {
     pub gc_content: f64,
     pub n_content: f64,
     pub ambiguous_content: f64,
+    pub n10: usize,
     pub n25: usize,
     pub n50: usize,
     pub n75: usize,
     pub n90: usize,
     pub n95: usize,
     pub n99: usize,
+    pub l10: usize,
     pub l25: usize,
     pub l50: usize,
     pub l75: usize,
@@ -156,12 +158,14 @@ impl std::fmt::Display for AssemblyStats {
         )?;
         writeln!(f, "Mean contig: {:.2} bp", self.avg_contig_len)?;
         writeln!(f, "Median contig: {:.2} bp", self.median_contig_len)?;
+        writeln!(f, "N10: {} bp", self.n10)?;
         writeln!(f, "N25: {} bp", self.n25)?;
         writeln!(f, "N50: {} bp", self.n50)?;
         writeln!(f, "N75: {} bp", self.n75)?;
         writeln!(f, "N90: {} bp", self.n90)?;
         writeln!(f, "N95: {} bp", self.n95)?;
         writeln!(f, "N99: {} bp", self.n99)?;
+        writeln!(f, "L10: {}", self.l10)?;
         writeln!(f, "L25: {}", self.l25)?;
         writeln!(f, "L50: {}", self.l50)?;
         writeln!(f, "L75: {}", self.l75)?;
@@ -2391,12 +2395,14 @@ impl LargeGenomeAssembler {
         stats.gc_content = composition.gc_content();
         stats.n_content = composition.n_content(total_bases);
         stats.ambiguous_content = composition.ambiguous_content(total_bases);
+        stats.n10 = contig_stats.n10;
         stats.n25 = contig_stats.n25;
         stats.n50 = contig_stats.n50;
         stats.n75 = contig_stats.n75;
         stats.n90 = contig_stats.n90;
         stats.n95 = contig_stats.n95;
         stats.n99 = contig_stats.n99;
+        stats.l10 = contig_stats.l10;
         stats.l25 = contig_stats.l25;
         stats.l50 = contig_stats.l50;
         stats.l75 = contig_stats.l75;
@@ -2915,12 +2921,14 @@ mod tests {
 
         assert_eq!(stats.contigs, 3);
         assert_eq!(stats.total_length, 175);
+        assert_eq!(stats.n10, 100);
         assert_eq!(stats.n25, 100);
         assert_eq!(stats.n50, 100);
         assert_eq!(stats.n75, 50);
         assert_eq!(stats.n90, 25);
         assert_eq!(stats.n95, 25);
         assert_eq!(stats.n99, 25);
+        assert_eq!(stats.l10, 1);
         assert_eq!(stats.l25, 1);
         assert_eq!(stats.l50, 1);
         assert_eq!(stats.l75, 2);
