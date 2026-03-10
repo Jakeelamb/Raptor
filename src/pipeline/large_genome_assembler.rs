@@ -89,6 +89,9 @@ pub struct AssemblyStats {
     pub n_runs_per_100kb: f64,
     pub n_bases_per_100kb: f64,
     pub ambiguous_bases_per_100kb: f64,
+    pub ungapped_total_length: usize,
+    pub gap_bases: usize,
+    pub gap_bases_frac: f64,
     pub n10: usize,
     pub n25: usize,
     pub n50: usize,
@@ -103,10 +106,16 @@ pub struct AssemblyStats {
     pub l90: usize,
     pub l95: usize,
     pub l99: usize,
+    pub ungapped_n50: usize,
+    pub ungapped_n90: usize,
+    pub ungapped_n95: usize,
+    pub ungapped_n99: usize,
     pub avg_contig_len: f64,
     pub median_contig_len: f64,
     pub au_n: f64,
     pub effective_contig_count: f64,
+    pub ungapped_au_n: f64,
+    pub ungapped_effective_contig_count: f64,
     pub largest: usize,
     pub contigs_ge_1kb: usize,
     pub contigs_ge_10kb: usize,
@@ -191,6 +200,13 @@ impl std::fmt::Display for AssemblyStats {
             "N/ambig per 100kb: runs={:.2}, N={:.2}, ambiguous={:.2}",
             self.n_runs_per_100kb, self.n_bases_per_100kb, self.ambiguous_bases_per_100kb
         )?;
+        writeln!(
+            f,
+            "Ungapped span: {} bp (gaps {} bp, {:.2}%)",
+            self.ungapped_total_length,
+            self.gap_bases,
+            self.gap_bases_frac * 100.0
+        )?;
         writeln!(f, "Mean contig: {:.2} bp", self.avg_contig_len)?;
         writeln!(f, "Median contig: {:.2} bp", self.median_contig_len)?;
         writeln!(f, "N10: {} bp", self.n10)?;
@@ -200,6 +216,11 @@ impl std::fmt::Display for AssemblyStats {
         writeln!(f, "N90: {} bp", self.n90)?;
         writeln!(f, "N95: {} bp", self.n95)?;
         writeln!(f, "N99: {} bp", self.n99)?;
+        writeln!(
+            f,
+            "Ungapped N50/N90/N95/N99: {}/{}/{}/{} bp",
+            self.ungapped_n50, self.ungapped_n90, self.ungapped_n95, self.ungapped_n99
+        )?;
         writeln!(f, "L10: {}", self.l10)?;
         writeln!(f, "L25: {}", self.l25)?;
         writeln!(f, "L50: {}", self.l50)?;
@@ -211,6 +232,11 @@ impl std::fmt::Display for AssemblyStats {
             f,
             "auN/effective count: {:.2} bp / {:.2}",
             self.au_n, self.effective_contig_count
+        )?;
+        writeln!(
+            f,
+            "Ungapped auN/effective count: {:.2} bp / {:.2}",
+            self.ungapped_au_n, self.ungapped_effective_contig_count
         )?;
         writeln!(
             f,
@@ -2658,6 +2684,7 @@ impl LargeGenomeAssembler {
         valid.sort_unstable_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
 
         let mut lengths: Vec<usize> = Vec::with_capacity(valid.len());
+        let mut ungapped_lengths: Vec<usize> = Vec::with_capacity(valid.len());
         let mut composition = BaseComposition::default();
         let mut n_runs = NRunSummary::default();
 
@@ -2665,12 +2692,27 @@ impl LargeGenomeAssembler {
             writer.write_record(&format!("contig_{} len={}", i + 1, contig.len()), contig)?;
             lengths.push(contig.len());
             let sequence = contig.as_bytes();
+            let ungapped_len = sequence
+                .iter()
+                .filter(|&&base| !matches!(base, b'N' | b'n'))
+                .count();
+            ungapped_lengths.push(ungapped_len);
             composition.add_sequence(sequence);
             n_runs.add_sequence(sequence);
         }
 
         let contig_stats = evaluate_lengths_sorted_desc(&lengths);
+        ungapped_lengths.sort_unstable_by(|a, b| b.cmp(a));
+        let ungapped_stats = evaluate_lengths_sorted_desc(&ungapped_lengths);
         let total_bases = contig_stats.total_bases;
+        let gap_bases = contig_stats
+            .total_bases
+            .saturating_sub(ungapped_stats.total_bases);
+        let gap_bases_frac = if total_bases > 0 {
+            gap_bases as f64 / total_bases as f64
+        } else {
+            0.0
+        };
 
         stats.contigs = valid.len();
         stats.total_length = contig_stats.total_bases;
@@ -2687,6 +2729,9 @@ impl LargeGenomeAssembler {
         stats.n_runs_per_100kb = per_100kb(stats.n_run_count, total_bases);
         stats.n_bases_per_100kb = per_100kb(composition.n_bases, total_bases);
         stats.ambiguous_bases_per_100kb = per_100kb(composition.ambiguous_bases, total_bases);
+        stats.ungapped_total_length = ungapped_stats.total_bases;
+        stats.gap_bases = gap_bases;
+        stats.gap_bases_frac = gap_bases_frac;
         stats.n10 = contig_stats.n10;
         stats.n25 = contig_stats.n25;
         stats.n50 = contig_stats.n50;
@@ -2701,10 +2746,16 @@ impl LargeGenomeAssembler {
         stats.l90 = contig_stats.l90;
         stats.l95 = contig_stats.l95;
         stats.l99 = contig_stats.l99;
+        stats.ungapped_n50 = ungapped_stats.n50;
+        stats.ungapped_n90 = ungapped_stats.n90;
+        stats.ungapped_n95 = ungapped_stats.n95;
+        stats.ungapped_n99 = ungapped_stats.n99;
         stats.avg_contig_len = contig_stats.avg_length;
         stats.median_contig_len = contig_stats.median_length;
         stats.au_n = contig_stats.au_n;
         stats.effective_contig_count = contig_stats.effective_count;
+        stats.ungapped_au_n = ungapped_stats.au_n;
+        stats.ungapped_effective_contig_count = ungapped_stats.effective_count;
         stats.largest = contig_stats.longest;
         stats.contigs_ge_1kb = contig_stats.contigs_ge_1kb;
         stats.contigs_ge_10kb = contig_stats.contigs_ge_10kb;
@@ -3352,9 +3403,18 @@ mod tests {
         assert_eq!(stats.n_runs_per_100kb, 0.0);
         assert_eq!(stats.n_bases_per_100kb, 0.0);
         assert_eq!(stats.ambiguous_bases_per_100kb, 0.0);
+        assert_eq!(stats.ungapped_total_length, 175);
+        assert_eq!(stats.gap_bases, 0);
+        assert_eq!(stats.gap_bases_frac, 0.0);
+        assert_eq!(stats.ungapped_n50, 100);
+        assert_eq!(stats.ungapped_n90, 25);
+        assert_eq!(stats.ungapped_n95, 25);
+        assert_eq!(stats.ungapped_n99, 25);
         assert!((stats.avg_contig_len - (175.0 / 3.0)).abs() < 1e-12);
         assert!((stats.au_n - 75.0).abs() < 1e-12);
         assert!((stats.effective_contig_count - (175.0 / 75.0)).abs() < 1e-12);
+        assert!((stats.ungapped_au_n - 75.0).abs() < 1e-12);
+        assert!((stats.ungapped_effective_contig_count - (175.0 / 75.0)).abs() < 1e-12);
     }
 
     #[test]
@@ -3362,11 +3422,18 @@ mod tests {
         let stats = AssemblyStats {
             au_n: 1234.5,
             effective_contig_count: 6.75,
+            ungapped_total_length: 98_000,
+            gap_bases: 2_000,
+            gap_bases_frac: 0.02,
+            ungapped_au_n: 1111.0,
+            ungapped_effective_contig_count: 7.5,
             ..AssemblyStats::default()
         };
 
         let rendered = stats.to_string();
+        assert!(rendered.contains("Ungapped span: 98000 bp (gaps 2000 bp, 2.00%)"));
         assert!(rendered.contains("auN/effective count: 1234.50 bp / 6.75"));
+        assert!(rendered.contains("Ungapped auN/effective count: 1111.00 bp / 7.50"));
     }
 
     #[test]
@@ -3444,6 +3511,15 @@ mod tests {
         assert!((stats.n_runs_per_100kb - 10_000.0).abs() < 1e-12);
         assert!((stats.n_bases_per_100kb - 20_000.0).abs() < 1e-12);
         assert!((stats.ambiguous_bases_per_100kb - 20_000.0).abs() < 1e-12);
+        assert_eq!(stats.ungapped_total_length, 8);
+        assert_eq!(stats.gap_bases, 2);
+        assert!((stats.gap_bases_frac - 0.2).abs() < 1e-12);
+        assert_eq!(stats.ungapped_n50, 4);
+        assert_eq!(stats.ungapped_n90, 4);
+        assert_eq!(stats.ungapped_n95, 4);
+        assert_eq!(stats.ungapped_n99, 4);
+        assert!((stats.ungapped_au_n - 4.0).abs() < 1e-12);
+        assert!((stats.ungapped_effective_contig_count - 2.0).abs() < 1e-12);
     }
 
     #[test]
@@ -3474,6 +3550,13 @@ mod tests {
         assert!((stats.n_runs_per_100kb - (3.0 * 100_000.0 / 14.0)).abs() < 1e-12);
         assert!((stats.n_bases_per_100kb - (9.0 * 100_000.0 / 14.0)).abs() < 1e-12);
         assert_eq!(stats.ambiguous_bases_per_100kb, 0.0);
+        assert_eq!(stats.ungapped_total_length, 5);
+        assert_eq!(stats.gap_bases, 9);
+        assert!((stats.gap_bases_frac - (9.0 / 14.0)).abs() < 1e-12);
+        assert_eq!(stats.ungapped_n50, 4);
+        assert_eq!(stats.ungapped_n90, 1);
+        assert_eq!(stats.ungapped_n95, 1);
+        assert_eq!(stats.ungapped_n99, 1);
     }
 
     #[test]
