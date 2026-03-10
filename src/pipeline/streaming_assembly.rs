@@ -11,7 +11,7 @@
 //! Memory usage: O(bucket_size) ≈ 2-4 GB regardless of genome size
 
 use crate::accel::CpuBackend;
-use crate::eval::metrics::{evaluate_lengths, TranscriptStats};
+use crate::eval::metrics::{evaluate_lengths_sorted_desc, TranscriptStats};
 use crate::graph::assembler::{greedy_assembly_u64, Contig};
 use crate::io::fasta::FastaWriter;
 use crate::io::fastq::{open_fastq, stream_fastq_records_checked};
@@ -326,7 +326,8 @@ impl StreamingAssembler {
             lengths.push(contig.sequence.len());
         }
 
-        let length_stats = evaluate_lengths(&lengths);
+        debug_assert!(lengths.windows(2).all(|w| w[0] >= w[1]));
+        let length_stats = evaluate_lengths_sorted_desc(&lengths);
         Ok((contigs.len(), length_stats.total_bases, length_stats))
     }
 }
@@ -353,6 +354,7 @@ pub fn streaming_assemble(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::eval::metrics::evaluate_lengths;
     use crate::kmer::kmer::KmerU64;
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
