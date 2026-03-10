@@ -62,11 +62,13 @@ pub struct StreamingAssemblyStats {
     pub contigs_produced: usize,
     pub total_contig_length: usize,
     pub average_contig_length: f64,
+    pub n25: usize,
     pub n50: usize,
     pub n75: usize,
     pub n90: usize,
     pub n95: usize,
     pub n99: usize,
+    pub l25: usize,
     pub l50: usize,
     pub l75: usize,
     pub l90: usize,
@@ -162,11 +164,13 @@ impl StreamingAssembler {
             contigs_produced,
             total_contig_length,
             average_contig_length: length_stats.avg_length,
+            n25: length_stats.n25,
             n50: length_stats.n50,
             n75: length_stats.n75,
             n90: length_stats.n90,
             n95: length_stats.n95,
             n99: length_stats.n99,
+            l25: length_stats.l25,
             l50: length_stats.l50,
             l75: length_stats.l75,
             l90: length_stats.l90,
@@ -520,10 +524,12 @@ mod tests {
 
         assert!(stats.contigs_produced > 0);
         assert!(stats.total_contig_length > 0);
+        assert!(stats.n25 >= stats.n50);
         assert!(stats.n50 >= stats.n75);
         assert!(stats.n75 >= stats.n90);
         assert!(stats.n90 >= stats.n95);
         assert!(stats.n95 >= stats.n99);
+        assert!(stats.l25 <= stats.l50);
         assert!(stats.l50 <= stats.l75);
         assert!(stats.l75 <= stats.l90);
         assert!(stats.l50 <= stats.l90);
@@ -545,11 +551,13 @@ mod tests {
 
         let expected = evaluate_lengths(&lengths);
         assert_eq!(stats.total_contig_length, expected.total_bases);
+        assert_eq!(stats.n25, expected.n25);
         assert_eq!(stats.n50, expected.n50);
         assert_eq!(stats.n75, expected.n75);
         assert_eq!(stats.n90, expected.n90);
         assert_eq!(stats.n95, expected.n95);
         assert_eq!(stats.n99, expected.n99);
+        assert_eq!(stats.l25, expected.l25);
         assert_eq!(stats.l50, expected.l50);
         assert_eq!(stats.l75, expected.l75);
         assert_eq!(stats.l90, expected.l90);

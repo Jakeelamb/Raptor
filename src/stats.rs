@@ -12,11 +12,13 @@ pub struct Stats {
     pub gc_content: f64,
     pub n_content: f64,
     pub ambiguous_content: f64,
+    pub n25: usize,
     pub n50: usize,
     pub n75: usize,
     pub n90: usize,
     pub n95: usize,
     pub n99: usize,
+    pub l25: usize,
     pub l50: usize,
     pub l75: usize,
     pub l90: usize,
@@ -94,11 +96,13 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         gc_content,
         n_content,
         ambiguous_content,
+        n25: length_stats.n25,
         n50: length_stats.n50,
         n75: length_stats.n75,
         n90: length_stats.n90,
         n95: length_stats.n95,
         n99: length_stats.n99,
+        l25: length_stats.l25,
         l50: length_stats.l50,
         l75: length_stats.l75,
         l90: length_stats.l90,
@@ -195,11 +199,13 @@ mod tests {
         assert!((stats.gc_content - 0.5).abs() < 1e-12);
         assert_eq!(stats.n_content, 0.0);
         assert_eq!(stats.ambiguous_content, 0.0);
+        assert_eq!(stats.n25, 24);
         assert_eq!(stats.n50, 24);
         assert_eq!(stats.n75, 20);
         assert_eq!(stats.n90, 20);
         assert_eq!(stats.n95, 4);
         assert_eq!(stats.n99, 4);
+        assert_eq!(stats.l25, 1);
         assert_eq!(stats.l50, 1);
         assert_eq!(stats.l75, 2);
         assert_eq!(stats.l90, 2);
@@ -241,11 +247,13 @@ mod tests {
         assert!((stats.gc_content - 0.5).abs() < 1e-12);
         assert_eq!(stats.n_content, 0.0);
         assert_eq!(stats.ambiguous_content, 0.0);
+        assert_eq!(stats.n25, 12);
         assert_eq!(stats.n50, 12);
         assert_eq!(stats.n75, 12);
         assert_eq!(stats.n90, 4);
         assert_eq!(stats.n95, 4);
         assert_eq!(stats.n99, 4);
+        assert_eq!(stats.l25, 1);
         assert_eq!(stats.l50, 1);
         assert_eq!(stats.l75, 1);
         assert_eq!(stats.l90, 2);
@@ -327,11 +335,13 @@ mod tests {
             gc_content: 0.0,
             n_content: 0.0,
             ambiguous_content: 0.0,
+            n25: 0,
             n50: 0,
             n75: 0,
             n90: 0,
             n95: 0,
             n99: 0,
+            l25: 0,
             l50: 0,
             l75: 0,
             l90: 0,
@@ -423,11 +433,13 @@ mod tests {
         assert_eq!(stats.total_length, 3);
         assert!((stats.average_length - 0.75).abs() < 1e-12);
         assert_eq!(stats.median_length, 0.5);
+        assert_eq!(stats.n25, 2);
         assert_eq!(stats.n50, 2);
         assert_eq!(stats.n75, 1);
         assert_eq!(stats.n90, 1);
         assert_eq!(stats.n95, 1);
         assert_eq!(stats.n99, 1);
+        assert_eq!(stats.l25, 1);
         assert_eq!(stats.l50, 1);
         assert_eq!(stats.l75, 2);
         assert_eq!(stats.l90, 2);

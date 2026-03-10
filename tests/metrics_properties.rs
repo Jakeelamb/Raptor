@@ -32,10 +32,12 @@ proptest! {
 
         prop_assert_eq!(stats.total, lengths.len());
         prop_assert_eq!(stats.total_bases, total);
+        prop_assert!(stats.n25 >= stats.n50);
         prop_assert!(stats.n50 >= stats.n75);
         prop_assert!(stats.n75 >= stats.n90);
         prop_assert!(stats.n90 >= stats.n95);
         prop_assert!(stats.n95 >= stats.n99);
+        prop_assert!(stats.l25 <= stats.l50);
         prop_assert!(stats.l50 <= stats.l75);
         prop_assert!(stats.l75 <= stats.l90);
         prop_assert!(stats.l50 <= stats.l90);
@@ -86,11 +88,13 @@ proptest! {
 
         prop_assert_eq!(observed.total, baseline.total);
         prop_assert_eq!(observed.total_bases, baseline.total_bases);
+        prop_assert_eq!(observed.n25, baseline.n25);
         prop_assert_eq!(observed.n50, baseline.n50);
         prop_assert_eq!(observed.n75, baseline.n75);
         prop_assert_eq!(observed.n90, baseline.n90);
         prop_assert_eq!(observed.n95, baseline.n95);
         prop_assert_eq!(observed.n99, baseline.n99);
+        prop_assert_eq!(observed.l25, baseline.l25);
         prop_assert_eq!(observed.l50, baseline.l50);
         prop_assert_eq!(observed.l75, baseline.l75);
         prop_assert_eq!(observed.l90, baseline.l90);
@@ -129,11 +133,13 @@ proptest! {
         prop_assert_eq!(baseline.total, lengths.len());
         prop_assert_eq!(baseline.total_bases, total);
         if total == 0 {
+            prop_assert_eq!(baseline.n25, 0);
             prop_assert_eq!(baseline.n50, 0);
             prop_assert_eq!(baseline.n75, 0);
             prop_assert_eq!(baseline.n90, 0);
             prop_assert_eq!(baseline.n95, 0);
             prop_assert_eq!(baseline.n99, 0);
+            prop_assert_eq!(baseline.l25, 0);
             prop_assert_eq!(baseline.l50, 0);
             prop_assert_eq!(baseline.l75, 0);
             prop_assert_eq!(baseline.l90, 0);
@@ -151,11 +157,13 @@ proptest! {
 
         prop_assert_eq!(observed.total, baseline.total);
         prop_assert_eq!(observed.total_bases, baseline.total_bases);
+        prop_assert_eq!(observed.n25, baseline.n25);
         prop_assert_eq!(observed.n50, baseline.n50);
         prop_assert_eq!(observed.n75, baseline.n75);
         prop_assert_eq!(observed.n90, baseline.n90);
         prop_assert_eq!(observed.n95, baseline.n95);
         prop_assert_eq!(observed.n99, baseline.n99);
+        prop_assert_eq!(observed.l25, baseline.l25);
         prop_assert_eq!(observed.l50, baseline.l50);
         prop_assert_eq!(observed.l75, baseline.l75);
         prop_assert_eq!(observed.l90, baseline.l90);
@@ -196,11 +204,13 @@ proptest! {
         prop_assert_eq!(observed.get("total_length").copied().unwrap_or(-1.0) as usize, expected.total_bases);
         prop_assert_eq!(observed.get("mean_length").copied().unwrap_or(-1.0), expected.avg_length);
         prop_assert_eq!(observed.get("median_length").copied().unwrap_or(-1.0), expected.median_length);
+        prop_assert_eq!(observed.get("n25").copied().unwrap_or(-1.0) as usize, expected.n25);
         prop_assert_eq!(observed.get("n50").copied().unwrap_or(-1.0) as usize, expected.n50);
         prop_assert_eq!(observed.get("n75").copied().unwrap_or(-1.0) as usize, expected.n75);
         prop_assert_eq!(observed.get("n90").copied().unwrap_or(-1.0) as usize, expected.n90);
         prop_assert_eq!(observed.get("n95").copied().unwrap_or(-1.0) as usize, expected.n95);
         prop_assert_eq!(observed.get("n99").copied().unwrap_or(-1.0) as usize, expected.n99);
+        prop_assert_eq!(observed.get("l25").copied().unwrap_or(-1.0) as usize, expected.l25);
         prop_assert_eq!(observed.get("l50").copied().unwrap_or(-1.0) as usize, expected.l50);
         prop_assert_eq!(observed.get("l75").copied().unwrap_or(-1.0) as usize, expected.l75);
         prop_assert_eq!(observed.get("l90").copied().unwrap_or(-1.0) as usize, expected.l90);
@@ -242,11 +252,13 @@ proptest! {
             "total_length",
             "mean_length",
             "median_length",
+            "n25",
             "n50",
             "n75",
             "n90",
             "n95",
             "n99",
+            "l25",
             "l50",
             "l75",
             "l90",

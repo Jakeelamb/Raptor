@@ -3,11 +3,13 @@ pub struct TranscriptStats {
     pub total_bases: usize,
     pub avg_length: f64,
     pub median_length: f64,
+    pub n25: usize,
     pub n50: usize,
     pub n75: usize,
     pub n90: usize,
     pub n95: usize,
     pub n99: usize,
+    pub l25: usize,
     pub l50: usize,
     pub l75: usize,
     pub l90: usize,
@@ -40,11 +42,13 @@ fn empty_transcript_stats() -> TranscriptStats {
         total_bases: 0,
         avg_length: 0.0,
         median_length: 0.0,
+        n25: 0,
         n50: 0,
         n75: 0,
         n90: 0,
         n95: 0,
         n99: 0,
+        l25: 0,
         l50: 0,
         l75: 0,
         l90: 0,
@@ -230,6 +234,7 @@ pub fn evaluate_lengths_sorted_desc(sorted_lengths: &[usize]) -> TranscriptStats
         .fold(0usize, |acc, &len| acc.saturating_add(len));
     let avg = total_len as f64 / sorted_lengths.len() as f64;
     let median_length = compute_median_sorted_desc(sorted_lengths);
+    let (n25, l25) = nx_lx(sorted_lengths, total_len, 1, 4);
     let (n50, l50) = nx_lx(sorted_lengths, total_len, 1, 2);
     let (n75, l75) = nx_lx(sorted_lengths, total_len, 3, 4);
     let (n90, l90) = nx_lx(sorted_lengths, total_len, 9, 10);
@@ -261,11 +266,13 @@ pub fn evaluate_lengths_sorted_desc(sorted_lengths: &[usize]) -> TranscriptStats
         total_bases: total_len,
         avg_length: avg,
         median_length,
+        n25,
         n50,
         n75,
         n90,
         n95,
         n99,
+        l25,
         l50,
         l75,
         l90,
@@ -313,11 +320,13 @@ mod tests {
         assert_eq!(stats.total_bases, 48);
         assert_eq!(stats.avg_length, 16.0);
         assert_eq!(stats.median_length, 20.0);
+        assert_eq!(stats.n25, 24);
         assert_eq!(stats.n50, 24);
         assert_eq!(stats.n75, 20);
         assert_eq!(stats.n90, 20);
         assert_eq!(stats.n95, 4);
         assert_eq!(stats.n99, 4);
+        assert_eq!(stats.l25, 1);
         assert_eq!(stats.l50, 1);
         assert_eq!(stats.l75, 2);
         assert_eq!(stats.l90, 2);
@@ -386,6 +395,8 @@ mod tests {
     fn evaluate_lengths_reports_even_count_median_as_midpoint() {
         let stats = evaluate_lengths(&[10, 8, 6, 4]);
         assert_eq!(stats.median_length, 7.0);
+        assert_eq!(stats.n25, 10);
+        assert_eq!(stats.l25, 1);
     }
 
     #[test]
@@ -414,11 +425,13 @@ mod tests {
         assert_eq!(observed.total, expected.total);
         assert_eq!(observed.total_bases, expected.total_bases);
         assert!((observed.median_length - expected.median_length).abs() < 1e-12);
+        assert_eq!(observed.n25, expected.n25);
         assert_eq!(observed.n50, expected.n50);
         assert_eq!(observed.n75, expected.n75);
         assert_eq!(observed.n90, expected.n90);
         assert_eq!(observed.n95, expected.n95);
         assert_eq!(observed.n99, expected.n99);
+        assert_eq!(observed.l25, expected.l25);
         assert_eq!(observed.l50, expected.l50);
         assert_eq!(observed.l75, expected.l75);
         assert_eq!(observed.l90, expected.l90);
@@ -443,11 +456,13 @@ mod tests {
         assert_eq!(stats.total_bases, 0);
         assert_eq!(stats.avg_length, 0.0);
         assert_eq!(stats.median_length, 0.0);
+        assert_eq!(stats.n25, 0);
         assert_eq!(stats.n50, 0);
         assert_eq!(stats.n75, 0);
         assert_eq!(stats.n90, 0);
         assert_eq!(stats.n95, 0);
         assert_eq!(stats.n99, 0);
+        assert_eq!(stats.l25, 0);
         assert_eq!(stats.l50, 0);
         assert_eq!(stats.l75, 0);
         assert_eq!(stats.l90, 0);
