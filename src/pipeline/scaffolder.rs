@@ -28,6 +28,8 @@ pub struct ScaffoldStats {
     pub scaffold_n50: usize,
     pub scaffold_n75: usize,
     pub scaffold_n90: usize,
+    pub scaffold_n95: usize,
+    pub scaffold_n99: usize,
     pub scaffold_au_n: f64,
     pub longest_scaffold: usize,
     pub total_length: usize,
@@ -119,6 +121,8 @@ fn update_scaffold_continuity(stats: &mut ScaffoldStats, scaffold_lengths: &mut 
     stats.scaffold_n50 = continuity.n50;
     stats.scaffold_n75 = continuity.n75;
     stats.scaffold_n90 = continuity.n90;
+    stats.scaffold_n95 = continuity.n95;
+    stats.scaffold_n99 = continuity.n99;
     stats.scaffold_au_n = continuity.au_n;
     stats.longest_scaffold = continuity.longest;
 }
@@ -437,8 +441,8 @@ pub fn scaffold_contigs(
     update_scaffold_continuity(&mut stats, &mut scaffold_lengths);
 
     info!(
-        "Scaffolding complete: {} scaffolds, N50 = {} bp, N90 = {} bp",
-        stats.num_scaffolds, stats.scaffold_n50, stats.scaffold_n90
+        "Scaffolding complete: {} scaffolds, N50 = {} bp, N90 = {} bp, N95 = {} bp",
+        stats.num_scaffolds, stats.scaffold_n50, stats.scaffold_n90, stats.scaffold_n95
     );
     Ok(stats)
 }
@@ -598,6 +602,8 @@ mod tests {
         assert_eq!(stats.scaffold_n50, 100);
         assert_eq!(stats.scaffold_n75, 50);
         assert_eq!(stats.scaffold_n90, 25);
+        assert_eq!(stats.scaffold_n95, 25);
+        assert_eq!(stats.scaffold_n99, 25);
         assert_eq!(stats.longest_scaffold, 100);
         assert!((stats.scaffold_au_n - 75.0).abs() < 1e-12);
     }

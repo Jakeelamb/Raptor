@@ -787,6 +787,8 @@ fn main() {
                                 println!("  N50: {} bp", scaffold_stats.scaffold_n50);
                                 println!("  N75: {} bp", scaffold_stats.scaffold_n75);
                                 println!("  N90: {} bp", scaffold_stats.scaffold_n90);
+                                println!("  N95: {} bp", scaffold_stats.scaffold_n95);
+                                println!("  N99: {} bp", scaffold_stats.scaffold_n99);
                                 println!("  auN: {:.2} bp", scaffold_stats.scaffold_au_n);
                                 println!("  Longest: {} bp", scaffold_stats.longest_scaffold);
                             }
