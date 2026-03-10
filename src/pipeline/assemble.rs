@@ -616,6 +616,7 @@ pub fn assemble_reads_with_gpu(
     let mut k: usize;
 
     let mut records: Vec<FastqRecord> = Vec::new();
+    let need_sequence_only_records = polish || (isoforms && (polish_isoforms || compute_tpm));
 
     // Use streaming mode for memory efficiency with large files
     let cpu_backend = CpuBackend::new();
@@ -675,15 +676,33 @@ pub fn assemble_reads_with_gpu(
         kmer_counts_u64.len()
     );
 
-    // Sequence strings are no longer needed after k-mer counting.
-    // Releasing this buffer early reduces peak RSS during graph cleanup/polishing.
-    let released_records = sequences.len();
-    sequences.clear();
-    sequences.shrink_to_fit();
-    info!(
-        "Released {} input sequences from memory after k-mer counting",
-        released_records
-    );
+    if need_sequence_only_records {
+        records = sequences
+            .into_iter()
+            .map(|sequence| {
+                sequence_only_record(FastqRecord {
+                    header: String::new(),
+                    sequence,
+                    plus: String::new(),
+                    quality: String::new(),
+                })
+            })
+            .collect();
+        info!(
+            "Reused {} input sequences for polishing/TPM (no second FASTQ pass)",
+            records.len()
+        );
+    } else {
+        // Sequence strings are no longer needed after k-mer counting.
+        // Releasing this buffer early reduces peak RSS during graph cleanup/polishing.
+        let released_records = sequences.len();
+        sequences.clear();
+        sequences.shrink_to_fit();
+        info!(
+            "Released {} input sequences from memory after k-mer counting",
+            released_records
+        );
+    }
 
     // Build adjacency table for assembly
     info!("Building adjacency table...");
@@ -703,18 +722,6 @@ pub fn assemble_reads_with_gpu(
         info!(
             "Graph cleanup: removed {} tips, collapsed {} bubbles",
             tips_removed, bubbles_collapsed
-        );
-    }
-
-    // Keep records for polishing if needed
-    if polish || (isoforms && (polish_isoforms || compute_tpm)) {
-        let reader = try_open_fastq(input_path)?;
-        records = stream_fastq_records_checked(reader)
-            .map(|record| record.map(sequence_only_record))
-            .collect::<io::Result<Vec<_>>>()?;
-        info!(
-            "Loaded {} reads in sequence-only form for polishing/TPM",
-            records.len()
         );
     }
 
