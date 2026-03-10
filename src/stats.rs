@@ -3,7 +3,7 @@ use crate::io::fasta::try_open_fasta;
 use serde::Serialize;
 use std::io::BufRead;
 
-const TSV_HEADER: &str = "contigs\ttotal_len\tavg_len\tmedian_len\tgc_bases\tacgt_bases\tn_bases\tambiguous_bases\tmean_rle_ratio\tlength_weighted_rle_ratio\ttotal_rle_runs\tgc_content\tn_content\tambiguous_content\tn10\tn25\tn50\tn75\tn90\tn95\tn99\tl10\tl25\tl50\tl75\tl90\tl95\tl99\taun\teffective_contig_count\tungapped_effective_contig_count\tungapped_total_len\tungapped_n50\tungapped_aun\tlongest\tcontigs_ge_1kb\tcontigs_ge_10kb\tcontigs_ge_50kb\tcontigs_ge_100kb\tcontigs_ge_1mb\tbases_ge_1kb\tbases_ge_10kb\tbases_ge_50kb\tbases_ge_100kb\tbases_ge_1mb\tcontigs_ge_1kb_frac\tcontigs_ge_10kb_frac\tcontigs_ge_50kb_frac\tcontigs_ge_100kb_frac\tcontigs_ge_1mb_frac\tbases_ge_1kb_frac\tbases_ge_10kb_frac\tbases_ge_50kb_frac\tbases_ge_100kb_frac\tbases_ge_1mb_frac\tn_run_count\tmax_n_run\tcontigs_with_n\tcontigs_with_ambiguous\tcontigs_all_acgt\tcontigs_with_n_frac\tcontigs_with_ambiguous_frac\tcontigs_all_acgt_frac";
+const TSV_HEADER: &str = "contigs\ttotal_len\tavg_len\tmedian_len\tgc_bases\tacgt_bases\tn_bases\tambiguous_bases\tmean_rle_ratio\tlength_weighted_rle_ratio\ttotal_rle_runs\tgc_content\tn_content\tambiguous_content\tn10\tn25\tn50\tn75\tn90\tn95\tn99\tl10\tl25\tl50\tl75\tl90\tl95\tl99\taun\teffective_contig_count\tungapped_effective_contig_count\tungapped_total_len\tungapped_n50\tungapped_aun\tlongest\tcontigs_ge_1kb\tcontigs_ge_10kb\tcontigs_ge_50kb\tcontigs_ge_100kb\tcontigs_ge_1mb\tbases_ge_1kb\tbases_ge_10kb\tbases_ge_50kb\tbases_ge_100kb\tbases_ge_1mb\tcontigs_ge_1kb_frac\tcontigs_ge_10kb_frac\tcontigs_ge_50kb_frac\tcontigs_ge_100kb_frac\tcontigs_ge_1mb_frac\tbases_ge_1kb_frac\tbases_ge_10kb_frac\tbases_ge_50kb_frac\tbases_ge_100kb_frac\tbases_ge_1mb_frac\tn_run_count\tmax_n_run\tmean_n_run_length\tn_runs_per_100kb\tn_bases_per_100kb\tambiguous_bases_per_100kb\tcontigs_with_n\tcontigs_with_ambiguous\tcontigs_all_acgt\tcontigs_with_n_frac\tcontigs_with_ambiguous_frac\tcontigs_all_acgt_frac";
 
 #[derive(Serialize)]
 pub struct Stats {
@@ -236,6 +236,10 @@ pub fn tsv_row(stats: &Stats) -> String {
     push_fmt!("{:.6}", stats.bases_ge_1mb_frac);
     push_fmt!("{}", stats.n_run_count);
     push_fmt!("{}", stats.max_n_run);
+    push_fmt!("{:.6}", stats.mean_n_run_length);
+    push_fmt!("{:.6}", stats.n_runs_per_100kb);
+    push_fmt!("{:.6}", stats.n_bases_per_100kb);
+    push_fmt!("{:.6}", stats.ambiguous_bases_per_100kb);
     push_fmt!("{}", stats.contigs_with_n);
     push_fmt!("{}", stats.contigs_with_ambiguous);
     push_fmt!("{}", stats.contigs_all_acgt);
@@ -700,6 +704,35 @@ mod tests {
         assert_eq!(row_by_name.get("n50").copied(), Some("6"));
         assert_eq!(row_by_name.get("ungapped_n50").copied(), Some("4"));
         assert_eq!(row_by_name.get("ungapped_aun").copied(), Some("3.57"));
+    }
+
+    #[test]
+    fn stats_tsv_row_reports_n_run_density_metrics() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, ">contig_1").unwrap();
+        writeln!(file, "AANN").unwrap();
+        writeln!(file, ">contig_2").unwrap();
+        writeln!(file, "NNRA").unwrap();
+
+        let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
+        let header_cols: Vec<&str> = tsv_header().split('\t').collect();
+        let row = tsv_row(&stats);
+        let row_cols: Vec<&str> = row.split('\t').collect();
+        let row_by_name: HashMap<&str, &str> = header_cols
+            .iter()
+            .copied()
+            .zip(row_cols.iter().copied())
+            .collect();
+
+        assert_eq!(row_by_name.get("n_run_count").copied(), Some("2"));
+        assert_eq!(row_by_name.get("max_n_run").copied(), Some("2"));
+        assert_eq!(row_by_name.get("mean_n_run_length").copied(), Some("2.000000"));
+        assert_eq!(row_by_name.get("n_runs_per_100kb").copied(), Some("25000.000000"));
+        assert_eq!(row_by_name.get("n_bases_per_100kb").copied(), Some("50000.000000"));
+        assert_eq!(
+            row_by_name.get("ambiguous_bases_per_100kb").copied(),
+            Some("12500.000000")
+        );
     }
 
     proptest! {
