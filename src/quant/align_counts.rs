@@ -1,6 +1,7 @@
 use crate::graph::transcript::Transcript;
 use std::collections::HashMap;
-use std::io::Result;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Error, ErrorKind, Result};
 
 /// Estimates transcript expression in TPM from a BAM alignment file
 ///
@@ -139,25 +140,119 @@ pub fn create_expression_matrix(
 /// # Returns
 /// * HashMap mapping sample names to vectors of counts
 pub fn load_counts_matrix(
-    _csv_path: &str,
+    csv_path: &str,
     transcripts: &[Transcript],
 ) -> Result<HashMap<String, Vec<f64>>> {
+    let file = File::open(csv_path)?;
+    let reader = BufReader::new(file);
+    let transcript_index: HashMap<usize, usize> = transcripts
+        .iter()
+        .enumerate()
+        .map(|(idx, tx)| (tx.id, idx))
+        .collect();
+
     let mut counts_matrix = HashMap::new();
+    let mut delimiter = ',';
+    let mut sample_names: Vec<String> = Vec::new();
+    let mut saw_header = false;
 
-    // In a real implementation, this would parse the CSV file
-    // For demonstration, we'll create random counts for samples
-    let sample_names = vec!["sample1", "sample2", "sample3"];
+    for (line_idx, line_result) in reader.lines().enumerate() {
+        let line_number = line_idx + 1;
+        let line = line_result?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
 
-    for sample in &sample_names {
-        let counts: Vec<f64> = transcripts
-            .iter()
-            .map(|t| {
-                // Random count based on transcript length
-                (t.length as f64 / 100.0) * ((t.id as f64 % 5.0) + 0.5)
-            })
-            .collect();
+        if !saw_header {
+            delimiter = if trimmed.contains('\t') { '\t' } else { ',' };
+            let fields: Vec<&str> = trimmed.split(delimiter).map(str::trim).collect();
+            if fields.len() < 2 {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "counts matrix header must include transcript id and at least one sample at line {}",
+                        line_number
+                    ),
+                ));
+            }
 
-        counts_matrix.insert(sample.to_string(), counts);
+            for sample_name in fields.into_iter().skip(1) {
+                if sample_name.is_empty() {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        format!(
+                            "counts matrix header contains an empty sample name at line {}",
+                            line_number
+                        ),
+                    ));
+                }
+                sample_names.push(sample_name.to_string());
+                counts_matrix.insert(sample_name.to_string(), vec![0.0; transcripts.len()]);
+            }
+
+            saw_header = true;
+            continue;
+        }
+
+        let fields: Vec<&str> = trimmed.split(delimiter).map(str::trim).collect();
+        if fields.is_empty() || fields[0].is_empty() {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("missing transcript id at line {}", line_number),
+            ));
+        }
+
+        let transcript_id = fields[0].parse::<usize>().map_err(|_| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "invalid transcript id '{}' at line {}",
+                    fields[0], line_number
+                ),
+            )
+        })?;
+
+        let Some(&tx_idx) = transcript_index.get(&transcript_id) else {
+            continue;
+        };
+
+        for (sample_idx, sample_name) in sample_names.iter().enumerate() {
+            let raw = fields.get(sample_idx + 1).copied().unwrap_or("");
+            if raw.is_empty() {
+                continue;
+            }
+
+            let value = raw.parse::<f64>().map_err(|_| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "invalid count '{}' for sample '{}' at line {}",
+                        raw, sample_name, line_number
+                    ),
+                )
+            })?;
+            if !value.is_finite() || value < 0.0 {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "count must be finite and non-negative for sample '{}' at line {}",
+                        sample_name, line_number
+                    ),
+                ));
+            }
+
+            if let Some(sample_counts) = counts_matrix.get_mut(sample_name) {
+                sample_counts[tx_idx] += value;
+            }
+        }
+    }
+
+    if !saw_header {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "counts matrix is missing a header row",
+        ));
     }
 
     Ok(counts_matrix)
@@ -226,4 +321,66 @@ pub fn estimate_transcript_abundances_from_alignments(
 ) -> Result<Vec<f64>> {
     // This would normally parse the BAM file, but for demonstration we'll use the other function
     estimate_tpm_from_bam(_bam_path, transcripts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::load_counts_matrix;
+    use crate::graph::transcript::Transcript;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn make_transcript(id: usize) -> Transcript {
+        Transcript {
+            id,
+            sequence: "ACGT".to_string(),
+            path: vec![id],
+            confidence: 1.0,
+            length: 4,
+            strand: '+',
+            tpm: None,
+            splicing: "linear".to_string(),
+        }
+    }
+
+    #[test]
+    fn load_counts_matrix_parses_csv_and_aggregates_duplicate_ids() {
+        let transcripts = vec![make_transcript(42), make_transcript(7), make_transcript(1)];
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "transcript_id,sample_a,sample_b").unwrap();
+        writeln!(file, "7,1.5,2.0").unwrap();
+        writeln!(file, "1,0.0,3.0").unwrap();
+        writeln!(file, "42,4.0,5.0").unwrap();
+        writeln!(file, "7,0.5,1.0").unwrap();
+        writeln!(file, "999,100.0,100.0").unwrap();
+
+        let observed = load_counts_matrix(file.path().to_str().unwrap(), &transcripts).unwrap();
+        assert_eq!(observed["sample_a"], vec![4.0, 2.0, 0.0]);
+        assert_eq!(observed["sample_b"], vec![5.0, 3.0, 3.0]);
+    }
+
+    #[test]
+    fn load_counts_matrix_parses_tsv_and_treats_missing_values_as_zero() {
+        let transcripts = vec![make_transcript(42), make_transcript(7)];
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "# comment").unwrap();
+        writeln!(file, "transcript_id\ts1\ts2").unwrap();
+        writeln!(file, "7\t1.0\t").unwrap();
+        writeln!(file, "42\t2.0").unwrap();
+
+        let observed = load_counts_matrix(file.path().to_str().unwrap(), &transcripts).unwrap();
+        assert_eq!(observed["s1"], vec![2.0, 1.0]);
+        assert_eq!(observed["s2"], vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn load_counts_matrix_rejects_invalid_counts() {
+        let transcripts = vec![make_transcript(0)];
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "transcript_id,sample").unwrap();
+        writeln!(file, "0,NaN").unwrap();
+
+        let err = load_counts_matrix(file.path().to_str().unwrap(), &transcripts).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
 }
