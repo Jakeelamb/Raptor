@@ -1,7 +1,7 @@
 use log::{info, warn};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 use std::time::Instant;
 
@@ -16,32 +16,84 @@ use crate::io::transcript_io::{
 
 /// Load expression data from a TSV file
 /// Format: contig_id, coverage
-pub fn load_expression_data(expression_path: &str) -> HashMap<usize, f64> {
-    let file = File::open(expression_path)
-        .unwrap_or_else(|_| panic!("Failed to open expression file: {}", expression_path));
+pub fn load_expression_data(expression_path: &str) -> io::Result<HashMap<usize, f64>> {
+    let file = File::open(expression_path)?;
     let reader = BufReader::new(file);
 
     let mut expression_data = HashMap::new();
 
-    for line in reader.lines() {
-        let line = line.expect("Failed to read line");
-        if line.starts_with('#') || line.trim().is_empty() {
+    for (line_number, line_result) in reader.lines().enumerate() {
+        let line = line_result?;
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') || trimmed.is_empty() {
             continue;
         }
 
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() < 2 {
-            warn!("Invalid line in expression data: {}", line);
-            continue;
+        let mut parts = trimmed.split_whitespace();
+        let id_token = parts.next().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "invalid expression row at line {}: missing contig id",
+                    line_number + 1
+                ),
+            )
+        })?;
+        let coverage_token = parts.next().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "invalid expression row at line {}: missing coverage value",
+                    line_number + 1
+                ),
+            )
+        })?;
+
+        let contig_id = id_token.parse::<usize>().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "invalid expression row at line {}: contig id '{}' is not a usize",
+                    line_number + 1,
+                    id_token
+                ),
+            )
+        })?;
+
+        let coverage = coverage_token.parse::<f64>().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "invalid expression row at line {}: coverage '{}' is not a finite float",
+                    line_number + 1,
+                    coverage_token
+                ),
+            )
+        })?;
+        if !coverage.is_finite() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "invalid expression row at line {}: coverage must be finite",
+                    line_number + 1
+                ),
+            ));
         }
-
-        let contig_id = parts[0].parse::<usize>().unwrap_or_else(|_| {
-            panic!("Invalid contig id: {}", parts[0]);
-        });
-
-        let coverage = parts[1].parse::<f64>().unwrap_or_else(|_| {
-            panic!("Invalid coverage value: {}", parts[1]);
-        });
+        if coverage < 0.0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "invalid expression row at line {}: coverage must be non-negative",
+                    line_number + 1
+                ),
+            ));
+        }
+        if parts.next().is_some() {
+            warn!(
+                "Ignoring extra columns in expression row at line {}",
+                line_number + 1
+            );
+        }
 
         expression_data.insert(contig_id, coverage);
     }
@@ -50,7 +102,47 @@ pub fn load_expression_data(expression_path: &str) -> HashMap<usize, f64> {
         "Loaded expression data for {} contigs",
         expression_data.len()
     );
-    expression_data
+    Ok(expression_data)
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct OutputFormats {
+    fasta: bool,
+    gtf: bool,
+    gfa: bool,
+}
+
+fn parse_output_formats(formats: &str) -> io::Result<OutputFormats> {
+    let mut parsed = OutputFormats::default();
+
+    for format in formats
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        match format.to_ascii_lowercase().as_str() {
+            "fasta" => parsed.fasta = true,
+            "gtf" => parsed.gtf = true,
+            "gfa" => parsed.gfa = true,
+            unsupported => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "unsupported isoform output format '{unsupported}' (supported: fasta, gtf, gfa)"
+                    ),
+                ))
+            }
+        }
+    }
+
+    if !parsed.fasta && !parsed.gtf && !parsed.gfa {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "at least one isoform output format is required (fasta, gtf, gfa)",
+        ));
+    }
+
+    Ok(parsed)
 }
 
 /// Run the isoform reconstruction pipeline
@@ -79,7 +171,7 @@ pub fn run_isoform_reconstruction(
 
     // Load expression data
     info!("Loading expression data");
-    let expression_data = load_expression_data(expression_path);
+    let expression_data = load_expression_data(expression_path)?;
 
     // Build isoform graph
     info!("Building isoform graph");
@@ -156,23 +248,23 @@ pub fn run_isoform_reconstruction(
     }
 
     // Output transcripts in requested formats
-    let format_list: Vec<&str> = formats.split(',').collect();
+    let output_formats = parse_output_formats(formats)?;
 
-    if format_list.contains(&"fasta") {
+    if output_formats.fasta {
         let fasta_path = format!("{}.transcripts.fa", output_prefix);
         info!("Writing transcripts to FASTA: {}", fasta_path);
         let mut fasta_writer = TranscriptFastaWriter::new(&fasta_path);
         fasta_writer.write_transcripts(&transcripts)?;
     }
 
-    if format_list.contains(&"gtf") {
+    if output_formats.gtf {
         let gtf_path = format!("{}.transcripts.gtf", output_prefix);
         info!("Writing transcripts to GTF: {}", gtf_path);
         let mut gtf_writer = TranscriptGtfWriter::new(&gtf_path);
         gtf_writer.write_transcripts(&transcripts)?;
     }
 
-    if format_list.contains(&"gfa") {
+    if output_formats.gfa {
         let gfa_out_path = format!("{}.transcripts.gfa", output_prefix);
 
         // If input GFA exists, copy it to output GFA first
@@ -214,4 +306,79 @@ pub fn run_isoform_reconstruction(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{load_expression_data, parse_output_formats};
+    use std::io::{ErrorKind, Write};
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn load_expression_data_parses_valid_rows_and_ignores_comments() {
+        let mut file = NamedTempFile::new().expect("create temp expression file");
+        writeln!(file, "# comment").expect("write comment");
+        writeln!(file, "0\t10.5").expect("write tsv row");
+        writeln!(file, "  ").expect("write empty row");
+        writeln!(file, "1 8.25 extra").expect("write row with extra columns");
+        writeln!(file, "1\t9.75").expect("write duplicate id overwrite row");
+        file.flush().expect("flush expression file");
+
+        let expression = load_expression_data(file.path().to_str().expect("utf8 path"))
+            .expect("valid expression file should parse");
+        assert_eq!(expression.len(), 2);
+        assert_eq!(expression.get(&0), Some(&10.5));
+        assert_eq!(expression.get(&1), Some(&9.75));
+    }
+
+    #[test]
+    fn load_expression_data_rejects_invalid_rows_with_context() {
+        let mut file = NamedTempFile::new().expect("create temp expression file");
+        writeln!(file, "abc\t10.0").expect("write invalid id row");
+        file.flush().expect("flush expression file");
+
+        let err = load_expression_data(file.path().to_str().expect("utf8 path"))
+            .expect_err("invalid row must fail");
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        assert!(err.to_string().contains("line 1"));
+    }
+
+    #[test]
+    fn load_expression_data_rejects_non_finite_and_negative_coverage() {
+        let mut non_finite = NamedTempFile::new().expect("create temp expression file");
+        writeln!(non_finite, "0\tNaN").expect("write non-finite row");
+        non_finite.flush().expect("flush expression file");
+        let err = load_expression_data(non_finite.path().to_str().expect("utf8 path"))
+            .expect_err("NaN coverage must fail");
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        assert!(err.to_string().contains("finite"));
+
+        let mut negative = NamedTempFile::new().expect("create temp expression file");
+        writeln!(negative, "0\t-1.0").expect("write negative row");
+        negative.flush().expect("flush expression file");
+        let err = load_expression_data(negative.path().to_str().expect("utf8 path"))
+            .expect_err("negative coverage must fail");
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        assert!(err.to_string().contains("non-negative"));
+    }
+
+    #[test]
+    fn parse_output_formats_normalizes_case_and_whitespace() {
+        let parsed = parse_output_formats("  FASTA, gTf ,gfa ")
+            .expect("mixed-case formats should parse successfully");
+        assert!(parsed.fasta);
+        assert!(parsed.gtf);
+        assert!(parsed.gfa);
+    }
+
+    #[test]
+    fn parse_output_formats_rejects_unknown_and_empty_input() {
+        let unknown = parse_output_formats("fasta,bed")
+            .expect_err("unsupported format should return an error");
+        assert_eq!(unknown.kind(), ErrorKind::InvalidInput);
+
+        let empty =
+            parse_output_formats("  , ").expect_err("empty format string should return an error");
+        assert_eq!(empty.kind(), ErrorKind::InvalidInput);
+    }
 }
