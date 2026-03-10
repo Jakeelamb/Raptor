@@ -11,25 +11,44 @@ pub type IsoformGraph = DiGraphMap<usize, f32>;
 /// Build a graph of potential isoforms from contigs and their overlaps
 pub fn build_isoform_graph(
     contigs: &HashMap<usize, String>,
-    overlaps: &Vec<(usize, usize, usize)>,
+    overlaps: &[(usize, usize, usize)],
     expression_data: &HashMap<usize, f64>,
 ) -> IsoformGraph {
     // Create a new directed graph
     let mut graph = DiGraphMap::new();
 
-    // Add nodes for each contig
-    for &contig_id in contigs.keys() {
+    // Add nodes for each contig in sorted order for deterministic traversal.
+    let mut contig_ids: Vec<usize> = contigs.keys().copied().collect();
+    contig_ids.sort_unstable();
+    for contig_id in contig_ids {
         graph.add_node(contig_id);
     }
 
     debug!("Added {} nodes to isoform graph", graph.node_count());
 
-    // Add edges for overlaps
+    // Coalesce duplicate overlaps by taking the strongest overlap length.
+    // This makes edge weights deterministic regardless of input record order.
+    let mut best_overlaps: HashMap<(usize, usize), usize> = HashMap::new();
     for &(from_id, to_id, overlap_len) in overlaps {
-        // Calculate edge weight based on overlap length and expression
+        // Ignore overlaps for missing contig IDs to avoid silently introducing
+        // disconnected synthetic nodes through GraphMap::add_edge.
+        if !contigs.contains_key(&from_id) || !contigs.contains_key(&to_id) {
+            continue;
+        }
+
+        best_overlaps
+            .entry((from_id, to_id))
+            .and_modify(|best| *best = (*best).max(overlap_len))
+            .or_insert(overlap_len);
+    }
+
+    let mut dedup_edges: Vec<((usize, usize), usize)> = best_overlaps.into_iter().collect();
+    dedup_edges.sort_unstable_by_key(|((from_id, to_id), _)| (*from_id, *to_id));
+
+    // Add edges for overlaps.
+    for ((from_id, to_id), overlap_len) in dedup_edges {
         let weight = calculate_edge_weight(from_id, to_id, overlap_len, expression_data);
 
-        // Add edge
         graph.add_edge(from_id, to_id, weight);
     }
 
@@ -84,6 +103,7 @@ pub fn find_start_nodes(graph: &IsoformGraph) -> Vec<usize> {
         }
     }
 
+    start_nodes.sort_unstable();
     debug!("Found {} potential start nodes", start_nodes.len());
     start_nodes
 }
@@ -102,6 +122,7 @@ pub fn find_end_nodes(graph: &IsoformGraph) -> Vec<usize> {
         }
     }
 
+    end_nodes.sort_unstable();
     debug!("Found {} potential end nodes", end_nodes.len());
     end_nodes
 }
@@ -157,5 +178,59 @@ mod tests {
         // Test with missing expression data
         let weight_missing = calculate_edge_weight(1, 3, 50, &expression);
         assert!((weight_missing - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn build_graph_deduplicates_overlaps_and_is_order_invariant() {
+        let mut contigs = HashMap::new();
+        contigs.insert(1, "AAAA".to_string());
+        contigs.insert(2, "CCCC".to_string());
+
+        let mut expression = HashMap::new();
+        expression.insert(1, 10.0);
+        expression.insert(2, 8.0);
+
+        let overlaps_a = vec![(1, 2, 5), (1, 2, 11), (1, 2, 7)];
+        let overlaps_b = vec![(1, 2, 7), (1, 2, 5), (1, 2, 11)];
+
+        let graph_a = build_isoform_graph(&contigs, &overlaps_a, &expression);
+        let graph_b = build_isoform_graph(&contigs, &overlaps_b, &expression);
+
+        assert_eq!(graph_a.edge_count(), 1);
+        assert_eq!(graph_b.edge_count(), 1);
+
+        let expected = calculate_edge_weight(1, 2, 11, &expression);
+        assert_eq!(graph_a.edge_weight(1, 2), Some(&expected));
+        assert_eq!(graph_b.edge_weight(1, 2), Some(&expected));
+    }
+
+    #[test]
+    fn build_graph_ignores_unknown_overlap_nodes() {
+        let mut contigs = HashMap::new();
+        contigs.insert(1, "AAAA".to_string());
+        contigs.insert(2, "CCCC".to_string());
+
+        let expression = HashMap::new();
+        let overlaps = vec![(1, 2, 8), (1, 99, 5), (42, 2, 5)];
+        let graph = build_isoform_graph(&contigs, &overlaps, &expression);
+
+        assert_eq!(graph.node_count(), 2);
+        assert_eq!(graph.edge_count(), 1);
+        assert!(graph.contains_edge(1, 2));
+    }
+
+    #[test]
+    fn start_and_end_nodes_are_sorted_for_deterministic_callers() {
+        let mut graph = DiGraphMap::new();
+        graph.add_node(10);
+        graph.add_node(2);
+        graph.add_node(7);
+        graph.add_edge(2, 7, 1.0);
+
+        let starts = find_start_nodes(&graph);
+        let ends = find_end_nodes(&graph);
+
+        assert_eq!(starts, vec![2, 10]);
+        assert_eq!(ends, vec![7, 10]);
     }
 }
