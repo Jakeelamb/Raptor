@@ -1,7 +1,5 @@
 use crate::eval::metrics::evaluate_lengths_in_place;
 use petgraph::graphmap::DiGraphMap;
-use petgraph::visit::EdgeRef;
-use petgraph::Graph;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -148,71 +146,45 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
     // Preserve those referenced nodes so branch/depth/bubble metrics stay accurate.
     segments.extend(node_path_count.keys().cloned());
 
-    // Build graph from links
-    let mut graph = Graph::<String, ()>::new();
-    let mut node_indices = HashMap::new();
-
-    // Add all segments as nodes
-    for seg in &segments {
-        let idx = graph.add_node(seg.clone());
-        node_indices.insert(seg.clone(), idx);
-    }
-
-    // Add all links as edges
-    for (from, to) in links.iter() {
-        if let (Some(&from_idx), Some(&to_idx)) = (node_indices.get(from), node_indices.get(to)) {
-            graph.add_edge(from_idx, to_idx, ());
-        }
-    }
-
-    // Calculate statistics
-
-    // Find branch points (nodes with multiple incoming or outgoing edges)
-    let mut branch_nodes = HashSet::new();
-
-    // For each node, check if it has multiple incoming or outgoing edges
-    for node_idx in graph.node_indices() {
-        let in_count = graph
-            .neighbors_directed(node_idx, petgraph::Direction::Incoming)
-            .count();
-        let out_count = graph
-            .neighbors_directed(node_idx, petgraph::Direction::Outgoing)
-            .count();
-
-        if in_count > 1 || out_count > 1 {
-            branch_nodes.insert(node_idx);
-        }
-    }
-
-    // Nodes that appear in multiple paths are also branch points
-    for (node, count) in node_path_count {
-        if count > 1 {
-            if let Some(&idx) = node_indices.get(&node) {
-                branch_nodes.insert(idx);
-            }
-        }
-    }
-
-    // Calculate maximum depth of the graph using DFS
-    let max_depth = calculate_max_depth(&graph);
-
-    // Build a directed graph using indices
-    // Use usize indices instead of String for node identifiers
+    // Build a directed graph using deterministic numeric indices.
     let mut digraph = DiGraphMap::<usize, ()>::new();
-
-    // Add nodes using numeric indices
     let mut string_to_idx = HashMap::new();
     for (i, segment) in segments.iter().enumerate() {
         string_to_idx.insert(segment.clone(), i);
         digraph.add_node(i);
     }
-
-    // Add edges using the numeric indices
     for (from, to) in links.iter() {
         if let (Some(&from_idx), Some(&to_idx)) = (string_to_idx.get(from), string_to_idx.get(to)) {
             digraph.add_edge(from_idx, to_idx, ());
         }
     }
+
+    // Calculate statistics.
+    let mut branch_nodes = HashSet::new();
+
+    // Structural branch points from graph topology.
+    for node in digraph.nodes() {
+        let in_count = digraph
+            .neighbors_directed(node, petgraph::Direction::Incoming)
+            .count();
+        let out_count = digraph
+            .neighbors_directed(node, petgraph::Direction::Outgoing)
+            .count();
+        if in_count > 1 || out_count > 1 {
+            branch_nodes.insert(node);
+        }
+    }
+
+    // Nodes shared across multiple paths are also branch points.
+    for (node, count) in node_path_count {
+        if count > 1 {
+            if let Some(&idx) = string_to_idx.get(&node) {
+                branch_nodes.insert(idx);
+            }
+        }
+    }
+
+    let max_depth = calculate_max_depth(&digraph);
 
     // Count bubbles (nodes with multiple paths that converge)
     let bubble_count = count_bubbles_simple(&digraph);
@@ -341,7 +313,7 @@ fn finalize_path_record(
 }
 
 /// Calculate the maximum depth of the graph using DFS
-fn calculate_max_depth<N, E>(graph: &Graph<N, E>) -> usize {
+fn calculate_max_depth(graph: &DiGraphMap<usize, ()>) -> usize {
     if graph.node_count() == 0 {
         return 0;
     }
@@ -365,9 +337,9 @@ fn calculate_max_depth<N, E>(graph: &Graph<N, E>) -> usize {
     for scc_idx in 0..sccs.len() {
         dag.add_node(scc_idx);
     }
-    for edge in graph.edge_references() {
-        let from_scc = node_to_scc[&edge.source()];
-        let to_scc = node_to_scc[&edge.target()];
+    for (from, to, _) in graph.all_edges() {
+        let from_scc = node_to_scc[&from];
+        let to_scc = node_to_scc[&to];
         if from_scc != to_scc {
             dag.add_edge(from_scc, to_scc, ());
         }
@@ -769,37 +741,25 @@ mod tests {
 
     #[test]
     fn test_calculate_max_depth_handles_reconverging_paths() {
-        let mut graph = Graph::<(), ()>::new();
-        let n1 = graph.add_node(());
-        let n2 = graph.add_node(());
-        let n3 = graph.add_node(());
-        let n4 = graph.add_node(());
-        let n5 = graph.add_node(());
-
-        graph.add_edge(n1, n2, ());
-        graph.add_edge(n1, n3, ());
-        graph.add_edge(n2, n4, ());
-        graph.add_edge(n3, n4, ());
-        graph.add_edge(n4, n5, ());
+        let mut graph = DiGraphMap::<usize, ()>::new();
+        graph.add_edge(1, 2, ());
+        graph.add_edge(1, 3, ());
+        graph.add_edge(2, 4, ());
+        graph.add_edge(3, 4, ());
+        graph.add_edge(4, 5, ());
 
         assert_eq!(calculate_max_depth(&graph), 3);
     }
 
     #[test]
     fn test_calculate_max_depth_cycle_with_alternate_branch_is_deterministic() {
-        let mut graph = Graph::<(), ()>::new();
-        let n0 = graph.add_node(());
-        let n1 = graph.add_node(());
-        let n2 = graph.add_node(());
-        let n3 = graph.add_node(());
-        let n4 = graph.add_node(());
-
-        graph.add_edge(n4, n0, ());
-        graph.add_edge(n0, n1, ());
-        graph.add_edge(n0, n2, ());
-        graph.add_edge(n1, n3, ());
-        graph.add_edge(n2, n3, ());
-        graph.add_edge(n3, n1, ());
+        let mut graph = DiGraphMap::<usize, ()>::new();
+        graph.add_edge(4, 0, ());
+        graph.add_edge(0, 1, ());
+        graph.add_edge(0, 2, ());
+        graph.add_edge(1, 3, ());
+        graph.add_edge(2, 3, ());
+        graph.add_edge(3, 1, ());
 
         assert_eq!(calculate_max_depth(&graph), 4);
     }
