@@ -96,6 +96,14 @@ pub struct AssemblyStats {
     pub bases_ge_10kb: usize,
     pub bases_ge_50kb: usize,
     pub bases_ge_100kb: usize,
+    pub contigs_ge_1kb_frac: f64,
+    pub contigs_ge_10kb_frac: f64,
+    pub contigs_ge_50kb_frac: f64,
+    pub contigs_ge_100kb_frac: f64,
+    pub bases_ge_1kb_frac: f64,
+    pub bases_ge_10kb_frac: f64,
+    pub bases_ge_50kb_frac: f64,
+    pub bases_ge_100kb_frac: f64,
     pub disk_bytes: u64,
 }
 
@@ -153,8 +161,24 @@ impl std::fmt::Display for AssemblyStats {
         )?;
         writeln!(
             f,
+            "Contigs frac >=1kb/10kb/50kb/100kb: {:.2}%/{:.2}%/{:.2}%/{:.2}%",
+            self.contigs_ge_1kb_frac * 100.0,
+            self.contigs_ge_10kb_frac * 100.0,
+            self.contigs_ge_50kb_frac * 100.0,
+            self.contigs_ge_100kb_frac * 100.0
+        )?;
+        writeln!(
+            f,
             "Span >=1kb/10kb/50kb/100kb: {}/{}/{}/{} bp",
             self.bases_ge_1kb, self.bases_ge_10kb, self.bases_ge_50kb, self.bases_ge_100kb
+        )?;
+        writeln!(
+            f,
+            "Span frac >=1kb/10kb/50kb/100kb: {:.2}%/{:.2}%/{:.2}%/{:.2}%",
+            self.bases_ge_1kb_frac * 100.0,
+            self.bases_ge_10kb_frac * 100.0,
+            self.bases_ge_50kb_frac * 100.0,
+            self.bases_ge_100kb_frac * 100.0
         )?;
         writeln!(f, "Largest: {} bp", self.largest)?;
         writeln!(f, "Disk used: {:.2} GB", self.disk_bytes as f64 / 1e9)?;
@@ -2289,6 +2313,14 @@ impl LargeGenomeAssembler {
         stats.bases_ge_10kb = contig_stats.bases_ge_10kb;
         stats.bases_ge_50kb = contig_stats.bases_ge_50kb;
         stats.bases_ge_100kb = contig_stats.bases_ge_100kb;
+        stats.contigs_ge_1kb_frac = contig_stats.contigs_ge_1kb_frac;
+        stats.contigs_ge_10kb_frac = contig_stats.contigs_ge_10kb_frac;
+        stats.contigs_ge_50kb_frac = contig_stats.contigs_ge_50kb_frac;
+        stats.contigs_ge_100kb_frac = contig_stats.contigs_ge_100kb_frac;
+        stats.bases_ge_1kb_frac = contig_stats.bases_ge_1kb_frac;
+        stats.bases_ge_10kb_frac = contig_stats.bases_ge_10kb_frac;
+        stats.bases_ge_50kb_frac = contig_stats.bases_ge_50kb_frac;
+        stats.bases_ge_100kb_frac = contig_stats.bases_ge_100kb_frac;
 
         Ok(())
     }
@@ -2799,6 +2831,14 @@ mod tests {
         assert_eq!(stats.bases_ge_10kb, 0);
         assert_eq!(stats.bases_ge_50kb, 0);
         assert_eq!(stats.bases_ge_100kb, 0);
+        assert_eq!(stats.contigs_ge_1kb_frac, 0.0);
+        assert_eq!(stats.contigs_ge_10kb_frac, 0.0);
+        assert_eq!(stats.contigs_ge_50kb_frac, 0.0);
+        assert_eq!(stats.contigs_ge_100kb_frac, 0.0);
+        assert_eq!(stats.bases_ge_1kb_frac, 0.0);
+        assert_eq!(stats.bases_ge_10kb_frac, 0.0);
+        assert_eq!(stats.bases_ge_50kb_frac, 0.0);
+        assert_eq!(stats.bases_ge_100kb_frac, 0.0);
         assert!((stats.gc_content - (75.0 / 175.0)).abs() < 1e-12);
         assert_eq!(stats.n_content, 0.0);
         assert_eq!(stats.ambiguous_content, 0.0);
@@ -2885,6 +2925,14 @@ mod tests {
         assert_eq!(stats.bases_ge_10kb, 60_000);
         assert_eq!(stats.bases_ge_50kb, 50_000);
         assert_eq!(stats.bases_ge_100kb, 0);
+        assert!((stats.contigs_ge_1kb_frac - 0.75).abs() < 1e-12);
+        assert!((stats.contigs_ge_10kb_frac - 0.5).abs() < 1e-12);
+        assert!((stats.contigs_ge_50kb_frac - 0.25).abs() < 1e-12);
+        assert_eq!(stats.contigs_ge_100kb_frac, 0.0);
+        assert!((stats.bases_ge_1kb_frac - (61_000.0 / 61_999.0)).abs() < 1e-12);
+        assert!((stats.bases_ge_10kb_frac - (60_000.0 / 61_999.0)).abs() < 1e-12);
+        assert!((stats.bases_ge_50kb_frac - (50_000.0 / 61_999.0)).abs() < 1e-12);
+        assert_eq!(stats.bases_ge_100kb_frac, 0.0);
     }
 
     #[test]
@@ -2906,6 +2954,8 @@ mod tests {
 
         assert_eq!(stats.contigs_ge_100kb, 1);
         assert_eq!(stats.bases_ge_100kb, 100_000);
+        assert!((stats.contigs_ge_100kb_frac - 0.5).abs() < 1e-12);
+        assert!((stats.bases_ge_100kb_frac - (100_000.0 / 199_999.0)).abs() < 1e-12);
     }
 
     /// Test repeat detection and resolution
