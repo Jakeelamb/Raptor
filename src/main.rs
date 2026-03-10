@@ -208,14 +208,18 @@ fn main() {
                 }
                 "tsv" => {
                     println!(
-                        "contigs\ttotal_len\tavg_len\tmedian_len\tgc_content\tn_content\tambiguous_content\tn25\tn50\tn75\tn90\tn95\tn99\tl25\tl50\tl75\tl90\tl95\tl99\taun\tlongest\tcontigs_ge_1kb\tcontigs_ge_10kb\tcontigs_ge_50kb\tcontigs_ge_100kb\tbases_ge_1kb\tbases_ge_10kb\tbases_ge_50kb\tbases_ge_100kb\tcontigs_ge_1kb_frac\tcontigs_ge_10kb_frac\tcontigs_ge_50kb_frac\tcontigs_ge_100kb_frac\tbases_ge_1kb_frac\tbases_ge_10kb_frac\tbases_ge_50kb_frac\tbases_ge_100kb_frac"
+                        "contigs\ttotal_len\tavg_len\tmedian_len\tgc_bases\tacgt_bases\tn_bases\tambiguous_bases\tgc_content\tn_content\tambiguous_content\tn25\tn50\tn75\tn90\tn95\tn99\tl25\tl50\tl75\tl90\tl95\tl99\taun\tlongest\tcontigs_ge_1kb\tcontigs_ge_10kb\tcontigs_ge_50kb\tcontigs_ge_100kb\tbases_ge_1kb\tbases_ge_10kb\tbases_ge_50kb\tbases_ge_100kb\tcontigs_ge_1kb_frac\tcontigs_ge_10kb_frac\tcontigs_ge_50kb_frac\tcontigs_ge_100kb_frac\tbases_ge_1kb_frac\tbases_ge_10kb_frac\tbases_ge_50kb_frac\tbases_ge_100kb_frac"
                     );
                     println!(
-                        "{}\t{}\t{:.2}\t{:.2}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}",
+                        "{}\t{}\t{:.2}\t{:.2}\t{}\t{}\t{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}",
                         stats.total_contigs,
                         stats.total_length,
                         stats.average_length,
                         stats.median_length,
+                        stats.gc_bases,
+                        stats.acgt_bases,
+                        stats.n_bases,
+                        stats.ambiguous_bases,
                         stats.gc_content,
                         stats.n_content,
                         stats.ambiguous_content,

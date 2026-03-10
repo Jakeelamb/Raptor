@@ -9,6 +9,10 @@ pub struct Stats {
     pub total_length: usize,
     pub average_length: f64,
     pub median_length: f64,
+    pub gc_bases: usize,
+    pub acgt_bases: usize,
+    pub n_bases: usize,
+    pub ambiguous_bases: usize,
     pub gc_content: f64,
     pub n_content: f64,
     pub ambiguous_content: f64,
@@ -93,6 +97,10 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         total_length: length_stats.total_bases,
         average_length: length_stats.avg_length,
         median_length: length_stats.median_length,
+        gc_bases: composition.gc_bases,
+        acgt_bases: composition.acgt_bases,
+        n_bases: composition.n_bases,
+        ambiguous_bases: composition.ambiguous_bases,
         gc_content,
         n_content,
         ambiguous_content,
@@ -196,6 +204,10 @@ mod tests {
         assert_eq!(stats.total_length, 48);
         assert_eq!(stats.average_length, 16.0);
         assert_eq!(stats.median_length, 20.0);
+        assert_eq!(stats.gc_bases, 24);
+        assert_eq!(stats.acgt_bases, 48);
+        assert_eq!(stats.n_bases, 0);
+        assert_eq!(stats.ambiguous_bases, 0);
         assert!((stats.gc_content - 0.5).abs() < 1e-12);
         assert_eq!(stats.n_content, 0.0);
         assert_eq!(stats.ambiguous_content, 0.0);
@@ -244,6 +256,10 @@ mod tests {
         assert_eq!(stats.total_contigs, 2);
         assert_eq!(stats.total_length, 16);
         assert_eq!(stats.median_length, 8.0);
+        assert_eq!(stats.gc_bases, 8);
+        assert_eq!(stats.acgt_bases, 16);
+        assert_eq!(stats.n_bases, 0);
+        assert_eq!(stats.ambiguous_bases, 0);
         assert!((stats.gc_content - 0.5).abs() < 1e-12);
         assert_eq!(stats.n_content, 0.0);
         assert_eq!(stats.ambiguous_content, 0.0);
@@ -332,6 +348,10 @@ mod tests {
             total_length: 0,
             average_length: 0.0,
             median_length: 0.0,
+            gc_bases: 0,
+            acgt_bases: 0,
+            n_bases: 0,
+            ambiguous_bases: 0,
             gc_content: 0.0,
             n_content: 0.0,
             ambiguous_content: 0.0,
@@ -413,6 +433,10 @@ mod tests {
 
         let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
         assert_eq!(stats.total_length, 12);
+        assert_eq!(stats.gc_bases, 4);
+        assert_eq!(stats.acgt_bases, 7);
+        assert_eq!(stats.n_bases, 4);
+        assert_eq!(stats.ambiguous_bases, 1);
         assert!((stats.gc_content - (4.0 / 7.0)).abs() < 1e-12);
         assert!((stats.n_content - (4.0 / 12.0)).abs() < 1e-12);
         assert!((stats.ambiguous_content - (1.0 / 12.0)).abs() < 1e-12);

@@ -72,6 +72,10 @@ pub struct AssemblyStats {
     pub bubbles_popped: usize,
     pub contigs: usize,
     pub total_length: usize,
+    pub gc_bases: usize,
+    pub acgt_bases: usize,
+    pub n_bases: usize,
+    pub ambiguous_bases: usize,
     pub gc_content: f64,
     pub n_content: f64,
     pub ambiguous_content: f64,
@@ -138,6 +142,11 @@ impl std::fmt::Display for AssemblyStats {
         }
         writeln!(f, "Contigs: {}", self.contigs)?;
         writeln!(f, "Total length: {} bp", self.total_length)?;
+        writeln!(
+            f,
+            "Base counts: GC={}, ACGT={}, N={}, ambiguous={}",
+            self.gc_bases, self.acgt_bases, self.n_bases, self.ambiguous_bases
+        )?;
         writeln!(f, "GC content: {:.2}%", self.gc_content * 100.0)?;
         writeln!(f, "N content: {:.2}%", self.n_content * 100.0)?;
         writeln!(
@@ -2375,6 +2384,10 @@ impl LargeGenomeAssembler {
 
         stats.contigs = valid.len();
         stats.total_length = contig_stats.total_bases;
+        stats.gc_bases = composition.gc_bases;
+        stats.acgt_bases = composition.acgt_bases;
+        stats.n_bases = composition.n_bases;
+        stats.ambiguous_bases = composition.ambiguous_bases;
         stats.gc_content = composition.gc_content();
         stats.n_content = composition.n_content(total_bases);
         stats.ambiguous_content = composition.ambiguous_content(total_bases);
@@ -2932,6 +2945,10 @@ mod tests {
         assert_eq!(stats.bases_ge_10kb_frac, 0.0);
         assert_eq!(stats.bases_ge_50kb_frac, 0.0);
         assert_eq!(stats.bases_ge_100kb_frac, 0.0);
+        assert_eq!(stats.gc_bases, 75);
+        assert_eq!(stats.acgt_bases, 175);
+        assert_eq!(stats.n_bases, 0);
+        assert_eq!(stats.ambiguous_bases, 0);
         assert!((stats.gc_content - (75.0 / 175.0)).abs() < 1e-12);
         assert_eq!(stats.n_content, 0.0);
         assert_eq!(stats.ambiguous_content, 0.0);
@@ -2957,6 +2974,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(stats.total_length, 10);
+        assert_eq!(stats.gc_bases, 4);
+        assert_eq!(stats.acgt_bases, 6);
+        assert_eq!(stats.n_bases, 2);
+        assert_eq!(stats.ambiguous_bases, 2);
         assert!((stats.gc_content - (4.0 / 6.0)).abs() < 1e-12);
         assert!((stats.n_content - 0.2).abs() < 1e-12);
         assert!((stats.ambiguous_content - 0.2).abs() < 1e-12);
