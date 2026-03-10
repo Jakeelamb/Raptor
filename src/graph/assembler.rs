@@ -159,6 +159,10 @@ pub fn greedy_assembly_u64(
     adjacency: &AdjacencyTableU64,
     min_len: usize,
 ) -> Vec<Contig> {
+    if !(1..=32).contains(&k) || k != adjacency.k as usize {
+        return Vec::new();
+    }
+
     let mut used = AHashSet::with_capacity(kmer_counts.len());
     let mut contigs = Vec::new();
 
@@ -705,6 +709,19 @@ mod tests {
         let sequences: Vec<&str> = contigs.iter().map(|c| c.sequence.as_str()).collect();
 
         assert_eq!(sequences, vec!["AAA", "AAC", "AAG"]);
+    }
+
+    #[test]
+    fn greedy_u64_rejects_invalid_k_and_k_mismatch_without_panicking() {
+        let mut counts = AHashMap::new();
+        counts.insert(encode_kmer("AAA").unwrap(), 10);
+
+        let adjacency_k3 = AdjacencyTableU64::new(3);
+        assert!(greedy_assembly_u64(0, &counts, &adjacency_k3, 1).is_empty());
+        assert!(greedy_assembly_u64(33, &counts, &adjacency_k3, 1).is_empty());
+
+        let adjacency_k4 = AdjacencyTableU64::new(4);
+        assert!(greedy_assembly_u64(3, &counts, &adjacency_k4, 1).is_empty());
     }
 
     #[test]
