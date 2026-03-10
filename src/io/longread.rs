@@ -1,6 +1,19 @@
 use crate::accel::simd::match_kmers_simd;
 use crate::io::fastq::FastqRecord;
 
+#[inline]
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    if needle.len() > haystack.len() {
+        return None;
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
 /// Filter nanopore reads by length
 pub fn filter_nanopore_reads(reads: &[FastqRecord], min_len: usize) -> Vec<FastqRecord> {
     reads
@@ -21,37 +34,44 @@ pub fn align_long_reads(contig: &str, long_reads: &[FastqRecord]) -> Vec<(usize,
             let read_bytes = r.sequence.as_bytes();
 
             // For large contigs, we use a sliding window approach
-            if contig.len() > 1000 {
-                for window_start in (0..contig.len()).step_by(500) {
-                    let window_end = (window_start + 1000).min(contig.len());
+            if contig_bytes.len() > 1000 {
+                for window_start in (0..contig_bytes.len()).step_by(500) {
+                    let window_end = (window_start + 1000).min(contig_bytes.len());
                     let window = &contig_bytes[window_start..window_end];
 
                     // Try to find an approximate match using SIMD acceleration
                     if match_kmers_simd(window, read_bytes, 5) {
                         // Found an approximate match, now find the exact position
-                        if let Some(pos) = find_exact_position(contig, &r.sequence, window_start) {
-                            return Some((pos, pos + r.sequence.len()));
+                        if let Some(pos) =
+                            find_exact_position(contig_bytes, read_bytes, window_start)
+                        {
+                            return Some((pos, pos + read_bytes.len()));
                         }
                     }
                 }
                 None
             } else {
                 // For small contigs, just do a direct search
-                contig
-                    .find(&r.sequence)
-                    .map(|pos| (pos, pos + r.sequence.len()))
+                find_subslice(contig_bytes, read_bytes).map(|pos| (pos, pos + read_bytes.len()))
             }
         })
         .collect()
 }
 
 /// Find the exact position of a read in a contig given an approximate starting position
-fn find_exact_position(contig: &str, read: &str, approximate_start: usize) -> Option<usize> {
+fn find_exact_position(contig: &[u8], read: &[u8], approximate_start: usize) -> Option<usize> {
+    if read.is_empty() {
+        return Some(approximate_start.min(contig.len()));
+    }
+
     let search_start = approximate_start.saturating_sub(100);
-    let search_end = (approximate_start + 100).min(contig.len());
+    let search_end = (approximate_start + read.len() + 100).min(contig.len());
+    if search_start >= search_end {
+        return None;
+    }
     let search_region = &contig[search_start..search_end];
 
-    search_region.find(read).map(|pos| search_start + pos)
+    find_subslice(search_region, read).map(|pos| search_start + pos)
 }
 
 #[cfg(test)]
@@ -108,5 +128,27 @@ mod tests {
         assert_eq!(alignments.len(), 2);
         assert_eq!(alignments[0], (0, 8)); // First read aligns at the beginning
         assert_eq!(alignments[1], (3, 12)); // Second read aligns after 3 bases
+    }
+
+    #[test]
+    fn test_align_long_reads_uses_byte_offsets_for_multibyte_sequences() {
+        let contig = "AéCGTéA";
+        let reads = vec![
+            FastqRecord {
+                header: "@read1".to_string(),
+                sequence: "CGT".to_string(),
+                plus: "+".to_string(),
+                quality: "III".to_string(),
+            },
+            FastqRecord {
+                header: "@read2".to_string(),
+                sequence: "éA".to_string(),
+                plus: "+".to_string(),
+                quality: "III".to_string(),
+            },
+        ];
+
+        let alignments = align_long_reads(contig, &reads);
+        assert_eq!(alignments, vec![(3, 6), (6, 9)]);
     }
 }

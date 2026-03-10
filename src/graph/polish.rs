@@ -5,6 +5,26 @@ use std::sync::atomic::{AtomicU8, Ordering};
 const DNA_BASES: [u8; 4] = [b'A', b'C', b'G', b'T'];
 
 #[inline]
+fn finalize_polished_sequence(bytes: Vec<u8>) -> String {
+    match String::from_utf8(bytes) {
+        Ok(sequence) => sequence,
+        Err(err) => {
+            let mut recovered = err.into_bytes();
+            for byte in &mut recovered {
+                if !byte.is_ascii() {
+                    *byte = b'N';
+                }
+            }
+
+            match String::from_utf8(recovered) {
+                Ok(sequence) => sequence,
+                Err(err) => "N".repeat(err.into_bytes().len()),
+            }
+        }
+    }
+}
+
+#[inline]
 fn base_to_index(base: u8) -> Option<usize> {
     match base {
         b'A' | b'a' => Some(0),
@@ -117,7 +137,7 @@ pub fn polish_contig(sequence: &str, reads: &[FastqRecord], window: usize) -> St
         }
     }
 
-    String::from_utf8(polished).unwrap()
+    finalize_polished_sequence(polished)
 }
 
 /// Parallelized polishing for large sequences.
@@ -227,7 +247,7 @@ pub fn polish_contig_parallel(
     // Collect results
     let result: Vec<u8> = polished.iter().map(|a| a.load(Ordering::Relaxed)).collect();
 
-    String::from_utf8(result).unwrap()
+    finalize_polished_sequence(result)
 }
 
 /// Polish the given contig sequence using consensus from aligned reads.
@@ -305,7 +325,7 @@ pub fn polish_contig_string(
         }
     }
 
-    String::from_utf8(polished).expect("polished contig should contain only valid ASCII DNA bases")
+    finalize_polished_sequence(polished)
 }
 
 /// Polish a contig using both short and long reads
@@ -464,5 +484,28 @@ mod tests {
         // preserve the current base instead of flipping arbitrarily.
         let polished = polish_contig_string(contig, &reads, 0.3);
         assert_eq!(polished, contig);
+    }
+
+    #[test]
+    fn polish_functions_do_not_panic_on_multibyte_inputs() {
+        let draft = "ééééé";
+        let replacement = "A".repeat(draft.len());
+        let reads: Vec<FastqRecord> = (0..4)
+            .map(|idx| FastqRecord {
+                header: format!("@read{idx}"),
+                sequence: replacement.clone(),
+                plus: "+".to_string(),
+                quality: "I".repeat(replacement.len()),
+            })
+            .collect();
+
+        let sequential = polish_contig(draft, &reads, 1);
+        let parallel = polish_contig_parallel(draft, &reads, 1, 4);
+        let string_polished = polish_contig_string(draft, &[replacement.clone(), replacement], 0.0);
+
+        assert!(sequential.is_ascii());
+        assert_eq!(sequential.len(), draft.len());
+        assert_eq!(parallel, sequential);
+        assert_eq!(string_polished.len(), draft.len());
     }
 }
