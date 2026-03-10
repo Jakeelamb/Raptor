@@ -278,6 +278,13 @@ pub struct Bubble {
     pub coverage2: u32,
 }
 
+#[inline]
+fn sorted_kmers(kmer_counts: &AHashMap<u64, u32>) -> Vec<u64> {
+    let mut kmers: Vec<u64> = kmer_counts.keys().copied().collect();
+    kmers.sort_unstable();
+    kmers
+}
+
 /// Remove tips (dead-end paths) from the assembly graph.
 ///
 /// Tips are short paths with only one connection that likely represent
@@ -299,13 +306,22 @@ pub fn remove_tips(
     max_tip_len: usize,
     min_coverage: u32,
 ) -> usize {
+    let kmers = sorted_kmers(kmer_counts);
+    remove_tips_with_kmer_order(adjacency, kmer_counts, &kmers, k, max_tip_len, min_coverage)
+}
+
+fn remove_tips_with_kmer_order(
+    adjacency: &mut AdjacencyTableU64,
+    kmer_counts: &AHashMap<u64, u32>,
+    kmers: &[u64],
+    k: usize,
+    max_tip_len: usize,
+    min_coverage: u32,
+) -> usize {
     let mut to_remove = AHashSet::new();
 
-    let mut kmers: Vec<u64> = kmer_counts.keys().copied().collect();
-    kmers.sort_unstable();
-
     // Find k-mers that are dead-ends (in-degree=0 or out-degree=0)
-    for kmer in kmers {
+    for &kmer in kmers {
         let count = *kmer_counts.get(&kmer).unwrap_or(&0);
 
         // Skip high-coverage k-mers (probably real)
@@ -465,12 +481,21 @@ pub fn detect_bubbles(
     k: usize,
     max_bubble_len: usize,
 ) -> Vec<Bubble> {
+    let kmers = sorted_kmers(kmer_counts);
+    detect_bubbles_with_kmer_order(adjacency, kmer_counts, &kmers, k, max_bubble_len)
+}
+
+fn detect_bubbles_with_kmer_order(
+    adjacency: &AdjacencyTableU64,
+    kmer_counts: &AHashMap<u64, u32>,
+    kmers: &[u64],
+    k: usize,
+    max_bubble_len: usize,
+) -> Vec<Bubble> {
     let mut bubbles = Vec::new();
-    let mut kmers: Vec<u64> = kmer_counts.keys().copied().collect();
-    kmers.sort_unstable();
 
     // Find branching nodes (out-degree > 1)
-    for kmer in kmers {
+    for &kmer in kmers {
         if let Some(successors) = adjacency.get_successors(kmer) {
             if successors.len() >= 2 {
                 // Try to find bubbles starting from this branch
@@ -727,15 +752,24 @@ pub fn cleanup_graph(
 
     let mut total_tips = 0;
     let mut total_bubbles = 0;
+    let kmers = sorted_kmers(kmer_counts);
 
     // Multiple rounds of cleanup
     for _round in 0..3 {
         // Remove tips
-        let tips = remove_tips(adjacency, kmer_counts, k, max_tip_len, min_coverage);
+        let tips = remove_tips_with_kmer_order(
+            adjacency,
+            kmer_counts,
+            &kmers,
+            k,
+            max_tip_len,
+            min_coverage,
+        );
         total_tips += tips;
 
         // Detect and collapse bubbles
-        let bubbles = detect_bubbles(adjacency, kmer_counts, k, max_bubble_len);
+        let bubbles =
+            detect_bubbles_with_kmer_order(adjacency, kmer_counts, &kmers, k, max_bubble_len);
         let mut collapsed_this_round = 0usize;
         for bubble in &bubbles {
             if collapse_bubble(adjacency, bubble) {
