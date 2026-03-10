@@ -726,9 +726,18 @@ mod tests {
 
         assert_eq!(row_by_name.get("n_run_count").copied(), Some("2"));
         assert_eq!(row_by_name.get("max_n_run").copied(), Some("2"));
-        assert_eq!(row_by_name.get("mean_n_run_length").copied(), Some("2.000000"));
-        assert_eq!(row_by_name.get("n_runs_per_100kb").copied(), Some("25000.000000"));
-        assert_eq!(row_by_name.get("n_bases_per_100kb").copied(), Some("50000.000000"));
+        assert_eq!(
+            row_by_name.get("mean_n_run_length").copied(),
+            Some("2.000000")
+        );
+        assert_eq!(
+            row_by_name.get("n_runs_per_100kb").copied(),
+            Some("25000.000000")
+        );
+        assert_eq!(
+            row_by_name.get("n_bases_per_100kb").copied(),
+            Some("50000.000000")
+        );
         assert_eq!(
             row_by_name.get("ambiguous_bases_per_100kb").copied(),
             Some("12500.000000")
