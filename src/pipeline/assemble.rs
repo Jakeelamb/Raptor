@@ -25,7 +25,9 @@ struct AssemblyQualitySummary {
     n90: usize,
     n95: usize,
     n99: usize,
+    l25: usize,
     l50: usize,
+    l75: usize,
     l90: usize,
     l95: usize,
     l99: usize,
@@ -74,7 +76,9 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
         n90: length_stats.n90,
         n95: length_stats.n95,
         n99: length_stats.n99,
+        l25: length_stats.l25,
         l50: length_stats.l50,
+        l75: length_stats.l75,
         l90: length_stats.l90,
         l95: length_stats.l95,
         l99: length_stats.l99,
@@ -131,7 +135,9 @@ fn write_assembly_quality_reports(
         ("n90", quality.n90.to_string()),
         ("n95", quality.n95.to_string()),
         ("n99", quality.n99.to_string()),
+        ("l25", quality.l25.to_string()),
         ("l50", quality.l50.to_string()),
+        ("l75", quality.l75.to_string()),
         ("l90", quality.l90.to_string()),
         ("l95", quality.l95.to_string()),
         ("l99", quality.l99.to_string()),
@@ -441,7 +447,7 @@ pub fn assemble_reads_with_gpu(
 
     let quality = summarize_assembly_quality(&contigs);
     info!(
-        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{} bp, L50/L90/L95/L99: {}/{}/{}/{}, auN: {:.1}, Longest: {} bp, GC/N/Ambiguous: {:.2}%/{:.2}%/{:.2}%, >=1kb/10kb/50kb/100kb contigs: {}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%)",
+        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{} bp, L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}, auN: {:.1}, Longest: {} bp, GC/N/Ambiguous: {:.2}%/{:.2}%/{:.2}%, >=1kb/10kb/50kb/100kb contigs: {}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%)",
         quality.total_contigs,
         quality.total_bases,
         quality.avg_length,
@@ -452,7 +458,9 @@ pub fn assemble_reads_with_gpu(
         quality.n90,
         quality.n95,
         quality.n99,
+        quality.l25,
         quality.l50,
+        quality.l75,
         quality.l90,
         quality.l95,
         quality.l99,
@@ -1009,7 +1017,9 @@ mod tests {
         assert_eq!(summary.n90, 4);
         assert_eq!(summary.n95, 4);
         assert_eq!(summary.n99, 4);
+        assert_eq!(summary.l25, 1);
         assert_eq!(summary.l50, 2);
+        assert_eq!(summary.l75, 3);
         assert_eq!(summary.l90, 3);
         assert_eq!(summary.l95, 3);
         assert_eq!(summary.l99, 3);
@@ -1095,7 +1105,9 @@ mod tests {
         assert_eq!(summary.n90, 50_000);
         assert_eq!(summary.n95, 10_000);
         assert_eq!(summary.n99, 1_000);
+        assert_eq!(summary.l25, 1);
         assert_eq!(summary.l50, 1);
+        assert_eq!(summary.l75, 2);
         assert_eq!(summary.l90, 2);
         assert_eq!(summary.l95, 3);
         assert_eq!(summary.l99, 4);
@@ -1174,7 +1186,9 @@ mod tests {
             n90: 150,
             n95: 140,
             n99: 100,
+            l25: 1,
             l50: 2,
+            l75: 3,
             l90: 4,
             l95: 5,
             l99: 5,
@@ -1214,12 +1228,14 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse json");
         assert_eq!(parsed["total_contigs"], 5);
         assert_eq!(parsed["n50"], 250);
+        assert_eq!(parsed["l75"], 3);
         assert_eq!(parsed["gc_content"], 0.5);
 
         let tsv = std::fs::read_to_string(&tsv_path).expect("read tsv report");
         let mut lines = tsv.lines();
         assert_eq!(lines.next(), Some("metric\tvalue"));
         assert!(tsv.contains("n50\t250"));
+        assert!(tsv.contains("l75\t3"));
         assert!(tsv.contains("gc_content\t0.500000000000"));
         assert!(tsv.contains("bases_ge_1kb_frac\t0.810000000000"));
     }
