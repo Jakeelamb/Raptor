@@ -17,17 +17,38 @@ struct AssemblyQualitySummary {
     total_contigs: usize,
     total_bases: usize,
     avg_length: f64,
+    median_length: f64,
+    n25: usize,
     n50: usize,
+    n75: usize,
     n90: usize,
     n95: usize,
+    n99: usize,
+    l50: usize,
+    l90: usize,
+    l95: usize,
+    l99: usize,
     au_n: f64,
     longest: usize,
     gc_content: f64,
     n_content: f64,
     ambiguous_content: f64,
     contigs_ge_1kb: usize,
+    contigs_ge_10kb: usize,
+    contigs_ge_50kb: usize,
+    contigs_ge_100kb: usize,
+    bases_ge_1kb: usize,
+    bases_ge_10kb: usize,
+    bases_ge_50kb: usize,
+    bases_ge_100kb: usize,
     contigs_ge_1kb_frac: f64,
+    contigs_ge_10kb_frac: f64,
+    contigs_ge_50kb_frac: f64,
+    contigs_ge_100kb_frac: f64,
     bases_ge_1kb_frac: f64,
+    bases_ge_10kb_frac: f64,
+    bases_ge_50kb_frac: f64,
+    bases_ge_100kb_frac: f64,
 }
 
 #[inline]
@@ -45,17 +66,38 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
         total_contigs: length_stats.total,
         total_bases: length_stats.total_bases,
         avg_length: length_stats.avg_length,
+        median_length: length_stats.median_length,
+        n25: length_stats.n25,
         n50: length_stats.n50,
+        n75: length_stats.n75,
         n90: length_stats.n90,
         n95: length_stats.n95,
+        n99: length_stats.n99,
+        l50: length_stats.l50,
+        l90: length_stats.l90,
+        l95: length_stats.l95,
+        l99: length_stats.l99,
         au_n: length_stats.au_n,
         longest: length_stats.longest,
         gc_content: composition.gc_content(),
         n_content: composition.n_content(length_stats.total_bases),
         ambiguous_content: composition.ambiguous_content(length_stats.total_bases),
         contigs_ge_1kb: length_stats.contigs_ge_1kb,
+        contigs_ge_10kb: length_stats.contigs_ge_10kb,
+        contigs_ge_50kb: length_stats.contigs_ge_50kb,
+        contigs_ge_100kb: length_stats.contigs_ge_100kb,
+        bases_ge_1kb: length_stats.bases_ge_1kb,
+        bases_ge_10kb: length_stats.bases_ge_10kb,
+        bases_ge_50kb: length_stats.bases_ge_50kb,
+        bases_ge_100kb: length_stats.bases_ge_100kb,
         contigs_ge_1kb_frac: length_stats.contigs_ge_1kb_frac,
+        contigs_ge_10kb_frac: length_stats.contigs_ge_10kb_frac,
+        contigs_ge_50kb_frac: length_stats.contigs_ge_50kb_frac,
+        contigs_ge_100kb_frac: length_stats.contigs_ge_100kb_frac,
         bases_ge_1kb_frac: length_stats.bases_ge_1kb_frac,
+        bases_ge_10kb_frac: length_stats.bases_ge_10kb_frac,
+        bases_ge_50kb_frac: length_stats.bases_ge_50kb_frac,
+        bases_ge_100kb_frac: length_stats.bases_ge_100kb_frac,
     }
 }
 
@@ -292,21 +334,42 @@ pub fn assemble_reads_with_gpu(
 
     let quality = summarize_assembly_quality(&contigs);
     info!(
-        "Contig statistics: {} contigs, {} bp total, Avg: {:.1} bp, N50/N90/N95: {}/{}/{} bp, auN: {:.1}, Longest: {} bp, GC: {:.2}%, N: {:.2}%, Ambiguous: {:.2}%, >=1kb: {} ({:.1}% contigs, {:.1}% bases)",
+        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{} bp, L50/L90/L95/L99: {}/{}/{}/{}, auN: {:.1}, Longest: {} bp, GC/N/Ambiguous: {:.2}%/{:.2}%/{:.2}%, >=1kb/10kb/50kb/100kb contigs: {}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%)",
         quality.total_contigs,
         quality.total_bases,
         quality.avg_length,
+        quality.median_length,
+        quality.n25,
         quality.n50,
+        quality.n75,
         quality.n90,
         quality.n95,
+        quality.n99,
+        quality.l50,
+        quality.l90,
+        quality.l95,
+        quality.l99,
         quality.au_n,
         quality.longest,
         quality.gc_content * 100.0,
         quality.n_content * 100.0,
         quality.ambiguous_content * 100.0,
         quality.contigs_ge_1kb,
+        quality.contigs_ge_10kb,
+        quality.contigs_ge_50kb,
+        quality.contigs_ge_100kb,
         quality.contigs_ge_1kb_frac * 100.0,
-        quality.bases_ge_1kb_frac * 100.0
+        quality.contigs_ge_10kb_frac * 100.0,
+        quality.contigs_ge_50kb_frac * 100.0,
+        quality.contigs_ge_100kb_frac * 100.0,
+        quality.bases_ge_1kb,
+        quality.bases_ge_10kb,
+        quality.bases_ge_50kb,
+        quality.bases_ge_100kb,
+        quality.bases_ge_1kb_frac * 100.0,
+        quality.bases_ge_10kb_frac * 100.0,
+        quality.bases_ge_50kb_frac * 100.0,
+        quality.bases_ge_100kb_frac * 100.0
     );
 
     // Write FASTA output
@@ -807,9 +870,17 @@ mod tests {
         let summary = summarize_assembly_quality(&contigs);
         assert_eq!(summary.total_contigs, 3);
         assert_eq!(summary.total_bases, 12);
+        assert_eq!(summary.median_length, 4.0);
+        assert_eq!(summary.n25, 4);
         assert_eq!(summary.n50, 4);
+        assert_eq!(summary.n75, 4);
         assert_eq!(summary.n90, 4);
         assert_eq!(summary.n95, 4);
+        assert_eq!(summary.n99, 4);
+        assert_eq!(summary.l50, 2);
+        assert_eq!(summary.l90, 3);
+        assert_eq!(summary.l95, 3);
+        assert_eq!(summary.l99, 3);
         assert_eq!(summary.longest, 4);
         assert!((summary.avg_length - 4.0).abs() < 1e-12);
         assert!((summary.au_n - 4.0).abs() < 1e-12);
@@ -838,8 +909,80 @@ mod tests {
 
         let summary = summarize_assembly_quality(&contigs);
         assert_eq!(summary.contigs_ge_1kb, 1);
+        assert_eq!(summary.contigs_ge_10kb, 0);
+        assert_eq!(summary.contigs_ge_50kb, 0);
+        assert_eq!(summary.contigs_ge_100kb, 0);
+        assert_eq!(summary.bases_ge_1kb, 1_200);
+        assert_eq!(summary.bases_ge_10kb, 0);
+        assert_eq!(summary.bases_ge_50kb, 0);
+        assert_eq!(summary.bases_ge_100kb, 0);
         assert!((summary.contigs_ge_1kb_frac - 0.5).abs() < 1e-12);
+        assert_eq!(summary.contigs_ge_10kb_frac, 0.0);
+        assert_eq!(summary.contigs_ge_50kb_frac, 0.0);
+        assert_eq!(summary.contigs_ge_100kb_frac, 0.0);
         assert!((summary.bases_ge_1kb_frac - 0.6).abs() < 1e-12);
+        assert_eq!(summary.bases_ge_10kb_frac, 0.0);
+        assert_eq!(summary.bases_ge_50kb_frac, 0.0);
+        assert_eq!(summary.bases_ge_100kb_frac, 0.0);
+    }
+
+    #[test]
+    fn summarize_assembly_quality_reports_multi_threshold_contig_and_span_metrics() {
+        let contigs = vec![
+            Contig {
+                id: 0,
+                sequence: "A".repeat(100_000),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 1,
+                sequence: "C".repeat(50_000),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 2,
+                sequence: "G".repeat(10_000),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 3,
+                sequence: "T".repeat(1_000),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 4,
+                sequence: "N".repeat(999),
+                kmer_path: vec![],
+            },
+        ];
+
+        let summary = summarize_assembly_quality(&contigs);
+        assert_eq!(summary.total_bases, 161_999);
+        assert_eq!(summary.median_length, 10_000.0);
+        assert_eq!(summary.n50, 100_000);
+        assert_eq!(summary.n90, 50_000);
+        assert_eq!(summary.n95, 10_000);
+        assert_eq!(summary.n99, 1_000);
+        assert_eq!(summary.l50, 1);
+        assert_eq!(summary.l90, 2);
+        assert_eq!(summary.l95, 3);
+        assert_eq!(summary.l99, 4);
+        assert_eq!(summary.contigs_ge_1kb, 4);
+        assert_eq!(summary.contigs_ge_10kb, 3);
+        assert_eq!(summary.contigs_ge_50kb, 2);
+        assert_eq!(summary.contigs_ge_100kb, 1);
+        assert_eq!(summary.bases_ge_1kb, 161_000);
+        assert_eq!(summary.bases_ge_10kb, 160_000);
+        assert_eq!(summary.bases_ge_50kb, 150_000);
+        assert_eq!(summary.bases_ge_100kb, 100_000);
+        assert!((summary.contigs_ge_1kb_frac - 0.8).abs() < 1e-12);
+        assert!((summary.contigs_ge_10kb_frac - 0.6).abs() < 1e-12);
+        assert!((summary.contigs_ge_50kb_frac - 0.4).abs() < 1e-12);
+        assert!((summary.contigs_ge_100kb_frac - 0.2).abs() < 1e-12);
+        assert!((summary.bases_ge_1kb_frac - (161_000.0 / 161_999.0)).abs() < 1e-12);
+        assert!((summary.bases_ge_10kb_frac - (160_000.0 / 161_999.0)).abs() < 1e-12);
+        assert!((summary.bases_ge_50kb_frac - (150_000.0 / 161_999.0)).abs() < 1e-12);
+        assert!((summary.bases_ge_100kb_frac - (100_000.0 / 161_999.0)).abs() < 1e-12);
     }
 
     #[test]
