@@ -214,6 +214,10 @@ fn main() {
                     println!("  Path L95: {}", graph_stats.path_l95);
                     println!("  Path L99: {}", graph_stats.path_l99);
                     println!("  Path auN: {:.2}", graph_stats.path_au_n);
+                    println!(
+                        "  Path effective count: {:.2}",
+                        graph_stats.path_effective_count
+                    );
                     println!("  Shared segments (branches): {}", graph_stats.branch_count);
                     println!("  Max graph depth: {}", graph_stats.max_depth);
                     println!("  Bubble count: {}", graph_stats.bubble_count);

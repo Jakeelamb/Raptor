@@ -62,6 +62,9 @@ pub struct PathStats {
     /// auN of path lengths in segments
     pub path_au_n: f64,
 
+    /// Effective number of paths (total path length / path auN)
+    pub path_effective_count: f64,
+
     /// Number of shared segments (nodes with multiple incoming/outgoing edges)
     pub branch_count: usize,
 
@@ -218,6 +221,7 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
         path_l95: path_length_stats.l95,
         path_l99: path_length_stats.l99,
         path_au_n: path_length_stats.au_n,
+        path_effective_count: path_length_stats.effective_count,
         branch_count: branch_nodes.len(),
         max_depth,
         bubble_count,
@@ -518,6 +522,7 @@ mod tests {
         assert_eq!(stats.path_l95, 3);
         assert_eq!(stats.path_l99, 3);
         assert!((stats.path_au_n - (17.0 / 7.0)).abs() < 1e-12);
+        assert!((stats.path_effective_count - (49.0 / 17.0)).abs() < 1e-12);
         // The branch count should be 3 because:
         // - Node 1 appears in two paths (path1, path2)
         // - Node 2 appears in two paths (path1, path3)
@@ -555,6 +560,7 @@ mod tests {
         assert_eq!(stats.path_l95, 1);
         assert_eq!(stats.path_l99, 1);
         assert_eq!(stats.path_au_n, 3.0);
+        assert_eq!(stats.path_effective_count, 1.0);
         assert_eq!(stats.branch_count, 0);
         assert_eq!(stats.max_depth, 2);
         assert_eq!(stats.bubble_count, 0);
@@ -590,6 +596,7 @@ mod tests {
         assert_eq!(stats.path_l95, 1);
         assert_eq!(stats.path_l99, 1);
         assert_eq!(stats.path_au_n, 2.0);
+        assert_eq!(stats.path_effective_count, 1.0);
         assert_eq!(stats.branch_count, 0);
         assert_eq!(stats.max_depth, 1);
         assert_eq!(stats.bubble_count, 0);
@@ -623,6 +630,7 @@ mod tests {
         assert_eq!(stats.path_l95, 1);
         assert_eq!(stats.path_l99, 1);
         assert_eq!(stats.path_au_n, 2.0);
+        assert_eq!(stats.path_effective_count, 1.0);
     }
 
     #[test]
@@ -671,6 +679,7 @@ mod tests {
         assert_eq!(stats.path_l95, 2);
         assert_eq!(stats.path_l99, 2);
         assert!((stats.path_au_n - 2.6).abs() < 1e-12);
+        assert!((stats.path_effective_count - (25.0 / 13.0)).abs() < 1e-12);
         assert_eq!(stats.branch_count, 2);
     }
 
@@ -701,6 +710,7 @@ mod tests {
         assert_eq!(stats.path_l95, 2);
         assert_eq!(stats.path_l99, 2);
         assert!((stats.path_au_n - 2.6).abs() < 1e-12);
+        assert!((stats.path_effective_count - (25.0 / 13.0)).abs() < 1e-12);
         assert_eq!(stats.branch_count, 2);
     }
 

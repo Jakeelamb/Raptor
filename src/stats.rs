@@ -95,6 +95,7 @@ pub struct Stats {
     pub graph_path_l95: Option<usize>,
     pub graph_path_l99: Option<usize>,
     pub graph_path_au_n: Option<f64>,
+    pub graph_path_effective_count: Option<f64>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -404,6 +405,7 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         graph_path_l95: None,
         graph_path_l99: None,
         graph_path_au_n: None,
+        graph_path_effective_count: None,
     })
 }
 
@@ -451,6 +453,7 @@ pub fn update_with_graph_stats(
     stats.graph_path_l95 = Some(graph_stats.path_l95);
     stats.graph_path_l99 = Some(graph_stats.path_l99);
     stats.graph_path_au_n = Some(graph_stats.path_au_n);
+    stats.graph_path_effective_count = Some(graph_stats.path_effective_count);
 }
 
 #[cfg(test)]
@@ -783,6 +786,7 @@ mod tests {
             graph_path_l95: None,
             graph_path_l99: None,
             graph_path_au_n: None,
+            graph_path_effective_count: None,
         };
         let graph_stats = crate::graph::complexity::PathStats {
             total_paths: 7,
@@ -803,6 +807,7 @@ mod tests {
             path_l95: 7,
             path_l99: 7,
             path_au_n: 3.2,
+            path_effective_count: 2.1875,
             branch_count: 2,
             max_depth: 5,
             bubble_count: 1,
@@ -833,6 +838,7 @@ mod tests {
         assert_eq!(stats.graph_path_l95, Some(7));
         assert_eq!(stats.graph_path_l99, Some(7));
         assert_eq!(stats.graph_path_au_n, Some(3.2));
+        assert_eq!(stats.graph_path_effective_count, Some(2.1875));
     }
 
     #[test]

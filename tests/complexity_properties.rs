@@ -141,6 +141,7 @@ proptest! {
         prop_assert_eq!(stats_a.path_l95, stats_b.path_l95);
         prop_assert_eq!(stats_a.path_l99, stats_b.path_l99);
         prop_assert!((stats_a.path_au_n - stats_b.path_au_n).abs() < 1e-12);
+        prop_assert!((stats_a.path_effective_count - stats_b.path_effective_count).abs() < 1e-12);
         prop_assert!((stats_a.branchiness - stats_b.branchiness).abs() < 1e-12);
     }
 
@@ -205,6 +206,7 @@ proptest! {
         prop_assert_eq!(stats_with_duplicates.path_l95, stats_deduped.path_l95);
         prop_assert_eq!(stats_with_duplicates.path_l99, stats_deduped.path_l99);
         prop_assert!((stats_with_duplicates.path_au_n - stats_deduped.path_au_n).abs() < 1e-12);
+        prop_assert!((stats_with_duplicates.path_effective_count - stats_deduped.path_effective_count).abs() < 1e-12);
         prop_assert!((stats_with_duplicates.branchiness - stats_deduped.branchiness).abs() < 1e-12);
     }
 
@@ -262,6 +264,7 @@ proptest! {
         prop_assert_eq!(stats_p.path_l95, stats_w.path_l95);
         prop_assert_eq!(stats_p.path_l99, stats_w.path_l99);
         prop_assert!((stats_p.path_au_n - stats_w.path_au_n).abs() < 1e-12);
+        prop_assert!((stats_p.path_effective_count - stats_w.path_effective_count).abs() < 1e-12);
         prop_assert!((stats_p.branchiness - stats_w.branchiness).abs() < 1e-12);
     }
 
