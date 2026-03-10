@@ -309,25 +309,39 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
     stats.insert("au_n".to_string(), length_metrics.au_n);
 
     // Confidence statistics
-    let confidences: Vec<f64> = transcripts.iter().map(|t| t.confidence).collect();
-    let total_confidence: f64 = confidences.iter().sum();
-    let mean_confidence = total_confidence / transcripts.len() as f64;
+    let finite_confidences: Vec<f64> = transcripts
+        .iter()
+        .map(|t| t.confidence)
+        .filter(|c| c.is_finite())
+        .collect();
+    let non_finite_confidence_count = transcripts.len() - finite_confidences.len();
+    stats.insert(
+        "non_finite_confidence_count".to_string(),
+        non_finite_confidence_count as f64,
+    );
 
-    stats.insert("mean_confidence".to_string(), mean_confidence);
-    stats.insert(
-        "min_confidence".to_string(),
-        *confidences
+    if finite_confidences.is_empty() {
+        stats.insert("mean_confidence".to_string(), 0.0);
+        stats.insert("min_confidence".to_string(), 0.0);
+        stats.insert("max_confidence".to_string(), 0.0);
+    } else {
+        let total_confidence: f64 = finite_confidences.iter().sum();
+        let mean_confidence = total_confidence / finite_confidences.len() as f64;
+        let min_confidence = finite_confidences
             .iter()
-            .min_by(|a, b| a.partial_cmp(b).unwrap())
-            .unwrap(),
-    );
-    stats.insert(
-        "max_confidence".to_string(),
-        *confidences
+            .copied()
+            .min_by(f64::total_cmp)
+            .unwrap_or(0.0);
+        let max_confidence = finite_confidences
             .iter()
-            .max_by(|a, b| a.partial_cmp(b).unwrap())
-            .unwrap(),
-    );
+            .copied()
+            .max_by(f64::total_cmp)
+            .unwrap_or(0.0);
+
+        stats.insert("mean_confidence".to_string(), mean_confidence);
+        stats.insert("min_confidence".to_string(), min_confidence);
+        stats.insert("max_confidence".to_string(), max_confidence);
+    }
 
     // Calculate GC content
     let mut gc_count = 0;
@@ -555,5 +569,35 @@ mod tests {
         assert_eq!(transcripts.len(), 1);
         assert_eq!(transcripts[0].sequence, "AAACGTTT");
         assert_eq!(transcripts[0].path, vec![1, 4, 9]);
+    }
+
+    #[test]
+    fn test_calculate_transcript_stats_ignores_non_finite_confidence_values() {
+        let transcripts = vec![
+            Transcript::new(1, "AAAA".to_string(), vec![0], 0.8),
+            Transcript::new(2, "CCCC".to_string(), vec![1], f64::NAN),
+            Transcript::new(3, "GGGG".to_string(), vec![2], 0.2),
+        ];
+
+        let stats = calculate_transcript_stats(&transcripts);
+        assert_eq!(stats.get("non_finite_confidence_count").copied(), Some(1.0));
+        assert_eq!(stats.get("min_confidence").copied(), Some(0.2));
+        assert_eq!(stats.get("max_confidence").copied(), Some(0.8));
+        assert_eq!(stats.get("mean_confidence").copied(), Some(0.5));
+    }
+
+    #[test]
+    fn test_calculate_transcript_stats_handles_all_non_finite_confidence_values() {
+        let transcripts = vec![
+            Transcript::new(1, "AAAA".to_string(), vec![0], f64::NAN),
+            Transcript::new(2, "CCCC".to_string(), vec![1], f64::INFINITY),
+            Transcript::new(3, "GGGG".to_string(), vec![2], f64::NEG_INFINITY),
+        ];
+
+        let stats = calculate_transcript_stats(&transcripts);
+        assert_eq!(stats.get("non_finite_confidence_count").copied(), Some(3.0));
+        assert_eq!(stats.get("min_confidence").copied(), Some(0.0));
+        assert_eq!(stats.get("max_confidence").copied(), Some(0.0));
+        assert_eq!(stats.get("mean_confidence").copied(), Some(0.0));
     }
 }
