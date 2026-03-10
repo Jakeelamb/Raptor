@@ -71,8 +71,8 @@ impl CpuBackend {
     /// Uses sliding window encoding to avoid redundant work.
     /// Zero allocations in the inner loop.
     pub fn count_kmers_u64(&self, sequences: &[String], k: usize) -> AHashMap<u64, u32> {
-        if k > 32 {
-            panic!("k-mer size {} exceeds maximum of 32 for u64 encoding", k);
+        if !(1..=32).contains(&k) || sequences.is_empty() {
+            return AHashMap::new();
         }
 
         // Parallel k-mer counting with thread-local hashmaps
@@ -226,7 +226,12 @@ impl CpuBackend {
         kmer_counts: &AHashMap<u64, u32>,
         k: usize,
     ) -> AdjacencyTableU64 {
-        let mut adjacency = AdjacencyTableU64::with_capacity(k as u8, kmer_counts.len());
+        let adjacency_k = u8::try_from(k).ok().unwrap_or(u8::MAX);
+        if !(1..=32).contains(&k) || kmer_counts.is_empty() {
+            return AdjacencyTableU64::new(adjacency_k);
+        }
+
+        let mut adjacency = AdjacencyTableU64::with_capacity(adjacency_k, kmer_counts.len());
 
         // Mask for k-1 bases
         let suffix_mask: u64 = (1u64 << ((k - 1) * 2)) - 1;
@@ -505,8 +510,27 @@ mod tests {
         assert!(backend.count_kmers_u64_filtered(&short, 5, 2).is_empty());
 
         let valid = vec!["ACGT".to_string()];
+        assert!(backend.count_kmers_u64(&valid, 0).is_empty());
+        assert!(backend.count_kmers_u64(&valid, 33).is_empty());
         assert!(backend.count_kmers_u64_filtered(&valid, 0, 2).is_empty());
         assert!(backend.count_kmers_u64_filtered(&valid, 33, 2).is_empty());
+    }
+
+    #[test]
+    fn build_adjacency_u64_returns_empty_for_invalid_k() {
+        let backend = CpuBackend::new();
+        let mut counts = AHashMap::new();
+        counts.insert(1u64, 3u32);
+
+        let k_zero = backend.build_adjacency_u64(&counts, 0);
+        assert!(k_zero.forward.is_empty());
+        assert!(k_zero.backward.is_empty());
+        assert_eq!(k_zero.k, 0);
+
+        let k_too_large = backend.build_adjacency_u64(&counts, 33);
+        assert!(k_too_large.forward.is_empty());
+        assert!(k_too_large.backward.is_empty());
+        assert_eq!(k_too_large.k, 33);
     }
 
     #[test]
