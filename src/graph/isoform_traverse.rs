@@ -367,8 +367,7 @@ mod tests {
             },
         ];
 
-        let filtered =
-            filter_paths_by_confidence(&paths, f32::NAN, 100, Some(f32::NEG_INFINITY));
+        let filtered = filter_paths_by_confidence(&paths, f32::NAN, 100, Some(f32::NEG_INFINITY));
         let kept_nodes: Vec<Vec<usize>> = filtered.into_iter().map(|path| path.nodes).collect();
 
         assert_eq!(kept_nodes, vec![vec![0, 1], vec![2]]);

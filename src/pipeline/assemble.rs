@@ -259,8 +259,7 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
         distinct_sequences += 1;
         let duplicates = count.saturating_sub(1);
         duplicate_sequences = duplicate_sequences.saturating_add(duplicates);
-        duplicate_bases =
-            duplicate_bases.saturating_add(sequence.len().saturating_mul(duplicates));
+        duplicate_bases = duplicate_bases.saturating_add(sequence.len().saturating_mul(duplicates));
     }
     let total_contigs_f = length_stats.total as f64;
     let (contigs_with_n_frac, contigs_with_ambiguous_frac, contigs_all_acgt_frac) =
@@ -429,7 +428,10 @@ fn write_assembly_quality_reports(
         ),
         ("contigs_all_acgt", quality.contigs_all_acgt.to_string()),
         ("distinct_sequences", quality.distinct_sequences.to_string()),
-        ("duplicate_sequences", quality.duplicate_sequences.to_string()),
+        (
+            "duplicate_sequences",
+            quality.duplicate_sequences.to_string(),
+        ),
         ("duplicate_bases", quality.duplicate_bases.to_string()),
         (
             "contigs_with_n_frac",
