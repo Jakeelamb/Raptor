@@ -102,12 +102,11 @@ pub fn polish_contig(sequence: &str, reads: &[FastqRecord], window: usize) -> St
                 // Check for match with up to 2 mismatches (flexible anchor)
                 let mut mismatches = 0;
                 for k in 0..window {
-                    if i + k >= sequence.len() || j + k >= read_seq.len() {
-                        mismatches += 1;
-                        continue;
-                    }
                     if seq_bytes[i + k] != read_seq[j + k] {
                         mismatches += 1;
+                        if mismatches > 2 {
+                            break;
+                        }
                     }
                 }
 
@@ -208,12 +207,11 @@ pub fn polish_contig_parallel(
                     // Check for match
                     let mut mismatches = 0;
                     for k in 0..window {
-                        if i + k >= seq_len || j + k >= read_seq.len() {
-                            mismatches += 1;
-                            continue;
-                        }
                         if seq_bytes[i + k] != read_seq[j + k] {
                             mismatches += 1;
+                            if mismatches > 2 {
+                                break;
+                            }
                         }
                     }
 

@@ -95,3 +95,51 @@ proptest! {
         prop_assert_eq!(forward, reverse);
     }
 }
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(16))]
+
+    #[test]
+    fn parallel_polish_handles_arbitrary_utf8_inputs_deterministically(
+        draft_bytes in prop::collection::vec(any::<u8>(), 1..64),
+        read_bytes in prop::collection::vec(any::<u8>(), 1..64),
+        num_reads in 3usize..8,
+        window in 1usize..8,
+        chunk_divisor in 2usize..6,
+    ) {
+        let draft = String::from_utf8_lossy(&draft_bytes).into_owned();
+        let read_template = String::from_utf8_lossy(&read_bytes).into_owned();
+
+        let reads: Vec<FastqRecord> = (0..num_reads)
+            .map(|idx| FastqRecord {
+                header: format!("@utf8_read{}", idx),
+                sequence: read_template.clone(),
+                plus: "+".to_string(),
+                quality: "I".repeat(read_template.len()),
+            })
+            .collect();
+
+        let mut chunk_size = (draft.len() / chunk_divisor.max(1)).max(1);
+        if chunk_size * 2 > draft.len() {
+            chunk_size = (draft.len() / 2).max(1);
+        }
+        let window = window.min(draft.len());
+
+        let sequential = polish_contig(&draft, &reads, window);
+
+        let one_thread = ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .expect("build single-thread rayon pool")
+            .install(|| polish_contig_parallel(&draft, &reads, window, chunk_size));
+        let four_threads = ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .expect("build multi-thread rayon pool")
+            .install(|| polish_contig_parallel(&draft, &reads, window, chunk_size));
+
+        prop_assert_eq!(one_thread.as_str(), sequential.as_str());
+        prop_assert_eq!(four_threads.as_str(), sequential.as_str());
+        prop_assert_eq!(sequential.len(), draft.len());
+    }
+}
