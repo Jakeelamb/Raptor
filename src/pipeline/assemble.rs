@@ -56,12 +56,18 @@ struct AssemblyQualitySummary {
     distinct_sequences: usize,
     duplicate_sequences: usize,
     duplicate_bases: usize,
+    canonical_distinct_sequences: usize,
+    canonical_duplicate_sequences: usize,
+    canonical_duplicate_bases: usize,
     contigs_with_n_frac: f64,
     contigs_with_ambiguous_frac: f64,
     contigs_all_acgt_frac: f64,
     distinct_sequences_frac: f64,
     duplicate_sequences_frac: f64,
     duplicate_bases_frac: f64,
+    canonical_distinct_sequences_frac: f64,
+    canonical_duplicate_sequences_frac: f64,
+    canonical_duplicate_bases_frac: f64,
     mean_rle_ratio: f64,
     length_weighted_rle_ratio: f64,
     total_rle_runs: usize,
@@ -115,6 +121,13 @@ struct SequenceAnalysis {
     rle_runs: usize,
     has_n: bool,
     has_ambiguous: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct DuplicateSummary {
+    distinct_sequences: usize,
+    duplicate_sequences: usize,
+    duplicate_bases: usize,
 }
 
 #[inline]
@@ -196,6 +209,79 @@ fn analyze_sequence(
 }
 
 #[inline]
+fn normalize_canonical_base(base: u8) -> u8 {
+    match base {
+        b'U' | b'u' => b'T',
+        _ => base.to_ascii_uppercase(),
+    }
+}
+
+#[inline]
+fn complement_iupac_base(base: u8) -> u8 {
+    match base {
+        b'A' => b'T',
+        b'C' => b'G',
+        b'G' => b'C',
+        b'T' | b'U' => b'A',
+        b'R' => b'Y',
+        b'Y' => b'R',
+        b'S' => b'S',
+        b'W' => b'W',
+        b'K' => b'M',
+        b'M' => b'K',
+        b'B' => b'V',
+        b'V' => b'B',
+        b'D' => b'H',
+        b'H' => b'D',
+        b'N' => b'N',
+        _ => base,
+    }
+}
+
+#[inline]
+fn canonical_sequence_key(sequence: &str) -> Vec<u8> {
+    let bytes = sequence.as_bytes();
+    let mut forward = Vec::with_capacity(bytes.len());
+    let mut reverse_complement = Vec::with_capacity(bytes.len());
+
+    for &base in bytes {
+        forward.push(normalize_canonical_base(base));
+    }
+
+    for &base in bytes.iter().rev() {
+        let normalized = normalize_canonical_base(base);
+        reverse_complement.push(complement_iupac_base(normalized));
+    }
+
+    if reverse_complement < forward {
+        reverse_complement
+    } else {
+        forward
+    }
+}
+
+#[inline]
+fn summarize_duplicate_counts<K, F>(
+    counts: &std::collections::HashMap<K, usize>,
+    mut key_len: F,
+) -> DuplicateSummary
+where
+    K: Eq + std::hash::Hash,
+    F: FnMut(&K) -> usize,
+{
+    let mut summary = DuplicateSummary::default();
+    for (key, count) in counts {
+        summary.distinct_sequences += 1;
+        let duplicates = count.saturating_sub(1);
+        summary.duplicate_sequences = summary.duplicate_sequences.saturating_add(duplicates);
+        summary.duplicate_bases = summary
+            .duplicate_bases
+            .saturating_add(key_len(key).saturating_mul(duplicates));
+    }
+    summary
+}
+
+#[inline]
 fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
     let mut lengths = Vec::with_capacity(contigs.len());
     let mut ungapped_lengths = Vec::with_capacity(contigs.len());
@@ -204,12 +290,17 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
     let mut contig_quality = ContigQualitySummary::default();
     let mut sequence_counts: std::collections::HashMap<&str, usize> =
         std::collections::HashMap::with_capacity(contigs.len());
+    let mut canonical_sequence_counts: std::collections::HashMap<Vec<u8>, usize> =
+        std::collections::HashMap::with_capacity(contigs.len());
     let mut total_rle_ratio_scaled = 0u128;
     let mut total_rle_runs = 0usize;
 
     for contig in contigs {
         let contig_len = contig.sequence.len();
         *sequence_counts.entry(contig.sequence.as_str()).or_insert(0) += 1;
+        *canonical_sequence_counts
+            .entry(canonical_sequence_key(&contig.sequence))
+            .or_insert(0) += 1;
         lengths.push(contig_len);
         let sequence = contig.sequence.as_bytes();
         let analysis = analyze_sequence(sequence, &mut composition, &mut n_runs);
@@ -265,15 +356,9 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
     } else {
         0.0
     };
-    let mut distinct_sequences = 0usize;
-    let mut duplicate_sequences = 0usize;
-    let mut duplicate_bases = 0usize;
-    for (sequence, count) in &sequence_counts {
-        distinct_sequences += 1;
-        let duplicates = count.saturating_sub(1);
-        duplicate_sequences = duplicate_sequences.saturating_add(duplicates);
-        duplicate_bases = duplicate_bases.saturating_add(sequence.len().saturating_mul(duplicates));
-    }
+    let duplicate_summary = summarize_duplicate_counts(&sequence_counts, |sequence| sequence.len());
+    let canonical_duplicate_summary =
+        summarize_duplicate_counts(&canonical_sequence_counts, |sequence| sequence.len());
     let total_contigs_f = length_stats.total as f64;
     let (contigs_with_n_frac, contigs_with_ambiguous_frac, contigs_all_acgt_frac) =
         if total_contigs_f > 0.0 {
@@ -287,14 +372,28 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
         };
     let (distinct_sequences_frac, duplicate_sequences_frac) = if total_contigs_f > 0.0 {
         (
-            distinct_sequences as f64 / total_contigs_f,
-            duplicate_sequences as f64 / total_contigs_f,
+            duplicate_summary.distinct_sequences as f64 / total_contigs_f,
+            duplicate_summary.duplicate_sequences as f64 / total_contigs_f,
         )
     } else {
         (0.0, 0.0)
     };
+    let (canonical_distinct_sequences_frac, canonical_duplicate_sequences_frac) =
+        if total_contigs_f > 0.0 {
+            (
+                canonical_duplicate_summary.distinct_sequences as f64 / total_contigs_f,
+                canonical_duplicate_summary.duplicate_sequences as f64 / total_contigs_f,
+            )
+        } else {
+            (0.0, 0.0)
+        };
     let duplicate_bases_frac = if length_stats.total_bases > 0 {
-        duplicate_bases as f64 / length_stats.total_bases as f64
+        duplicate_summary.duplicate_bases as f64 / length_stats.total_bases as f64
+    } else {
+        0.0
+    };
+    let canonical_duplicate_bases_frac = if length_stats.total_bases > 0 {
+        canonical_duplicate_summary.duplicate_bases as f64 / length_stats.total_bases as f64
     } else {
         0.0
     };
@@ -337,15 +436,21 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
         contigs_with_n: contig_quality.with_n,
         contigs_with_ambiguous: contig_quality.with_ambiguous,
         contigs_all_acgt: contig_quality.all_acgt,
-        distinct_sequences,
-        duplicate_sequences,
-        duplicate_bases,
+        distinct_sequences: duplicate_summary.distinct_sequences,
+        duplicate_sequences: duplicate_summary.duplicate_sequences,
+        duplicate_bases: duplicate_summary.duplicate_bases,
+        canonical_distinct_sequences: canonical_duplicate_summary.distinct_sequences,
+        canonical_duplicate_sequences: canonical_duplicate_summary.duplicate_sequences,
+        canonical_duplicate_bases: canonical_duplicate_summary.duplicate_bases,
         contigs_with_n_frac,
         contigs_with_ambiguous_frac,
         contigs_all_acgt_frac,
         distinct_sequences_frac,
         duplicate_sequences_frac,
         duplicate_bases_frac,
+        canonical_distinct_sequences_frac,
+        canonical_duplicate_sequences_frac,
+        canonical_duplicate_bases_frac,
         mean_rle_ratio,
         length_weighted_rle_ratio,
         total_rle_runs,
@@ -457,6 +562,18 @@ fn write_assembly_quality_reports(
         ),
         ("duplicate_bases", quality.duplicate_bases.to_string()),
         (
+            "canonical_distinct_sequences",
+            quality.canonical_distinct_sequences.to_string(),
+        ),
+        (
+            "canonical_duplicate_sequences",
+            quality.canonical_duplicate_sequences.to_string(),
+        ),
+        (
+            "canonical_duplicate_bases",
+            quality.canonical_duplicate_bases.to_string(),
+        ),
+        (
             "contigs_with_n_frac",
             format!("{:.12}", quality.contigs_with_n_frac),
         ),
@@ -479,6 +596,18 @@ fn write_assembly_quality_reports(
         (
             "duplicate_bases_frac",
             format!("{:.12}", quality.duplicate_bases_frac),
+        ),
+        (
+            "canonical_distinct_sequences_frac",
+            format!("{:.12}", quality.canonical_distinct_sequences_frac),
+        ),
+        (
+            "canonical_duplicate_sequences_frac",
+            format!("{:.12}", quality.canonical_duplicate_sequences_frac),
+        ),
+        (
+            "canonical_duplicate_bases_frac",
+            format!("{:.12}", quality.canonical_duplicate_bases_frac),
         ),
         ("mean_rle_ratio", format!("{:.12}", quality.mean_rle_ratio)),
         (
@@ -1359,9 +1488,9 @@ fn canonicalize_contig_output_order(contigs: &mut [Contig]) {
 #[cfg(test)]
 mod tests {
     use super::{
-        assemble_reads_with_gpu, canonicalize_contig_output_order, derive_contig_expression_map,
-        estimate_sequence_capacity, sequence_only_record, summarize_assembly_quality,
-        write_assembly_quality_reports, AssemblyQualitySummary,
+        assemble_reads_with_gpu, canonical_sequence_key, canonicalize_contig_output_order,
+        derive_contig_expression_map, estimate_sequence_capacity, sequence_only_record,
+        summarize_assembly_quality, write_assembly_quality_reports, AssemblyQualitySummary,
     };
     use crate::graph::assembler::Contig;
     use crate::io::fastq::FastqRecord;
@@ -1602,12 +1731,18 @@ mod tests {
         assert_eq!(summary.distinct_sequences, 3);
         assert_eq!(summary.duplicate_sequences, 0);
         assert_eq!(summary.duplicate_bases, 0);
+        assert_eq!(summary.canonical_distinct_sequences, 3);
+        assert_eq!(summary.canonical_duplicate_sequences, 0);
+        assert_eq!(summary.canonical_duplicate_bases, 0);
         assert!((summary.contigs_with_n_frac - (1.0 / 3.0)).abs() < 1e-12);
         assert!((summary.contigs_with_ambiguous_frac - (1.0 / 3.0)).abs() < 1e-12);
         assert!((summary.contigs_all_acgt_frac - (1.0 / 3.0)).abs() < 1e-12);
         assert_eq!(summary.distinct_sequences_frac, 1.0);
         assert_eq!(summary.duplicate_sequences_frac, 0.0);
         assert_eq!(summary.duplicate_bases_frac, 0.0);
+        assert_eq!(summary.canonical_distinct_sequences_frac, 1.0);
+        assert_eq!(summary.canonical_duplicate_sequences_frac, 0.0);
+        assert_eq!(summary.canonical_duplicate_bases_frac, 0.0);
         assert!((summary.mean_rle_ratio - 0.75).abs() < 1e-12);
         assert!((summary.length_weighted_rle_ratio - 0.75).abs() < 1e-12);
         assert_eq!(summary.total_rle_runs, 9);
@@ -1848,9 +1983,59 @@ mod tests {
         assert_eq!(summary.distinct_sequences, 2);
         assert_eq!(summary.duplicate_sequences, 2);
         assert_eq!(summary.duplicate_bases, 8);
+        assert_eq!(summary.canonical_distinct_sequences, 2);
+        assert_eq!(summary.canonical_duplicate_sequences, 2);
+        assert_eq!(summary.canonical_duplicate_bases, 8);
         assert!((summary.distinct_sequences_frac - 0.5).abs() < 1e-12);
         assert!((summary.duplicate_sequences_frac - 0.5).abs() < 1e-12);
         assert!((summary.duplicate_bases_frac - (8.0 / 14.0)).abs() < 1e-12);
+        assert!((summary.canonical_distinct_sequences_frac - 0.5).abs() < 1e-12);
+        assert!((summary.canonical_duplicate_sequences_frac - 0.5).abs() < 1e-12);
+        assert!((summary.canonical_duplicate_bases_frac - (8.0 / 14.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn summarize_assembly_quality_reports_canonical_duplicate_sequence_metrics() {
+        let contigs = vec![
+            Contig {
+                id: 0,
+                sequence: "AAGT".to_string(),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 1,
+                sequence: "actt".to_string(),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 2,
+                sequence: "AaGt".to_string(),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 3,
+                sequence: "CCCC".to_string(),
+                kmer_path: vec![],
+            },
+        ];
+
+        let summary = summarize_assembly_quality(&contigs);
+        assert_eq!(summary.total_contigs, 4);
+        assert_eq!(summary.total_bases, 16);
+        // Exact-string duplicate metrics remain strict.
+        assert_eq!(summary.distinct_sequences, 4);
+        assert_eq!(summary.duplicate_sequences, 0);
+        assert_eq!(summary.duplicate_bases, 0);
+        assert_eq!(summary.distinct_sequences_frac, 1.0);
+        assert_eq!(summary.duplicate_sequences_frac, 0.0);
+        assert_eq!(summary.duplicate_bases_frac, 0.0);
+        // Canonical duplicate metrics collapse case and reverse-complement variants.
+        assert_eq!(summary.canonical_distinct_sequences, 2);
+        assert_eq!(summary.canonical_duplicate_sequences, 2);
+        assert_eq!(summary.canonical_duplicate_bases, 8);
+        assert!((summary.canonical_distinct_sequences_frac - 0.5).abs() < 1e-12);
+        assert!((summary.canonical_duplicate_sequences_frac - 0.5).abs() < 1e-12);
+        assert!((summary.canonical_duplicate_bases_frac - 0.5).abs() < 1e-12);
     }
 
     #[test]
@@ -1957,8 +2142,12 @@ mod tests {
                 .filter(|sequence| sequence.bytes().all(|base| is_acgt_or_u(base)))
                 .count();
             let mut sequence_counts = std::collections::HashMap::new();
+            let mut canonical_sequence_counts = std::collections::HashMap::new();
             for sequence in &sequences {
                 *sequence_counts.entry(sequence.as_str()).or_insert(0usize) += 1;
+                *canonical_sequence_counts
+                    .entry(canonical_sequence_key(sequence))
+                    .or_insert(0usize) += 1;
             }
             let distinct_sequences = sequence_counts.len();
             let duplicate_sequences: usize = sequence_counts
@@ -1966,6 +2155,15 @@ mod tests {
                 .map(|count| count.saturating_sub(1))
                 .sum();
             let duplicate_bases: usize = sequence_counts
+                .iter()
+                .map(|(sequence, count)| sequence.len().saturating_mul(count.saturating_sub(1)))
+                .sum();
+            let canonical_distinct_sequences = canonical_sequence_counts.len();
+            let canonical_duplicate_sequences: usize = canonical_sequence_counts
+                .values()
+                .map(|count| count.saturating_sub(1))
+                .sum();
+            let canonical_duplicate_bases: usize = canonical_sequence_counts
                 .iter()
                 .map(|(sequence, count)| sequence.len().saturating_mul(count.saturating_sub(1)))
                 .sum();
@@ -1991,12 +2189,22 @@ mod tests {
             prop_assert_eq!(summary.distinct_sequences, distinct_sequences);
             prop_assert_eq!(summary.duplicate_sequences, duplicate_sequences);
             prop_assert_eq!(summary.duplicate_bases, duplicate_bases);
+            prop_assert_eq!(summary.canonical_distinct_sequences, canonical_distinct_sequences);
+            prop_assert_eq!(summary.canonical_duplicate_sequences, canonical_duplicate_sequences);
+            prop_assert_eq!(summary.canonical_duplicate_bases, canonical_duplicate_bases);
             prop_assert_eq!(summary.total_rle_runs, total_rle_runs);
             prop_assert_eq!(summary.n_runs, n_runs);
             prop_assert_eq!(summary.longest_n_run, longest_n_run);
             prop_assert!(summary.ungapped_total_bases <= summary.total_bases);
             prop_assert_eq!(summary.distinct_sequences + summary.duplicate_sequences, summary.total_contigs);
+            prop_assert_eq!(
+                summary.canonical_distinct_sequences + summary.canonical_duplicate_sequences,
+                summary.total_contigs
+            );
             prop_assert!(summary.duplicate_bases <= summary.total_bases);
+            prop_assert!(summary.canonical_duplicate_bases <= summary.total_bases);
+            prop_assert!(summary.canonical_duplicate_sequences >= summary.duplicate_sequences);
+            prop_assert!(summary.canonical_distinct_sequences <= summary.distinct_sequences);
 
             prop_assert!(summary.contigs_ge_1mb <= summary.contigs_ge_100kb);
             prop_assert!(summary.contigs_ge_100kb <= summary.contigs_ge_50kb);
@@ -2019,12 +2227,15 @@ mod tests {
                 summary.contigs_all_acgt_frac,
                 summary.distinct_sequences_frac,
                 summary.duplicate_sequences_frac,
+                summary.canonical_distinct_sequences_frac,
+                summary.canonical_duplicate_sequences_frac,
                 summary.contigs_ge_1kb_frac,
                 summary.contigs_ge_10kb_frac,
                 summary.contigs_ge_50kb_frac,
                 summary.contigs_ge_100kb_frac,
                 summary.contigs_ge_1mb_frac,
                 summary.duplicate_bases_frac,
+                summary.canonical_duplicate_bases_frac,
                 summary.bases_ge_1kb_frac,
                 summary.bases_ge_10kb_frac,
                 summary.bases_ge_50kb_frac,
@@ -2044,6 +2255,10 @@ mod tests {
                 prop_assert!((summary.ambiguous_content - summary.ambiguous_bases as f64 / total_bases_f).abs() < 1e-12);
                 prop_assert!((summary.gap_bases_frac - summary.gap_bases as f64 / total_bases_f).abs() < 1e-12);
                 prop_assert!((summary.duplicate_bases_frac - summary.duplicate_bases as f64 / total_bases_f).abs() < 1e-12);
+                prop_assert!((
+                    summary.canonical_duplicate_bases_frac
+                        - summary.canonical_duplicate_bases as f64 / total_bases_f
+                ).abs() < 1e-12);
                 prop_assert!((summary.length_weighted_rle_ratio - summary.total_rle_runs as f64 / total_bases_f).abs() < 1e-12);
                 prop_assert!((summary.n_runs_per_100kb - summary.n_runs as f64 * 100_000.0 / total_bases_f).abs() < 1e-12);
                 prop_assert!((summary.n_bases_per_100kb - summary.n_bases as f64 * 100_000.0 / total_bases_f).abs() < 1e-12);
@@ -2053,6 +2268,7 @@ mod tests {
                 prop_assert_eq!(summary.ambiguous_content, 0.0);
                 prop_assert_eq!(summary.gap_bases_frac, 0.0);
                 prop_assert_eq!(summary.duplicate_bases_frac, 0.0);
+                prop_assert_eq!(summary.canonical_duplicate_bases_frac, 0.0);
                 prop_assert_eq!(summary.length_weighted_rle_ratio, 0.0);
                 prop_assert_eq!(summary.n_runs_per_100kb, 0.0);
                 prop_assert_eq!(summary.n_bases_per_100kb, 0.0);
@@ -2195,12 +2411,18 @@ mod tests {
             distinct_sequences: 4,
             duplicate_sequences: 1,
             duplicate_bases: 120,
+            canonical_distinct_sequences: 3,
+            canonical_duplicate_sequences: 2,
+            canonical_duplicate_bases: 240,
             contigs_with_n_frac: 0.4,
             contigs_with_ambiguous_frac: 0.2,
             contigs_all_acgt_frac: 0.4,
             distinct_sequences_frac: 0.8,
             duplicate_sequences_frac: 0.2,
             duplicate_bases_frac: 120.0 / 1234.0,
+            canonical_distinct_sequences_frac: 0.6,
+            canonical_duplicate_sequences_frac: 0.4,
+            canonical_duplicate_bases_frac: 240.0 / 1234.0,
             mean_rle_ratio: 0.75,
             length_weighted_rle_ratio: 0.8,
             total_rle_runs: 987,
@@ -2282,12 +2504,18 @@ mod tests {
         assert_eq!(parsed["distinct_sequences"], 4);
         assert_eq!(parsed["duplicate_sequences"], 1);
         assert_eq!(parsed["duplicate_bases"], 120);
+        assert_eq!(parsed["canonical_distinct_sequences"], 3);
+        assert_eq!(parsed["canonical_duplicate_sequences"], 2);
+        assert_eq!(parsed["canonical_duplicate_bases"], 240);
         assert_eq!(parsed["contigs_with_n_frac"], 0.4);
         assert_eq!(parsed["contigs_with_ambiguous_frac"], 0.2);
         assert_eq!(parsed["contigs_all_acgt_frac"], 0.4);
         assert_eq!(parsed["distinct_sequences_frac"], 0.8);
         assert_eq!(parsed["duplicate_sequences_frac"], 0.2);
         assert_eq!(parsed["duplicate_bases_frac"], 120.0 / 1234.0);
+        assert_eq!(parsed["canonical_distinct_sequences_frac"], 0.6);
+        assert_eq!(parsed["canonical_duplicate_sequences_frac"], 0.4);
+        assert_eq!(parsed["canonical_duplicate_bases_frac"], 240.0 / 1234.0);
 
         let tsv = std::fs::read_to_string(&tsv_path).expect("read tsv report");
         let mut lines = tsv.lines();
@@ -2324,12 +2552,18 @@ mod tests {
         assert!(tsv.contains("distinct_sequences\t4"));
         assert!(tsv.contains("duplicate_sequences\t1"));
         assert!(tsv.contains("duplicate_bases\t120"));
+        assert!(tsv.contains("canonical_distinct_sequences\t3"));
+        assert!(tsv.contains("canonical_duplicate_sequences\t2"));
+        assert!(tsv.contains("canonical_duplicate_bases\t240"));
         assert!(tsv.contains("contigs_with_n_frac\t0.400000000000"));
         assert!(tsv.contains("contigs_with_ambiguous_frac\t0.200000000000"));
         assert!(tsv.contains("contigs_all_acgt_frac\t0.400000000000"));
         assert!(tsv.contains("distinct_sequences_frac\t0.800000000000"));
         assert!(tsv.contains("duplicate_sequences_frac\t0.200000000000"));
         assert!(tsv.contains("duplicate_bases_frac\t0.097244732577"));
+        assert!(tsv.contains("canonical_distinct_sequences_frac\t0.600000000000"));
+        assert!(tsv.contains("canonical_duplicate_sequences_frac\t0.400000000000"));
+        assert!(tsv.contains("canonical_duplicate_bases_frac\t0.194489465154"));
         assert!(tsv.contains("bases_ge_1kb_frac\t0.810000000000"));
         assert!(tsv.contains("contigs_ge_1mb\t0"));
         assert!(tsv.contains("bases_ge_1mb\t0"));
