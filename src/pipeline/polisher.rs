@@ -134,21 +134,24 @@ impl MinimizerIndex {
 
         let mut last_emitted_pos = usize::MAX;
         for window_start in 0..=(seq.len() - k - w + 1) {
-            let mut min_hash = u64::MAX;
+            let mut min_hash = 0u64;
             let mut min_pos = 0;
+            let mut found_valid_kmer = false;
 
             for i in 0..w {
                 let pos = window_start + i;
                 if pos + k <= seq.len() {
-                    let hash = hash_kmer(&seq[pos..pos + k]);
-                    if hash < min_hash {
-                        min_hash = hash;
-                        min_pos = pos;
+                    if let Some(hash) = hash_kmer(&seq[pos..pos + k]) {
+                        if !found_valid_kmer || hash < min_hash {
+                            min_hash = hash;
+                            min_pos = pos;
+                            found_valid_kmer = true;
+                        }
                     }
                 }
             }
 
-            if min_pos != last_emitted_pos {
+            if found_valid_kmer && min_pos != last_emitted_pos {
                 emit(min_pos, min_hash);
                 last_emitted_pos = min_pos;
             }
@@ -156,7 +159,18 @@ impl MinimizerIndex {
     }
 
     fn map_read(&self, sequence: &[u8]) -> Option<(usize, usize, bool)> {
-        let mut hits: AHashMap<(usize, usize), usize> = AHashMap::new();
+        let mut hits = AHashMap::new();
+        let mut reverse_scratch = Vec::new();
+        self.map_read_with_scratch(sequence, &mut hits, &mut reverse_scratch)
+    }
+
+    fn map_read_with_scratch(
+        &self,
+        sequence: &[u8],
+        hits: &mut AHashMap<(usize, usize), usize>,
+        reverse_scratch: &mut Vec<u8>,
+    ) -> Option<(usize, usize, bool)> {
+        hits.clear();
 
         // Forward mapping
         Self::for_each_minimizer(self.k, self.w, sequence, |read_pos, minimizer| {
@@ -169,8 +183,8 @@ impl MinimizerIndex {
         });
 
         // Reverse complement mapping
-        let rc = reverse_complement(sequence);
-        Self::for_each_minimizer(self.k, self.w, &rc, |read_pos, minimizer| {
+        reverse_complement_into(sequence, reverse_scratch);
+        Self::for_each_minimizer(self.k, self.w, reverse_scratch, |read_pos, minimizer| {
             if let Some(entries) = self.index.get(&minimizer) {
                 for &(contig_id, contig_pos) in entries {
                     let start = contig_pos.saturating_sub(read_pos);
@@ -183,7 +197,7 @@ impl MinimizerIndex {
 
         // Find best hit with at least 3 minimizer matches using explicit,
         // insertion-order-independent tie-breaking.
-        select_best_mapping_hit(hits, 3)
+        select_best_mapping_hit(hits.iter().map(|(k, v)| (*k, *v)), 3)
     }
 }
 
@@ -228,7 +242,7 @@ where
         })
 }
 
-fn hash_kmer(kmer: &[u8]) -> u64 {
+fn hash_kmer(kmer: &[u8]) -> Option<u64> {
     let mut hash = 0u64;
     for &base in kmer {
         let val = match base {
@@ -236,24 +250,29 @@ fn hash_kmer(kmer: &[u8]) -> u64 {
             b'C' | b'c' => 1u64,
             b'G' | b'g' => 2u64,
             b'T' | b't' => 3u64,
-            _ => continue,
+            _ => return None,
         };
         hash = hash.wrapping_mul(4).wrapping_add(val);
     }
-    hash
+    Some(hash)
+}
+
+fn reverse_complement_into(seq: &[u8], out: &mut Vec<u8>) {
+    out.clear();
+    out.reserve(seq.len());
+    out.extend(seq.iter().rev().map(|&b| match b {
+        b'A' | b'a' => b'T',
+        b'T' | b't' => b'A',
+        b'C' | b'c' => b'G',
+        b'G' | b'g' => b'C',
+        _ => b'N',
+    }));
 }
 
 fn reverse_complement(seq: &[u8]) -> Vec<u8> {
-    seq.iter()
-        .rev()
-        .map(|&b| match b {
-            b'A' | b'a' => b'T',
-            b'T' | b't' => b'A',
-            b'C' | b'c' => b'G',
-            b'G' | b'g' => b'C',
-            _ => b'N',
-        })
-        .collect()
+    let mut rc = Vec::with_capacity(seq.len());
+    reverse_complement_into(seq, &mut rc);
+    rc
 }
 
 /// Read contigs from FASTA file
@@ -321,41 +340,12 @@ pub fn polish_contigs(
 
         // Process reads from first file
         info!("  Mapping reads from {}...", reads1_path);
-        let reader1 = try_open_fastq(reads1_path)?;
-        for record in stream_fastq_records_checked(reader1) {
-            let record = record?;
-            stats.reads_processed += 1;
-            if let Some((contig_id, start, is_reverse)) = index.map_read(record.sequence.as_bytes())
-            {
-                stats.reads_mapped += 1;
-                let read_seq = if is_reverse {
-                    reverse_complement(record.sequence.as_bytes())
-                } else {
-                    record.sequence.into_bytes()
-                };
-                add_to_pileup(&mut pileups[contig_id], start, &read_seq);
-            }
-        }
+        map_reads_into_pileups(reads1_path, &index, &mut pileups, &mut stats)?;
 
         // Process reads from second file if provided
         if let Some(reads2) = reads2_path {
             info!("  Mapping reads from {}...", reads2);
-            let reader2 = try_open_fastq(reads2)?;
-            for record in stream_fastq_records_checked(reader2) {
-                let record = record?;
-                stats.reads_processed += 1;
-                if let Some((contig_id, start, is_reverse)) =
-                    index.map_read(record.sequence.as_bytes())
-                {
-                    stats.reads_mapped += 1;
-                    let read_seq = if is_reverse {
-                        reverse_complement(record.sequence.as_bytes())
-                    } else {
-                        record.sequence.into_bytes()
-                    };
-                    add_to_pileup(&mut pileups[contig_id], start, &read_seq);
-                }
-            }
+            map_reads_into_pileups(reads2, &index, &mut pileups, &mut stats)?;
         }
 
         // Call consensus and apply corrections
@@ -393,6 +383,37 @@ fn add_to_pileup(pileup: &mut [PileupColumn], start: usize, read: &[u8]) {
             pileup[pos].add_base(base);
         }
     }
+}
+
+fn map_reads_into_pileups(
+    reads_path: &str,
+    index: &MinimizerIndex,
+    pileups: &mut [Vec<PileupColumn>],
+    stats: &mut PolishStats,
+) -> Result<()> {
+    let reader = try_open_fastq(reads_path)?;
+    let mut hits = AHashMap::new();
+    let mut reverse_scratch = Vec::new();
+
+    for record in stream_fastq_records_checked(reader) {
+        let record = record?;
+        stats.reads_processed += 1;
+
+        let sequence = record.sequence.into_bytes();
+        if let Some((contig_id, start, is_reverse)) =
+            index.map_read_with_scratch(&sequence, &mut hits, &mut reverse_scratch)
+        {
+            stats.reads_mapped += 1;
+            let read_seq = if is_reverse {
+                reverse_scratch.as_slice()
+            } else {
+                sequence.as_slice()
+            };
+            add_to_pileup(&mut pileups[contig_id], start, read_seq);
+        }
+    }
+
+    Ok(())
 }
 
 /// Apply corrections based on pileup consensus
@@ -492,6 +513,21 @@ mod tests {
         // Should find the contig
         let result = index.map_read(b"ACGTACGTACGTACGTACGT");
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn hash_kmer_rejects_ambiguous_bases() {
+        assert_eq!(hash_kmer(b"ACGT"), Some(27));
+        assert_eq!(hash_kmer(b"ACGN"), None);
+    }
+
+    #[test]
+    fn minimizer_index_skips_windows_with_only_ambiguous_kmers() {
+        let mut index = MinimizerIndex::new(3, 2);
+        index.add_contig(0, b"AAAAAAAAAAAA");
+
+        // Ambiguous read should not map via collapsed hash collisions.
+        assert_eq!(index.map_read(b"NNNNNNNNNNNN"), None);
     }
 
     #[test]
