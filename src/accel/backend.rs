@@ -22,11 +22,12 @@ impl AdjacencyTable {
     }
 
     pub fn add_edge(&mut self, from: String, to: String, count: u32) {
-        self.forward
-            .entry(from.clone())
-            .or_default()
-            .push((to.clone(), count));
-        self.backward.entry(to).or_default().push((from, count));
+        upsert_edge_string(
+            self.forward.entry(from.clone()).or_default(),
+            to.clone(),
+            count,
+        );
+        upsert_edge_string(self.backward.entry(to).or_default(), from, count);
     }
 }
 
@@ -62,8 +63,8 @@ impl AdjacencyTableU64 {
 
     #[inline]
     pub fn add_edge(&mut self, from: u64, to: u64, count: u32) {
-        self.forward.entry(from).or_default().push((to, count));
-        self.backward.entry(to).or_default().push((from, count));
+        upsert_edge_u64(self.forward.entry(from).or_default(), to, count);
+        upsert_edge_u64(self.backward.entry(to).or_default(), from, count);
     }
 
     /// Get forward neighbors of a k-mer
@@ -83,6 +84,28 @@ impl Default for AdjacencyTableU64 {
     fn default() -> Self {
         Self::new(31)
     }
+}
+
+#[inline]
+fn upsert_edge_u64(edges: &mut Vec<(u64, u32)>, node: u64, count: u32) {
+    if let Some((_, existing)) = edges.iter_mut().find(|(n, _)| *n == node) {
+        *existing = (*existing).max(count);
+        return;
+    }
+
+    edges.push((node, count));
+    edges.sort_unstable_by_key(|(n, _)| *n);
+}
+
+#[inline]
+fn upsert_edge_string(edges: &mut Vec<(String, u32)>, node: String, count: u32) {
+    if let Some((_, existing)) = edges.iter_mut().find(|(n, _)| *n == node) {
+        *existing = (*existing).max(count);
+        return;
+    }
+
+    edges.push((node, count));
+    edges.sort_unstable_by(|a, b| a.0.cmp(&b.0));
 }
 
 /// Overlap between two contigs
@@ -179,4 +202,56 @@ pub fn select_backend(
     }
 
     cpu_backend
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AdjacencyTable, AdjacencyTableU64};
+
+    #[test]
+    fn add_edge_u64_deduplicates_and_uses_max_weight() {
+        let mut adjacency = AdjacencyTableU64::new(31);
+        adjacency.add_edge(10, 20, 2);
+        adjacency.add_edge(10, 20, 7);
+        adjacency.add_edge(10, 20, 3);
+
+        assert_eq!(adjacency.get_successors(10), Some(&vec![(20, 7)]));
+        assert_eq!(adjacency.get_predecessors(20), Some(&vec![(10, 7)]));
+    }
+
+    #[test]
+    fn add_edge_u64_has_stable_neighbor_order_independent_of_insert_order() {
+        let mut adjacency_a = AdjacencyTableU64::new(31);
+        adjacency_a.add_edge(1, 4, 1);
+        adjacency_a.add_edge(1, 2, 1);
+        adjacency_a.add_edge(1, 3, 1);
+
+        let mut adjacency_b = AdjacencyTableU64::new(31);
+        adjacency_b.add_edge(1, 2, 1);
+        adjacency_b.add_edge(1, 3, 1);
+        adjacency_b.add_edge(1, 4, 1);
+
+        assert_eq!(
+            adjacency_a.get_successors(1),
+            Some(&vec![(2, 1), (3, 1), (4, 1)])
+        );
+        assert_eq!(adjacency_a.get_successors(1), adjacency_b.get_successors(1));
+    }
+
+    #[test]
+    fn add_edge_string_deduplicates_and_uses_max_weight() {
+        let mut adjacency = AdjacencyTable::new();
+        adjacency.add_edge("AAA".to_string(), "AAT".to_string(), 4);
+        adjacency.add_edge("AAA".to_string(), "AAT".to_string(), 9);
+        adjacency.add_edge("AAA".to_string(), "AAT".to_string(), 1);
+
+        assert_eq!(
+            adjacency.forward.get("AAA"),
+            Some(&vec![("AAT".to_string(), 9)])
+        );
+        assert_eq!(
+            adjacency.backward.get("AAT"),
+            Some(&vec![("AAA".to_string(), 9)])
+        );
+    }
 }
