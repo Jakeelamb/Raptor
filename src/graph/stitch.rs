@@ -26,21 +26,26 @@ impl OverlapGraphBuilder {
     }
 
     /// Find overlaps between sequences and build a directed graph
-    pub fn build_overlap_graph(&self, sequences: &[String]) -> DiGraph<String, OverlapInfo> {
+    pub fn build_overlap_graph<S: AsRef<str>>(
+        &self,
+        sequences: &[S],
+    ) -> DiGraph<String, OverlapInfo> {
         let mut graph = DiGraph::new();
         let mut node_indices = Vec::with_capacity(sequences.len());
 
         // Add all sequences as nodes
         for seq in sequences {
-            node_indices.push(graph.add_node(seq.clone()));
+            node_indices.push(graph.add_node(seq.as_ref().to_string()));
         }
 
         // Find overlaps and add edges
         for (i, query) in sequences.iter().enumerate() {
+            let query = query.as_ref();
             for (j, target) in sequences.iter().enumerate() {
                 if i == j {
                     continue;
                 }
+                let target = target.as_ref();
 
                 // Try suffix-prefix overlap
                 if let Some((shift, distance)) =

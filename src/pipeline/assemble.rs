@@ -375,8 +375,8 @@ pub fn assemble_reads_with_gpu(
 
     // If GFA or GFA2 output is requested, find overlaps between contigs
     if (_output_gfa || _output_gfa2 || isoforms) && !contigs.is_empty() {
-        // Extract raw sequences for overlap finding
-        let contig_seqs: Vec<String> = contigs.iter().map(|c| c.sequence.clone()).collect();
+        // Borrow contig sequences to avoid an extra full-sequence clone pass.
+        let contig_seqs: Vec<&str> = contigs.iter().map(|c| c.sequence.as_str()).collect();
 
         // Build overlap graph
         let min_overlap = (k / 2).max(15); // Use at least half of k but minimum 15bp
