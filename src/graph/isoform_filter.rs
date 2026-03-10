@@ -3,7 +3,6 @@ use crate::graph::transcript::Transcript;
 use crate::kmer::nthash::nthash;
 use ahash::AHashSet;
 use std::cmp::Ordering;
-use std::collections::HashSet as StdHashSet;
 use tracing::debug;
 
 /// K-mer size for Jaccard similarity calculation
@@ -263,31 +262,32 @@ pub fn filter_similar_transcripts(
     });
 
     let mut filtered_transcripts = Vec::new();
-    let mut removed_ids = StdHashSet::new();
+    let mut removed = vec![false; sorted_transcripts.len()];
 
     // Keep highest confidence/longest transcripts, filter out similar ones
     for (i, transcript) in sorted_transcripts.iter().enumerate() {
-        if removed_ids.contains(&transcript.id) {
+        if removed[i] {
             continue;
         }
 
         filtered_transcripts.push(transcript.clone());
 
         // Compare with remaining transcripts
-        for (j, other) in sorted_transcripts.iter().enumerate() {
-            if i == j || removed_ids.contains(&other.id) {
+        for (j, other) in sorted_transcripts.iter().enumerate().skip(i + 1) {
+            if removed[j] {
                 continue;
             }
 
             if is_similar(transcript, other, similarity_threshold) {
-                removed_ids.insert(other.id);
+                removed[j] = true;
             }
         }
     }
 
+    let removed_count = removed.into_iter().filter(|is_removed| *is_removed).count();
     debug!(
         "Filtered out {} similar transcripts, kept {}",
-        removed_ids.len(),
+        removed_count,
         filtered_transcripts.len()
     );
 
@@ -323,35 +323,37 @@ pub fn merge_transcripts(transcripts: &[Transcript], similarity_threshold: f64) 
     });
 
     let mut merged_transcripts = Vec::new();
-    let mut removed_ids = StdHashSet::new();
+    let mut removed = vec![false; sorted_transcripts.len()];
 
     // Process all transcripts
     for (i, transcript) in sorted_transcripts.iter().enumerate() {
-        if removed_ids.contains(&transcript.id) {
+        if removed[i] {
             continue;
         }
 
         let mut merged = transcript.clone();
-        let mut merged_with = Vec::new();
+        let mut merged_indices = Vec::new();
 
         // Find transcripts to merge with
-        for (j, other) in sorted_transcripts.iter().enumerate() {
-            if i == j || removed_ids.contains(&other.id) {
+        for (j, other) in sorted_transcripts.iter().enumerate().skip(i + 1) {
+            if removed[j] {
                 continue;
             }
 
             if is_similar(&merged, other, similarity_threshold) {
-                merged_with.push(other);
-                removed_ids.insert(other.id);
+                merged_indices.push(j);
+                removed[j] = true;
             }
         }
 
         // If we found transcripts to merge
-        if !merged_with.is_empty() {
+        if !merged_indices.is_empty() {
             // Update confidence as weighted average
             let mut confidence_sum = 0.0;
             let mut confidence_count = 0usize;
-            for transcript in std::iter::once(&merged).chain(merged_with.iter().copied()) {
+            for transcript in std::iter::once(&merged)
+                .chain(merged_indices.iter().map(|&idx| &sorted_transcripts[idx]))
+            {
                 if transcript.confidence.is_finite() {
                     confidence_sum += transcript.confidence;
                     confidence_count += 1;
@@ -368,7 +370,8 @@ pub fn merge_transcripts(transcripts: &[Transcript], similarity_threshold: f64) 
                 total_tpm += tpm;
                 has_finite_tpm = true;
             }
-            for transcript in &merged_with {
+            for &idx in &merged_indices {
+                let transcript = &sorted_transcripts[idx];
                 if let Some(tpm) = transcript.tpm.filter(|v| v.is_finite()) {
                     total_tpm += tpm;
                     has_finite_tpm = true;
@@ -379,7 +382,7 @@ pub fn merge_transcripts(transcripts: &[Transcript], similarity_threshold: f64) 
             debug!(
                 "Merged transcript {} with {} others",
                 merged.id,
-                merged_with.len()
+                merged_indices.len()
             );
         }
 
@@ -847,5 +850,89 @@ mod tests {
         // similarity should be low (1 / 26), not inflated by repeated windows.
         assert!(!is_similar(&repetitive_short, &repetitive_long, 0.9));
         assert!(is_similar(&repetitive_short, &repetitive_long, 0.03));
+    }
+
+    #[test]
+    fn test_filter_similar_handles_duplicate_ids_without_dropping_unrelated_sequences() {
+        let transcripts = vec![
+            Transcript {
+                id: 7,
+                sequence: "AAAAAAAAAAAAAAAAAAAA".to_string(),
+                path: vec![1, 2],
+                confidence: 0.9,
+                length: 20,
+                strand: '+',
+                tpm: Some(10.0),
+                splicing: "linear".to_string(),
+            },
+            Transcript {
+                id: 7,
+                sequence: "AAAAAAAAAAAAAAAAAAAA".to_string(),
+                path: vec![1, 2],
+                confidence: 0.8,
+                length: 20,
+                strand: '+',
+                tpm: Some(5.0),
+                splicing: "linear".to_string(),
+            },
+            Transcript {
+                id: 7,
+                sequence: "CCCCCCCCCCCCCCCCCCCC".to_string(),
+                path: vec![3, 4],
+                confidence: 0.7,
+                length: 20,
+                strand: '+',
+                tpm: Some(1.0),
+                splicing: "linear".to_string(),
+            },
+        ];
+
+        let filtered = filter_similar_transcripts(&transcripts, 0.99);
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].sequence, "AAAAAAAAAAAAAAAAAAAA");
+        assert_eq!(filtered[1].sequence, "CCCCCCCCCCCCCCCCCCCC");
+    }
+
+    #[test]
+    fn test_merge_transcripts_handles_duplicate_ids_without_collapsing_unrelated_sequences() {
+        let transcripts = vec![
+            Transcript {
+                id: 7,
+                sequence: "AAAAAAAAAAAAAAAAAAAA".to_string(),
+                path: vec![1, 2],
+                confidence: 0.9,
+                length: 20,
+                strand: '+',
+                tpm: Some(10.0),
+                splicing: "linear".to_string(),
+            },
+            Transcript {
+                id: 7,
+                sequence: "AAAAAAAAAAAAAAAAAAAA".to_string(),
+                path: vec![1, 2],
+                confidence: 0.8,
+                length: 20,
+                strand: '+',
+                tpm: Some(5.0),
+                splicing: "linear".to_string(),
+            },
+            Transcript {
+                id: 7,
+                sequence: "CCCCCCCCCCCCCCCCCCCC".to_string(),
+                path: vec![3, 4],
+                confidence: 0.7,
+                length: 20,
+                strand: '+',
+                tpm: Some(1.0),
+                splicing: "linear".to_string(),
+            },
+        ];
+
+        let merged = merge_transcripts(&transcripts, 0.99);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].sequence, "AAAAAAAAAAAAAAAAAAAA");
+        assert!((merged[0].confidence - 0.85).abs() < 1e-12);
+        assert_eq!(merged[0].tpm, Some(15.0));
+        assert_eq!(merged[1].sequence, "CCCCCCCCCCCCCCCCCCCC");
     }
 }
