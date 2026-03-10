@@ -43,6 +43,42 @@ fn write_gfa(
     file
 }
 
+fn write_gfa_with_walks(
+    segments: &[String],
+    links: &[(usize, usize)],
+    paths: &[Vec<usize>],
+    seed: u64,
+) -> NamedTempFile {
+    let mut records = Vec::new();
+
+    for segment in segments {
+        records.push(format!("S\t{}\tAAAA", segment));
+    }
+
+    for &(from, to) in links {
+        records.push(format!("L\t{}\t+\t{}\t+\t0M", segments[from], segments[to]));
+    }
+
+    for (idx, path) in paths.iter().enumerate() {
+        let walk = path
+            .iter()
+            .map(|&node| format!(">{}", segments[node]))
+            .collect::<Vec<_>>()
+            .join("");
+        records.push(format!("W\tsample\t{}\tchr1\t0\t{}\t{}", idx, path.len(), walk));
+    }
+
+    let mut rng = StdRng::seed_from_u64(seed);
+    records.shuffle(&mut rng);
+
+    let mut file = NamedTempFile::new().expect("create temp file");
+    writeln!(file, "H\tVN:Z:1.0").expect("write header");
+    for record in records {
+        writeln!(file, "{}", record).expect("write record");
+    }
+    file
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
@@ -153,5 +189,56 @@ proptest! {
         prop_assert_eq!(stats_with_duplicates.path_n90, stats_deduped.path_n90);
         prop_assert!((stats_with_duplicates.path_au_n - stats_deduped.path_au_n).abs() < 1e-12);
         prop_assert!((stats_with_duplicates.branchiness - stats_deduped.branchiness).abs() < 1e-12);
+    }
+
+    #[test]
+    fn compute_path_stats_matches_equivalent_p_and_w_path_records(
+        segment_count in 1usize..=6,
+        link_items in prop::collection::vec((0usize..6, 0usize..6), 0..16),
+        path_items in prop::collection::vec(prop::collection::vec(0usize..6, 1..6), 1..8),
+        seed in any::<u64>()
+    ) {
+        let segments: Vec<String> = (0..segment_count).map(|i| (i + 1).to_string()).collect();
+
+        let mut unique_links = BTreeSet::new();
+        for (from, to) in link_items {
+            if from < segment_count && to < segment_count && from != to {
+                unique_links.insert((from, to));
+            }
+        }
+        let links: Vec<(usize, usize)> = unique_links.into_iter().collect();
+
+        let mut paths = Vec::new();
+        for path in path_items {
+            let filtered: Vec<usize> = path
+                .into_iter()
+                .filter(|&node| node < segment_count)
+                .collect();
+            if !filtered.is_empty() {
+                paths.push(filtered);
+            }
+        }
+        if paths.is_empty() {
+            paths.push(vec![0]);
+        }
+
+        let file_p = write_gfa(&segments, &links, &paths, seed);
+        let file_w = write_gfa_with_walks(&segments, &links, &paths, seed ^ 0x9A5C_72D4_18EF_3341);
+
+        let stats_p = compute_path_stats(file_p.path().to_str().expect("utf8 path"))
+            .expect("compute stats from P records");
+        let stats_w = compute_path_stats(file_w.path().to_str().expect("utf8 path"))
+            .expect("compute stats from W records");
+
+        prop_assert_eq!(stats_p.total_paths, stats_w.total_paths);
+        prop_assert_eq!(stats_p.branch_count, stats_w.branch_count);
+        prop_assert_eq!(stats_p.max_depth, stats_w.max_depth);
+        prop_assert_eq!(stats_p.bubble_count, stats_w.bubble_count);
+        prop_assert!((stats_p.average_length - stats_w.average_length).abs() < 1e-12);
+        prop_assert!((stats_p.median_length - stats_w.median_length).abs() < 1e-12);
+        prop_assert_eq!(stats_p.path_n50, stats_w.path_n50);
+        prop_assert_eq!(stats_p.path_n90, stats_w.path_n90);
+        prop_assert!((stats_p.path_au_n - stats_w.path_au_n).abs() < 1e-12);
+        prop_assert!((stats_p.branchiness - stats_w.branchiness).abs() < 1e-12);
     }
 }

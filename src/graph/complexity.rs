@@ -58,39 +58,42 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
 
     for line_result in reader.lines() {
         let line = line_result?;
-        let parts: Vec<&str> = line.split('\t').collect();
+        let mut fields = line.split('\t');
+        let Some(record_type) = fields.next() else {
+            continue;
+        };
 
-        match parts.get(0) {
-            Some(&"S") if parts.len() >= 3 => {
-                // Segment line
-                let id = parts[1].to_string();
-                segments.insert(id);
-            }
-            Some(&"L") if parts.len() >= 5 => {
-                // Link line
-                let from = parts[1].to_string();
-                let to = parts[3].to_string();
-                links.insert((from, to));
-            }
-            Some(&"P") if parts.len() >= 3 => {
-                // Path line
-                let mut unique_nodes_in_path = HashSet::new();
-                let mut path_len = 0usize;
-                for segment in parts[2].split(',') {
-                    let segment = segment.trim_end_matches(|c| c == '+' || c == '-');
-                    if segment.is_empty() {
-                        continue;
-                    }
-                    path_len += 1;
-                    unique_nodes_in_path.insert(segment.to_string());
+        match record_type {
+            "S" => {
+                if let Some(id) = fields.next() {
+                    segments.insert(id.to_string());
                 }
-
-                if path_len > 0 {
-                    path_count += 1;
-                    path_lengths.push(path_len);
-                    for node in unique_nodes_in_path {
-                        *node_path_count.entry(node).or_insert(0) += 1;
-                    }
+            }
+            "L" => {
+                if let (Some(from), Some(to)) = (fields.next(), fields.nth(1)) {
+                    links.insert((from.to_string(), to.to_string()));
+                }
+            }
+            "P" => {
+                // P\tname\tsegment+,segment-\t...
+                if let Some(segments_field) = fields.nth(1) {
+                    add_path_record_from_p(
+                        segments_field,
+                        &mut path_count,
+                        &mut path_lengths,
+                        &mut node_path_count,
+                    );
+                }
+            }
+            "W" => {
+                // W\tsample\thap\tseqid\tstart\tend\t>seg1<seg2...
+                if let Some(walk) = fields.nth(5) {
+                    add_path_record_from_w(
+                        walk,
+                        &mut path_count,
+                        &mut path_lengths,
+                        &mut node_path_count,
+                    );
                 }
             }
             _ => {}
@@ -188,6 +191,78 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
         bubble_count,
         branchiness,
     })
+}
+
+#[inline]
+fn add_path_record_from_p(
+    segments_field: &str,
+    path_count: &mut usize,
+    path_lengths: &mut Vec<usize>,
+    node_path_count: &mut HashMap<String, usize>,
+) {
+    let mut unique_nodes_in_path = HashSet::new();
+    let mut path_len = 0usize;
+
+    for segment in segments_field.split(',') {
+        let segment = segment.trim_end_matches(|c| c == '+' || c == '-');
+        if segment.is_empty() {
+            continue;
+        }
+        path_len += 1;
+        unique_nodes_in_path.insert(segment.to_string());
+    }
+
+    finalize_path_record(path_len, unique_nodes_in_path, path_count, path_lengths, node_path_count);
+}
+
+#[inline]
+fn add_path_record_from_w(
+    walk: &str,
+    path_count: &mut usize,
+    path_lengths: &mut Vec<usize>,
+    node_path_count: &mut HashMap<String, usize>,
+) {
+    let mut unique_nodes_in_path = HashSet::new();
+    let mut path_len = 0usize;
+
+    let bytes = walk.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] != b'>' && bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        i += 1;
+        let start = i;
+        while i < bytes.len() && bytes[i] != b'>' && bytes[i] != b'<' {
+            i += 1;
+        }
+        if start < i {
+            path_len += 1;
+            unique_nodes_in_path.insert(walk[start..i].to_string());
+        }
+    }
+
+    finalize_path_record(path_len, unique_nodes_in_path, path_count, path_lengths, node_path_count);
+}
+
+#[inline]
+fn finalize_path_record(
+    path_len: usize,
+    unique_nodes_in_path: HashSet<String>,
+    path_count: &mut usize,
+    path_lengths: &mut Vec<usize>,
+    node_path_count: &mut HashMap<String, usize>,
+) {
+    if path_len == 0 {
+        return;
+    }
+
+    *path_count += 1;
+    path_lengths.push(path_len);
+    for node in unique_nodes_in_path {
+        *node_path_count.entry(node).or_insert(0) += 1;
+    }
 }
 
 /// Calculate the maximum depth of the graph using DFS
@@ -450,6 +525,46 @@ mod tests {
         let stats = compute_path_stats(temp_file.path().to_str().unwrap()).unwrap();
         assert_eq!(stats.total_paths, 2);
         assert_eq!(stats.branch_count, 1);
+    }
+
+    #[test]
+    fn test_compute_path_stats_supports_walk_records() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "H\tVN:Z:1.0").unwrap();
+        writeln!(temp_file, "S\t1\tAAAA").unwrap();
+        writeln!(temp_file, "S\t2\tCCCC").unwrap();
+        writeln!(temp_file, "S\t3\tGGGG").unwrap();
+        writeln!(temp_file, "L\t1\t+\t2\t+\t3M").unwrap();
+        writeln!(temp_file, "L\t2\t+\t3\t+\t3M").unwrap();
+        writeln!(temp_file, "W\tsample\t0\tchr1\t0\t12\t>1>2>3").unwrap();
+        writeln!(temp_file, "W\tsample\t1\tchr1\t0\t8\t>1>3").unwrap();
+
+        let stats = compute_path_stats(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(stats.total_paths, 2);
+        assert!((stats.average_length - 2.5).abs() < 1e-12);
+        assert_eq!(stats.median_length, 2.5);
+        assert_eq!(stats.path_n50, 3);
+        assert_eq!(stats.path_n90, 2);
+        assert!((stats.path_au_n - 2.6).abs() < 1e-12);
+        assert_eq!(stats.branch_count, 2);
+    }
+
+    #[test]
+    fn test_compute_path_stats_counts_both_p_and_w_records() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "H\tVN:Z:1.0").unwrap();
+        writeln!(temp_file, "S\t1\tAAAA").unwrap();
+        writeln!(temp_file, "S\t2\tCCCC").unwrap();
+        writeln!(temp_file, "S\t3\tGGGG").unwrap();
+        writeln!(temp_file, "P\tp1\t1+,2+,3+\t*").unwrap();
+        writeln!(temp_file, "W\tsample\t0\tchr1\t0\t8\t>1>3").unwrap();
+
+        let stats = compute_path_stats(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(stats.total_paths, 2);
+        assert_eq!(stats.path_n50, 3);
+        assert_eq!(stats.path_n90, 2);
+        assert!((stats.path_au_n - 2.6).abs() < 1e-12);
+        assert_eq!(stats.branch_count, 2);
     }
 
     #[test]
