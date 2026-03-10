@@ -22,13 +22,19 @@ where
     let mut all_segments = HashSet::new();
     let mut segment_usage = HashMap::new();
     let mut path_lengths = Vec::with_capacity(items.len());
+    let mut unique_segments_in_path = HashSet::new();
 
     for item in items {
         let segments = segments_of(item);
         path_lengths.push(segments.len());
+        unique_segments_in_path.clear();
         for &segment in segments {
             all_segments.insert(segment);
-            *segment_usage.entry(segment).or_insert(0) += 1;
+            // Shared-segment metrics should track presence across paths, not
+            // multiplicity within the same path.
+            if unique_segments_in_path.insert(segment) {
+                *segment_usage.entry(segment).or_insert(0) += 1;
+            }
         }
     }
 
@@ -60,10 +66,14 @@ where
 
 /// Count number of shared segments among multiple isoform paths
 pub fn compute_branchiness(paths: &[Vec<String>]) -> usize {
-    let mut seg_usage = HashMap::new();
+    let mut seg_usage: HashMap<&str, usize> = HashMap::new();
+    let mut unique_segments_in_path = HashSet::new();
     for path in paths {
+        unique_segments_in_path.clear();
         for seg in path {
-            *seg_usage.entry(seg).or_insert(0) += 1;
+            if unique_segments_in_path.insert(seg.as_str()) {
+                *seg_usage.entry(seg.as_str()).or_insert(0) += 1;
+            }
         }
     }
 
@@ -227,6 +237,17 @@ mod tests {
     }
 
     #[test]
+    fn test_compute_branchiness_ignores_within_path_repetitions() {
+        let paths = vec![
+            vec!["A".to_string(), "A".to_string(), "B".to_string()],
+            vec!["C".to_string(), "D".to_string()],
+        ];
+
+        let branchy = compute_branchiness(&paths);
+        assert_eq!(branchy, 0);
+    }
+
+    #[test]
     fn test_compute_path_complexity() {
         let path1 = Path {
             id: 0,
@@ -253,6 +274,36 @@ mod tests {
         assert_eq!(metrics.total_segments, 8); // segments 0-7
         assert_eq!(metrics.shared_segments, 1); // Only segment 0 is shared
         assert_eq!(metrics.average_path_length, 3.0);
+    }
+
+    #[test]
+    fn test_compute_path_complexity_counts_shared_segments_by_path_presence() {
+        let path1 = Path {
+            id: 0,
+            segments: vec![0, 0, 1],
+            overlaps: vec![5, 5],
+        };
+        let path2 = Path {
+            id: 1,
+            segments: vec![2, 3],
+            overlaps: vec![5],
+        };
+
+        let metrics = compute_path_complexity(&[path1, path2]);
+        assert_eq!(metrics.total_segments, 4);
+        assert_eq!(metrics.shared_segments, 0);
+    }
+
+    #[test]
+    fn test_compute_transcript_complexity_counts_shared_segments_by_transcript_presence() {
+        let transcripts = vec![
+            Transcript::new(0, "AAAA".to_string(), vec![7, 7, 8], 0.9),
+            Transcript::new(1, "CCCC".to_string(), vec![9, 10], 0.8),
+        ];
+
+        let metrics = compute_transcript_complexity(&transcripts);
+        assert_eq!(metrics.total_segments, 4);
+        assert_eq!(metrics.shared_segments, 0);
     }
 
     #[test]
