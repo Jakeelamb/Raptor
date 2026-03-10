@@ -211,10 +211,10 @@ fn main() {
                 }
                 "tsv" => {
                     println!(
-                        "contigs\ttotal_len\tavg_len\tmedian_len\tgc_bases\tacgt_bases\tn_bases\tambiguous_bases\tgc_content\tn_content\tambiguous_content\tn25\tn50\tn75\tn90\tn95\tn99\tl25\tl50\tl75\tl90\tl95\tl99\taun\tlongest\tcontigs_ge_1kb\tcontigs_ge_10kb\tcontigs_ge_50kb\tcontigs_ge_100kb\tbases_ge_1kb\tbases_ge_10kb\tbases_ge_50kb\tbases_ge_100kb\tcontigs_ge_1kb_frac\tcontigs_ge_10kb_frac\tcontigs_ge_50kb_frac\tcontigs_ge_100kb_frac\tbases_ge_1kb_frac\tbases_ge_10kb_frac\tbases_ge_50kb_frac\tbases_ge_100kb_frac"
+                        "contigs\ttotal_len\tavg_len\tmedian_len\tgc_bases\tacgt_bases\tn_bases\tambiguous_bases\tgc_content\tn_content\tambiguous_content\tn25\tn50\tn75\tn90\tn95\tn99\tl25\tl50\tl75\tl90\tl95\tl99\taun\tlongest\tcontigs_ge_1kb\tcontigs_ge_10kb\tcontigs_ge_50kb\tcontigs_ge_100kb\tbases_ge_1kb\tbases_ge_10kb\tbases_ge_50kb\tbases_ge_100kb\tcontigs_ge_1kb_frac\tcontigs_ge_10kb_frac\tcontigs_ge_50kb_frac\tcontigs_ge_100kb_frac\tbases_ge_1kb_frac\tbases_ge_10kb_frac\tbases_ge_50kb_frac\tbases_ge_100kb_frac\tn_run_count\tmax_n_run\tcontigs_with_n\tcontigs_with_ambiguous\tcontigs_all_acgt\tcontigs_with_n_frac\tcontigs_with_ambiguous_frac\tcontigs_all_acgt_frac"
                     );
                     println!(
-                        "{}\t{}\t{:.2}\t{:.2}\t{}\t{}\t{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}",
+                        "{}\t{}\t{:.2}\t{:.2}\t{}\t{}\t{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{:.6}\t{:.6}\t{:.6}",
                         stats.total_contigs,
                         stats.total_length,
                         stats.average_length,
@@ -255,7 +255,15 @@ fn main() {
                         stats.bases_ge_1kb_frac,
                         stats.bases_ge_10kb_frac,
                         stats.bases_ge_50kb_frac,
-                        stats.bases_ge_100kb_frac
+                        stats.bases_ge_100kb_frac,
+                        stats.n_run_count,
+                        stats.max_n_run,
+                        stats.contigs_with_n,
+                        stats.contigs_with_ambiguous,
+                        stats.contigs_all_acgt,
+                        stats.contigs_with_n_frac,
+                        stats.contigs_with_ambiguous_frac,
+                        stats.contigs_all_acgt_frac
                     );
                 }
                 _ => eprintln!("Unsupported format: {}", format),

@@ -13,6 +13,8 @@ pub struct Stats {
     pub acgt_bases: usize,
     pub n_bases: usize,
     pub ambiguous_bases: usize,
+    pub n_run_count: usize,
+    pub max_n_run: usize,
     pub contigs_with_n: usize,
     pub contigs_with_ambiguous: usize,
     pub contigs_all_acgt: usize,
@@ -72,6 +74,37 @@ struct ContigQualitySummary {
     all_acgt: usize,
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+struct NRunSummary {
+    run_count: usize,
+    max_run: usize,
+    active_run: usize,
+}
+
+impl NRunSummary {
+    #[inline]
+    fn add_sequence(&mut self, seq: &[u8]) {
+        for &base in seq {
+            if matches!(base, b'N' | b'n') {
+                self.active_run += 1;
+            } else if self.active_run > 0 {
+                self.run_count += 1;
+                self.max_run = self.max_run.max(self.active_run);
+                self.active_run = 0;
+            }
+        }
+    }
+
+    #[inline]
+    fn finish_contig(&mut self) {
+        if self.active_run > 0 {
+            self.run_count += 1;
+            self.max_run = self.max_run.max(self.active_run);
+            self.active_run = 0;
+        }
+    }
+}
+
 #[inline]
 fn update_contig_quality(summary: &mut ContigQualitySummary, composition: BaseComposition) {
     if composition.n_bases > 0 {
@@ -93,6 +126,7 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
     let mut composition = BaseComposition::default();
     let mut current_contig_composition = BaseComposition::default();
     let mut contig_quality = ContigQualitySummary::default();
+    let mut n_runs = NRunSummary::default();
     let mut line = String::new();
 
     loop {
@@ -107,6 +141,7 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
             if in_sequence {
                 lengths.push(current_len);
                 update_contig_quality(&mut contig_quality, current_contig_composition);
+                n_runs.finish_contig();
             }
             in_sequence = true;
             current_len = 0;
@@ -121,6 +156,7 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
             })?;
             composition.add_sequence(seq);
             current_contig_composition.add_sequence(seq);
+            n_runs.add_sequence(seq);
         }
     }
 
@@ -128,6 +164,7 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
     if in_sequence {
         lengths.push(current_len);
         update_contig_quality(&mut contig_quality, current_contig_composition);
+        n_runs.finish_contig();
     }
 
     let length_stats = evaluate_lengths_in_place(&mut lengths);
@@ -155,6 +192,8 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         acgt_bases: composition.acgt_bases,
         n_bases: composition.n_bases,
         ambiguous_bases: composition.ambiguous_bases,
+        n_run_count: n_runs.run_count,
+        max_n_run: n_runs.max_run,
         contigs_with_n: contig_quality.with_n,
         contigs_with_ambiguous: contig_quality.with_ambiguous,
         contigs_all_acgt: contig_quality.all_acgt,
@@ -269,6 +308,8 @@ mod tests {
         assert_eq!(stats.acgt_bases, 48);
         assert_eq!(stats.n_bases, 0);
         assert_eq!(stats.ambiguous_bases, 0);
+        assert_eq!(stats.n_run_count, 0);
+        assert_eq!(stats.max_n_run, 0);
         assert_eq!(stats.contigs_with_n, 0);
         assert_eq!(stats.contigs_with_ambiguous, 0);
         assert_eq!(stats.contigs_all_acgt, 3);
@@ -327,6 +368,8 @@ mod tests {
         assert_eq!(stats.acgt_bases, 16);
         assert_eq!(stats.n_bases, 0);
         assert_eq!(stats.ambiguous_bases, 0);
+        assert_eq!(stats.n_run_count, 0);
+        assert_eq!(stats.max_n_run, 0);
         assert_eq!(stats.contigs_with_n, 0);
         assert_eq!(stats.contigs_with_ambiguous, 0);
         assert_eq!(stats.contigs_all_acgt, 2);
@@ -425,6 +468,8 @@ mod tests {
             acgt_bases: 0,
             n_bases: 0,
             ambiguous_bases: 0,
+            n_run_count: 0,
+            max_n_run: 0,
             contigs_with_n: 0,
             contigs_with_ambiguous: 0,
             contigs_all_acgt: 0,
@@ -516,6 +561,8 @@ mod tests {
         assert_eq!(stats.acgt_bases, 7);
         assert_eq!(stats.n_bases, 4);
         assert_eq!(stats.ambiguous_bases, 1);
+        assert_eq!(stats.n_run_count, 1);
+        assert_eq!(stats.max_n_run, 4);
         assert_eq!(stats.contigs_with_n, 1);
         assert_eq!(stats.contigs_with_ambiguous, 1);
         assert_eq!(stats.contigs_all_acgt, 0);
@@ -583,6 +630,24 @@ mod tests {
     }
 
     #[test]
+    fn test_calculate_stats_reports_n_run_metrics_across_wrapped_lines_and_contigs() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, ">contig_1").unwrap();
+        writeln!(file, "AANN").unwrap();
+        writeln!(file, "NNCC").unwrap(); // same run continues across line boundary (run len 4)
+        writeln!(file, ">contig_2").unwrap();
+        writeln!(file, "NN").unwrap(); // second run (len 2)
+        writeln!(file, "A").unwrap();
+        writeln!(file, "NNN").unwrap(); // third run (len 3)
+        writeln!(file, ">contig_3").unwrap();
+        writeln!(file, "ACGT").unwrap();
+
+        let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(stats.n_run_count, 3);
+        assert_eq!(stats.max_n_run, 4);
+    }
+
+    #[test]
     fn test_calculate_stats_returns_not_found_for_missing_fasta() {
         let temp_dir = TempDir::new().unwrap();
         let missing = temp_dir.path().join("missing.fasta");
@@ -627,6 +692,8 @@ mod tests {
             prop_assert_eq!(stats_a.acgt_bases, stats_b.acgt_bases);
             prop_assert_eq!(stats_a.n_bases, stats_b.n_bases);
             prop_assert_eq!(stats_a.ambiguous_bases, stats_b.ambiguous_bases);
+            prop_assert_eq!(stats_a.n_run_count, stats_b.n_run_count);
+            prop_assert_eq!(stats_a.max_n_run, stats_b.max_n_run);
             prop_assert_eq!(stats_a.contigs_with_n, stats_b.contigs_with_n);
             prop_assert_eq!(stats_a.contigs_with_ambiguous, stats_b.contigs_with_ambiguous);
             prop_assert_eq!(stats_a.contigs_all_acgt, stats_b.contigs_all_acgt);
