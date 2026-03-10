@@ -131,6 +131,7 @@ impl BaseComposition {
     }
 }
 
+#[cfg(test)]
 #[inline]
 fn nx_lx(
     sorted_desc_lengths: &[usize],
@@ -153,6 +154,51 @@ fn nx_lx(
     }
 
     (0, sorted_desc_lengths.len())
+}
+
+const NX_TARGETS: [(usize, usize); 7] = [
+    (1, 10),   // N10/L10
+    (1, 4),    // N25/L25
+    (1, 2),    // N50/L50
+    (3, 4),    // N75/L75
+    (9, 10),   // N90/L90
+    (19, 20),  // N95/L95
+    (99, 100), // N99/L99
+];
+
+#[inline]
+fn compute_nx_lx_series(sorted_desc_lengths: &[usize], total_len: usize) -> [(usize, usize); 7] {
+    let mut results = [(0usize, 0usize); 7];
+    if sorted_desc_lengths.is_empty() || total_len == 0 {
+        return results;
+    }
+
+    let mut thresholds = [0u128; 7];
+    for (idx, (numerator, denominator)) in NX_TARGETS.iter().copied().enumerate() {
+        thresholds[idx] = ((total_len as u128 * numerator as u128) + denominator as u128 - 1)
+            / denominator as u128;
+    }
+
+    let mut acc = 0u128;
+    let mut target_idx = 0usize;
+    for (idx, &len) in sorted_desc_lengths.iter().enumerate() {
+        acc += len as u128;
+        while target_idx < thresholds.len() && acc >= thresholds[target_idx] {
+            results[target_idx] = (len, idx + 1);
+            target_idx += 1;
+        }
+        if target_idx == thresholds.len() {
+            break;
+        }
+    }
+
+    if target_idx < thresholds.len() {
+        for unresolved in &mut results[target_idx..] {
+            *unresolved = (0, sorted_desc_lengths.len());
+        }
+    }
+
+    results
 }
 
 #[inline]
@@ -238,13 +284,14 @@ pub fn evaluate_lengths_sorted_desc(sorted_lengths: &[usize]) -> TranscriptStats
         .fold(0usize, |acc, &len| acc.saturating_add(len));
     let avg = total_len as f64 / sorted_lengths.len() as f64;
     let median_length = compute_median_sorted_desc(sorted_lengths);
-    let (n10, l10) = nx_lx(sorted_lengths, total_len, 1, 10);
-    let (n25, l25) = nx_lx(sorted_lengths, total_len, 1, 4);
-    let (n50, l50) = nx_lx(sorted_lengths, total_len, 1, 2);
-    let (n75, l75) = nx_lx(sorted_lengths, total_len, 3, 4);
-    let (n90, l90) = nx_lx(sorted_lengths, total_len, 9, 10);
-    let (n95, l95) = nx_lx(sorted_lengths, total_len, 19, 20);
-    let (n99, l99) = nx_lx(sorted_lengths, total_len, 99, 100);
+    let nx_lx = compute_nx_lx_series(sorted_lengths, total_len);
+    let (n10, l10) = nx_lx[0];
+    let (n25, l25) = nx_lx[1];
+    let (n50, l50) = nx_lx[2];
+    let (n75, l75) = nx_lx[3];
+    let (n90, l90) = nx_lx[4];
+    let (n95, l95) = nx_lx[5];
+    let (n99, l99) = nx_lx[6];
     let au_n = compute_au_n(sorted_lengths, total_len);
     let longest = sorted_lengths.first().copied().unwrap_or(0);
     let length_buckets = compute_length_buckets(sorted_lengths);
