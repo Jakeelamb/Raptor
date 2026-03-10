@@ -22,8 +22,14 @@ pub struct PathStats {
     /// N10 of path lengths in segments
     pub path_n10: usize,
 
+    /// N25 of path lengths in segments
+    pub path_n25: usize,
+
     /// N50 of path lengths in segments
     pub path_n50: usize,
+
+    /// N75 of path lengths in segments
+    pub path_n75: usize,
 
     /// N90 of path lengths in segments
     pub path_n90: usize,
@@ -37,8 +43,14 @@ pub struct PathStats {
     /// L10 of path lengths in segments
     pub path_l10: usize,
 
+    /// L25 of path lengths in segments
+    pub path_l25: usize,
+
     /// L50 of path lengths in segments
     pub path_l50: usize,
+
+    /// L75 of path lengths in segments
+    pub path_l75: usize,
 
     /// L90 of path lengths in segments
     pub path_l90: usize,
@@ -220,12 +232,16 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
         average_length: path_length_stats.avg_length,
         median_length: path_length_stats.median_length,
         path_n10: path_length_stats.n10,
+        path_n25: path_length_stats.n25,
         path_n50: path_length_stats.n50,
+        path_n75: path_length_stats.n75,
         path_n90: path_length_stats.n90,
         path_n95: path_length_stats.n95,
         path_n99: path_length_stats.n99,
         path_l10: path_length_stats.l10,
+        path_l25: path_length_stats.l25,
         path_l50: path_length_stats.l50,
+        path_l75: path_length_stats.l75,
         path_l90: path_length_stats.l90,
         path_l95: path_length_stats.l95,
         path_l99: path_length_stats.l99,
@@ -516,12 +532,16 @@ mod tests {
         assert!((stats.average_length - (7.0 / 3.0)).abs() < 1e-12);
         assert_eq!(stats.median_length, 2.0);
         assert_eq!(stats.path_n10, 3);
+        assert_eq!(stats.path_n25, 3);
         assert_eq!(stats.path_n50, 2);
+        assert_eq!(stats.path_n75, 2);
         assert_eq!(stats.path_n90, 2);
         assert_eq!(stats.path_n95, 2);
         assert_eq!(stats.path_n99, 2);
         assert_eq!(stats.path_l10, 1);
+        assert_eq!(stats.path_l25, 1);
         assert_eq!(stats.path_l50, 2);
+        assert_eq!(stats.path_l75, 3);
         assert_eq!(stats.path_l90, 3);
         assert_eq!(stats.path_l95, 3);
         assert_eq!(stats.path_l99, 3);
@@ -549,12 +569,16 @@ mod tests {
         assert_eq!(stats.average_length, 3.0);
         assert_eq!(stats.median_length, 3.0);
         assert_eq!(stats.path_n10, 3);
+        assert_eq!(stats.path_n25, 3);
         assert_eq!(stats.path_n50, 3);
+        assert_eq!(stats.path_n75, 3);
         assert_eq!(stats.path_n90, 3);
         assert_eq!(stats.path_n95, 3);
         assert_eq!(stats.path_n99, 3);
         assert_eq!(stats.path_l10, 1);
+        assert_eq!(stats.path_l25, 1);
         assert_eq!(stats.path_l50, 1);
+        assert_eq!(stats.path_l75, 1);
         assert_eq!(stats.path_l90, 1);
         assert_eq!(stats.path_l95, 1);
         assert_eq!(stats.path_l99, 1);
@@ -580,12 +604,16 @@ mod tests {
         assert_eq!(stats.average_length, 2.0);
         assert_eq!(stats.median_length, 2.0);
         assert_eq!(stats.path_n10, 2);
+        assert_eq!(stats.path_n25, 2);
         assert_eq!(stats.path_n50, 2);
+        assert_eq!(stats.path_n75, 2);
         assert_eq!(stats.path_n90, 2);
         assert_eq!(stats.path_n95, 2);
         assert_eq!(stats.path_n99, 2);
         assert_eq!(stats.path_l10, 1);
+        assert_eq!(stats.path_l25, 1);
         assert_eq!(stats.path_l50, 1);
+        assert_eq!(stats.path_l75, 1);
         assert_eq!(stats.path_l90, 1);
         assert_eq!(stats.path_l95, 1);
         assert_eq!(stats.path_l99, 1);
@@ -609,12 +637,16 @@ mod tests {
         assert_eq!(stats.average_length, 2.0);
         assert_eq!(stats.median_length, 2.0);
         assert_eq!(stats.path_n10, 2);
+        assert_eq!(stats.path_n25, 2);
         assert_eq!(stats.path_n50, 2);
+        assert_eq!(stats.path_n75, 2);
         assert_eq!(stats.path_n90, 2);
         assert_eq!(stats.path_n95, 2);
         assert_eq!(stats.path_n99, 2);
         assert_eq!(stats.path_l10, 1);
+        assert_eq!(stats.path_l25, 1);
         assert_eq!(stats.path_l50, 1);
+        assert_eq!(stats.path_l75, 1);
         assert_eq!(stats.path_l90, 1);
         assert_eq!(stats.path_l95, 1);
         assert_eq!(stats.path_l99, 1);
@@ -653,12 +685,16 @@ mod tests {
         assert!((stats.average_length - 2.5).abs() < 1e-12);
         assert_eq!(stats.median_length, 2.5);
         assert_eq!(stats.path_n10, 3);
+        assert_eq!(stats.path_n25, 3);
         assert_eq!(stats.path_n50, 3);
+        assert_eq!(stats.path_n75, 2);
         assert_eq!(stats.path_n90, 2);
         assert_eq!(stats.path_n95, 2);
         assert_eq!(stats.path_n99, 2);
         assert_eq!(stats.path_l10, 1);
+        assert_eq!(stats.path_l25, 1);
         assert_eq!(stats.path_l50, 1);
+        assert_eq!(stats.path_l75, 2);
         assert_eq!(stats.path_l90, 2);
         assert_eq!(stats.path_l95, 2);
         assert_eq!(stats.path_l99, 2);
@@ -679,12 +715,16 @@ mod tests {
         let stats = compute_path_stats(temp_file.path().to_str().unwrap()).unwrap();
         assert_eq!(stats.total_paths, 2);
         assert_eq!(stats.path_n10, 3);
+        assert_eq!(stats.path_n25, 3);
         assert_eq!(stats.path_n50, 3);
+        assert_eq!(stats.path_n75, 2);
         assert_eq!(stats.path_n90, 2);
         assert_eq!(stats.path_n95, 2);
         assert_eq!(stats.path_n99, 2);
         assert_eq!(stats.path_l10, 1);
+        assert_eq!(stats.path_l25, 1);
         assert_eq!(stats.path_l50, 1);
+        assert_eq!(stats.path_l75, 2);
         assert_eq!(stats.path_l90, 2);
         assert_eq!(stats.path_l95, 2);
         assert_eq!(stats.path_l99, 2);
@@ -702,9 +742,13 @@ mod tests {
         let stats = compute_path_stats(temp_file.path().to_str().unwrap()).unwrap();
         assert_eq!(stats.total_paths, 2);
         assert_eq!(stats.path_n10, 2);
+        assert_eq!(stats.path_n25, 2);
         assert_eq!(stats.path_n50, 2);
+        assert_eq!(stats.path_n75, 2);
         assert_eq!(stats.path_l10, 1);
+        assert_eq!(stats.path_l25, 1);
         assert_eq!(stats.path_l50, 1);
+        assert_eq!(stats.path_l75, 2);
         assert_eq!(stats.branch_count, 1);
         assert!((stats.branchiness - (1.0 / 3.0)).abs() < 1e-12);
     }
