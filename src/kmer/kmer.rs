@@ -1,5 +1,14 @@
 pub type Kmer = String;
 
+#[inline]
+fn kmer_mask(k: usize) -> u64 {
+    if k >= 32 {
+        u64::MAX
+    } else {
+        (1u64 << (k * 2)) - 1
+    }
+}
+
 /// Compact k-mer representation using 2 bits per nucleotide.
 /// Supports k-mers up to 32bp (64 bits / 2 bits per base).
 /// Memory: 9 bytes vs ~55 bytes for String-based k-mers.
@@ -49,7 +58,7 @@ impl KmerU64 {
     pub fn reverse_complement(&self) -> Self {
         let k = self.len as u32;
         // Complement all bases (XOR with 0b11 for each 2-bit pair)
-        let mask = (1u64 << (k * 2)) - 1;
+        let mask = kmer_mask(self.len as usize);
         let complemented = self.encoded ^ mask;
 
         // Reverse the 2-bit pairs
@@ -117,7 +126,7 @@ impl KmerU64 {
             b'T' | b't' => 3u64,
             _ => return None,
         };
-        let mask = (1u64 << (self.len as u32 * 2)) - 1;
+        let mask = kmer_mask(self.len as usize);
         let new_encoded = ((self.encoded << 2) | base_bits) & mask;
         Some(Self {
             encoded: new_encoded,
@@ -168,7 +177,7 @@ pub fn canonical_kmer_u64(encoded: u64, k: usize) -> u64 {
 /// Compute reverse complement of u64-encoded k-mer using bit manipulation.
 #[inline]
 pub fn reverse_complement_u64(encoded: u64, k: usize) -> u64 {
-    let mask = (1u64 << (k * 2)) - 1;
+    let mask = kmer_mask(k);
     let complemented = encoded ^ mask;
 
     let mut reversed: u64 = 0;
