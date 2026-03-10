@@ -1,5 +1,5 @@
-use petgraph::graph::NodeIndex;
 use petgraph::graphmap::DiGraphMap;
+use petgraph::visit::EdgeRef;
 use petgraph::Graph;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::File;
@@ -183,59 +183,54 @@ fn calculate_max_depth<N, E>(graph: &Graph<N, E>) -> usize {
         return 0;
     }
 
-    // Find nodes with no incoming edges (start nodes)
-    let start_nodes: Vec<NodeIndex> = graph
-        .node_indices()
-        .filter(|&n| {
-            graph
-                .neighbors_directed(n, petgraph::Direction::Incoming)
-                .count()
-                == 0
-        })
-        .collect();
-
-    // If no start nodes, find the node with most outgoing edges
-    let nodes_to_check: Vec<NodeIndex> = if start_nodes.is_empty() {
-        graph.node_indices().collect::<Vec<_>>()
-    } else {
-        start_nodes
-    };
-
-    // Memoized DFS over outgoing edges, with cycle-safe recursion stack.
-    let mut memo: HashMap<NodeIndex, usize> = HashMap::with_capacity(graph.node_count());
-    let mut on_path: HashSet<NodeIndex> = HashSet::with_capacity(graph.node_count());
-    nodes_to_check
-        .into_iter()
-        .map(|start| dfs_max_depth(graph, start, &mut memo, &mut on_path).saturating_sub(1))
-        .max()
-        .unwrap_or(0)
-}
-
-/// Recursive DFS to find maximum depth
-fn dfs_max_depth<N, E>(
-    graph: &Graph<N, E>,
-    current: NodeIndex,
-    memo: &mut HashMap<NodeIndex, usize>,
-    on_path: &mut HashSet<NodeIndex>,
-) -> usize {
-    if let Some(&cached) = memo.get(&current) {
-        return cached;
-    }
-
-    // Back-edge in a cycle: stop path growth at this point.
-    if !on_path.insert(current) {
+    // Condense SCCs first so cycles are handled deterministically.
+    let sccs = petgraph::algo::kosaraju_scc(graph);
+    if sccs.is_empty() {
         return 0;
     }
 
-    let mut max_nodes = 1usize;
-    for neighbor in graph.neighbors_directed(current, petgraph::Direction::Outgoing) {
-        let path_nodes = 1 + dfs_max_depth(graph, neighbor, memo, on_path);
-        max_nodes = max_nodes.max(path_nodes);
+    let mut node_to_scc = HashMap::with_capacity(graph.node_count());
+    let mut scc_weight = vec![0usize; sccs.len()];
+    for (scc_idx, component) in sccs.iter().enumerate() {
+        scc_weight[scc_idx] = component.len();
+        for &node in component {
+            node_to_scc.insert(node, scc_idx);
+        }
     }
 
-    on_path.remove(&current);
-    memo.insert(current, max_nodes);
-    max_nodes
+    let mut dag = DiGraphMap::<usize, ()>::new();
+    for scc_idx in 0..sccs.len() {
+        dag.add_node(scc_idx);
+    }
+    for edge in graph.edge_references() {
+        let from_scc = node_to_scc[&edge.source()];
+        let to_scc = node_to_scc[&edge.target()];
+        if from_scc != to_scc {
+            dag.add_edge(from_scc, to_scc, ());
+        }
+    }
+
+    let topo = match petgraph::algo::toposort(&dag, None) {
+        Ok(order) => order,
+        Err(_) => return 0,
+    };
+
+    let mut max_nodes_to = scc_weight.clone();
+    for scc in topo {
+        let best_here = max_nodes_to[scc];
+        for next in dag.neighbors_directed(scc, petgraph::Direction::Outgoing) {
+            let candidate = best_here + scc_weight[next];
+            if candidate > max_nodes_to[next] {
+                max_nodes_to[next] = candidate;
+            }
+        }
+    }
+
+    max_nodes_to
+        .into_iter()
+        .max()
+        .unwrap_or(0)
+        .saturating_sub(1)
 }
 
 /// A simple bubble counting function
@@ -394,5 +389,24 @@ mod tests {
         graph.add_edge(n4, n5, ());
 
         assert_eq!(calculate_max_depth(&graph), 3);
+    }
+
+    #[test]
+    fn test_calculate_max_depth_cycle_with_alternate_branch_is_deterministic() {
+        let mut graph = Graph::<(), ()>::new();
+        let n0 = graph.add_node(());
+        let n1 = graph.add_node(());
+        let n2 = graph.add_node(());
+        let n3 = graph.add_node(());
+        let n4 = graph.add_node(());
+
+        graph.add_edge(n4, n0, ());
+        graph.add_edge(n0, n1, ());
+        graph.add_edge(n0, n2, ());
+        graph.add_edge(n1, n3, ());
+        graph.add_edge(n2, n3, ());
+        graph.add_edge(n3, n1, ());
+
+        assert_eq!(calculate_max_depth(&graph), 4);
     }
 }
