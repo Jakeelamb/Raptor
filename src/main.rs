@@ -195,10 +195,12 @@ fn main() {
                     println!("  Total paths: {}", graph_stats.total_paths);
                     println!("  Average path length: {:.2}", graph_stats.average_length);
                     println!("  Median path length: {:.2}", graph_stats.median_length);
+                    println!("  Path N10: {}", graph_stats.path_n10);
                     println!("  Path N50: {}", graph_stats.path_n50);
                     println!("  Path N90: {}", graph_stats.path_n90);
                     println!("  Path N95: {}", graph_stats.path_n95);
                     println!("  Path N99: {}", graph_stats.path_n99);
+                    println!("  Path L10: {}", graph_stats.path_l10);
                     println!("  Path L50: {}", graph_stats.path_l50);
                     println!("  Path L90: {}", graph_stats.path_l90);
                     println!("  Path L95: {}", graph_stats.path_l95);
@@ -217,10 +219,10 @@ fn main() {
                 }
                 "tsv" => {
                     println!(
-                        "contigs\ttotal_len\tavg_len\tmedian_len\tgc_bases\tacgt_bases\tn_bases\tambiguous_bases\tgc_content\tn_content\tambiguous_content\tn25\tn50\tn75\tn90\tn95\tn99\tl25\tl50\tl75\tl90\tl95\tl99\taun\tlongest\tcontigs_ge_1kb\tcontigs_ge_10kb\tcontigs_ge_50kb\tcontigs_ge_100kb\tbases_ge_1kb\tbases_ge_10kb\tbases_ge_50kb\tbases_ge_100kb\tcontigs_ge_1kb_frac\tcontigs_ge_10kb_frac\tcontigs_ge_50kb_frac\tcontigs_ge_100kb_frac\tbases_ge_1kb_frac\tbases_ge_10kb_frac\tbases_ge_50kb_frac\tbases_ge_100kb_frac\tn_run_count\tmax_n_run\tcontigs_with_n\tcontigs_with_ambiguous\tcontigs_all_acgt\tcontigs_with_n_frac\tcontigs_with_ambiguous_frac\tcontigs_all_acgt_frac"
+                        "contigs\ttotal_len\tavg_len\tmedian_len\tgc_bases\tacgt_bases\tn_bases\tambiguous_bases\tgc_content\tn_content\tambiguous_content\tn10\tn25\tn50\tn75\tn90\tn95\tn99\tl10\tl25\tl50\tl75\tl90\tl95\tl99\taun\tlongest\tcontigs_ge_1kb\tcontigs_ge_10kb\tcontigs_ge_50kb\tcontigs_ge_100kb\tbases_ge_1kb\tbases_ge_10kb\tbases_ge_50kb\tbases_ge_100kb\tcontigs_ge_1kb_frac\tcontigs_ge_10kb_frac\tcontigs_ge_50kb_frac\tcontigs_ge_100kb_frac\tbases_ge_1kb_frac\tbases_ge_10kb_frac\tbases_ge_50kb_frac\tbases_ge_100kb_frac\tn_run_count\tmax_n_run\tcontigs_with_n\tcontigs_with_ambiguous\tcontigs_all_acgt\tcontigs_with_n_frac\tcontigs_with_ambiguous_frac\tcontigs_all_acgt_frac"
                     );
                     println!(
-                        "{}\t{}\t{:.2}\t{:.2}\t{}\t{}\t{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{:.6}\t{:.6}\t{:.6}",
+                        "{}\t{}\t{:.2}\t{:.2}\t{}\t{}\t{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{:.6}\t{:.6}\t{:.6}",
                         stats.total_contigs,
                         stats.total_length,
                         stats.average_length,
@@ -232,12 +234,14 @@ fn main() {
                         stats.gc_content,
                         stats.n_content,
                         stats.ambiguous_content,
+                        stats.n10,
                         stats.n25,
                         stats.n50,
                         stats.n75,
                         stats.n90,
                         stats.n95,
                         stats.n99,
+                        stats.l10,
                         stats.l25,
                         stats.l50,
                         stats.l75,

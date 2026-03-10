@@ -9,6 +9,7 @@ pub struct Stats {
     pub total_length: usize,
     pub average_length: f64,
     pub median_length: f64,
+    pub n10: usize,
     pub gc_bases: usize,
     pub acgt_bases: usize,
     pub n_bases: usize,
@@ -31,6 +32,7 @@ pub struct Stats {
     pub n90: usize,
     pub n95: usize,
     pub n99: usize,
+    pub l10: usize,
     pub l25: usize,
     pub l50: usize,
     pub l75: usize,
@@ -63,10 +65,12 @@ pub struct Stats {
     pub graph_bubble_count: Option<usize>,
     pub graph_branchiness: Option<f64>,
     pub graph_path_median_length: Option<f64>,
+    pub graph_path_n10: Option<usize>,
     pub graph_path_n50: Option<usize>,
     pub graph_path_n90: Option<usize>,
     pub graph_path_n95: Option<usize>,
     pub graph_path_n99: Option<usize>,
+    pub graph_path_l10: Option<usize>,
     pub graph_path_l50: Option<usize>,
     pub graph_path_l90: Option<usize>,
     pub graph_path_l95: Option<usize>,
@@ -226,6 +230,7 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         total_length: length_stats.total_bases,
         average_length: length_stats.avg_length,
         median_length: length_stats.median_length,
+        n10: length_stats.n10,
         gc_bases: composition.gc_bases,
         acgt_bases: composition.acgt_bases,
         n_bases: composition.n_bases,
@@ -248,6 +253,7 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         n90: length_stats.n90,
         n95: length_stats.n95,
         n99: length_stats.n99,
+        l10: length_stats.l10,
         l25: length_stats.l25,
         l50: length_stats.l50,
         l75: length_stats.l75,
@@ -279,10 +285,12 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         graph_bubble_count: None,
         graph_branchiness: None,
         graph_path_median_length: None,
+        graph_path_n10: None,
         graph_path_n50: None,
         graph_path_n90: None,
         graph_path_n95: None,
         graph_path_n99: None,
+        graph_path_l10: None,
         graph_path_l50: None,
         graph_path_l90: None,
         graph_path_l95: None,
@@ -320,10 +328,12 @@ pub fn update_with_graph_stats(
     stats.graph_bubble_count = Some(graph_stats.bubble_count);
     stats.graph_branchiness = Some(graph_stats.branchiness);
     stats.graph_path_median_length = Some(graph_stats.median_length);
+    stats.graph_path_n10 = Some(graph_stats.path_n10);
     stats.graph_path_n50 = Some(graph_stats.path_n50);
     stats.graph_path_n90 = Some(graph_stats.path_n90);
     stats.graph_path_n95 = Some(graph_stats.path_n95);
     stats.graph_path_n99 = Some(graph_stats.path_n99);
+    stats.graph_path_l10 = Some(graph_stats.path_l10);
     stats.graph_path_l50 = Some(graph_stats.path_l50);
     stats.graph_path_l90 = Some(graph_stats.path_l90);
     stats.graph_path_l95 = Some(graph_stats.path_l95);
@@ -371,12 +381,14 @@ mod tests {
         assert_eq!(stats.contigs_with_n_frac, 0.0);
         assert_eq!(stats.contigs_with_ambiguous_frac, 0.0);
         assert_eq!(stats.contigs_all_acgt_frac, 1.0);
+        assert_eq!(stats.n10, 24);
         assert_eq!(stats.n25, 24);
         assert_eq!(stats.n50, 24);
         assert_eq!(stats.n75, 20);
         assert_eq!(stats.n90, 20);
         assert_eq!(stats.n95, 4);
         assert_eq!(stats.n99, 4);
+        assert_eq!(stats.l10, 1);
         assert_eq!(stats.l25, 1);
         assert_eq!(stats.l50, 1);
         assert_eq!(stats.l75, 2);
@@ -432,12 +444,14 @@ mod tests {
         assert_eq!(stats.contigs_with_n_frac, 0.0);
         assert_eq!(stats.contigs_with_ambiguous_frac, 0.0);
         assert_eq!(stats.contigs_all_acgt_frac, 1.0);
+        assert_eq!(stats.n10, 12);
         assert_eq!(stats.n25, 12);
         assert_eq!(stats.n50, 12);
         assert_eq!(stats.n75, 12);
         assert_eq!(stats.n90, 4);
         assert_eq!(stats.n95, 4);
         assert_eq!(stats.n99, 4);
+        assert_eq!(stats.l10, 1);
         assert_eq!(stats.l25, 1);
         assert_eq!(stats.l50, 1);
         assert_eq!(stats.l75, 1);
@@ -517,6 +531,7 @@ mod tests {
             total_length: 0,
             average_length: 0.0,
             median_length: 0.0,
+            n10: 0,
             gc_bases: 0,
             acgt_bases: 0,
             n_bases: 0,
@@ -539,6 +554,7 @@ mod tests {
             n90: 0,
             n95: 0,
             n99: 0,
+            l10: 0,
             l25: 0,
             l50: 0,
             l75: 0,
@@ -570,10 +586,12 @@ mod tests {
             graph_bubble_count: None,
             graph_branchiness: None,
             graph_path_median_length: None,
+            graph_path_n10: None,
             graph_path_n50: None,
             graph_path_n90: None,
             graph_path_n95: None,
             graph_path_n99: None,
+            graph_path_l10: None,
             graph_path_l50: None,
             graph_path_l90: None,
             graph_path_l95: None,
@@ -584,10 +602,12 @@ mod tests {
             total_paths: 7,
             average_length: 3.5,
             median_length: 3.0,
+            path_n10: 5,
             path_n50: 4,
             path_n90: 2,
             path_n95: 2,
             path_n99: 2,
+            path_l10: 1,
             path_l50: 3,
             path_l90: 6,
             path_l95: 7,
@@ -608,10 +628,12 @@ mod tests {
         assert_eq!(stats.graph_bubble_count, Some(1));
         assert_eq!(stats.graph_branchiness, Some(0.4));
         assert_eq!(stats.graph_path_median_length, Some(3.0));
+        assert_eq!(stats.graph_path_n10, Some(5));
         assert_eq!(stats.graph_path_n50, Some(4));
         assert_eq!(stats.graph_path_n90, Some(2));
         assert_eq!(stats.graph_path_n95, Some(2));
         assert_eq!(stats.graph_path_n99, Some(2));
+        assert_eq!(stats.graph_path_l10, Some(1));
         assert_eq!(stats.graph_path_l50, Some(3));
         assert_eq!(stats.graph_path_l90, Some(6));
         assert_eq!(stats.graph_path_l95, Some(7));
@@ -662,12 +684,14 @@ mod tests {
         assert_eq!(stats.total_length, 3);
         assert!((stats.average_length - 0.75).abs() < 1e-12);
         assert_eq!(stats.median_length, 0.5);
+        assert_eq!(stats.n10, 2);
         assert_eq!(stats.n25, 2);
         assert_eq!(stats.n50, 2);
         assert_eq!(stats.n75, 1);
         assert_eq!(stats.n90, 1);
         assert_eq!(stats.n95, 1);
         assert_eq!(stats.n99, 1);
+        assert_eq!(stats.l10, 1);
         assert_eq!(stats.l25, 1);
         assert_eq!(stats.l50, 1);
         assert_eq!(stats.l75, 2);
@@ -785,12 +809,14 @@ mod tests {
             prop_assert_eq!(stats_a.contigs_with_n, stats_b.contigs_with_n);
             prop_assert_eq!(stats_a.contigs_with_ambiguous, stats_b.contigs_with_ambiguous);
             prop_assert_eq!(stats_a.contigs_all_acgt, stats_b.contigs_all_acgt);
+            prop_assert_eq!(stats_a.n10, stats_b.n10);
             prop_assert_eq!(stats_a.n25, stats_b.n25);
             prop_assert_eq!(stats_a.n50, stats_b.n50);
             prop_assert_eq!(stats_a.n75, stats_b.n75);
             prop_assert_eq!(stats_a.n90, stats_b.n90);
             prop_assert_eq!(stats_a.n95, stats_b.n95);
             prop_assert_eq!(stats_a.n99, stats_b.n99);
+            prop_assert_eq!(stats_a.l10, stats_b.l10);
             prop_assert_eq!(stats_a.l25, stats_b.l25);
             prop_assert_eq!(stats_a.l50, stats_b.l50);
             prop_assert_eq!(stats_a.l75, stats_b.l75);

@@ -302,7 +302,7 @@ pub fn transcript_to_gfa_path(transcript: &Transcript) -> String {
 
 /// Calculate statistics for a collection of transcripts
 pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String, f64> {
-    let mut stats = HashMap::with_capacity(48);
+    let mut stats = HashMap::with_capacity(50);
 
     // Basic counts
     stats.insert("count".to_string(), transcripts.len() as f64);
@@ -314,12 +314,14 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
             "median_length",
             "min_length",
             "max_length",
+            "n10",
             "n25",
             "n50",
             "n75",
             "n90",
             "n95",
             "n99",
+            "l10",
             "l25",
             "l50",
             "l75",
@@ -412,12 +414,14 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
     stats.insert("median_length".to_string(), length_metrics.median_length);
     stats.insert("min_length".to_string(), min_length as f64);
     stats.insert("max_length".to_string(), max_length as f64);
+    stats.insert("n10".to_string(), length_metrics.n10 as f64);
     stats.insert("n25".to_string(), length_metrics.n25 as f64);
     stats.insert("n50".to_string(), length_metrics.n50 as f64);
     stats.insert("n75".to_string(), length_metrics.n75 as f64);
     stats.insert("n90".to_string(), length_metrics.n90 as f64);
     stats.insert("n95".to_string(), length_metrics.n95 as f64);
     stats.insert("n99".to_string(), length_metrics.n99 as f64);
+    stats.insert("l10".to_string(), length_metrics.l10 as f64);
     stats.insert("l25".to_string(), length_metrics.l25 as f64);
     stats.insert("l50".to_string(), length_metrics.l50 as f64);
     stats.insert("l75".to_string(), length_metrics.l75 as f64);
@@ -798,12 +802,14 @@ mod tests {
             "median_length",
             "min_length",
             "max_length",
+            "n10",
             "n25",
             "n50",
             "n75",
             "n90",
             "n95",
             "n99",
+            "l10",
             "l25",
             "l50",
             "l75",
