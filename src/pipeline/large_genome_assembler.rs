@@ -2211,13 +2211,16 @@ impl LargeGenomeAssembler {
         }
 
         let non_repeat = extensions.iter().copied().filter(|ext| !ext.is_repeat);
-        let best_non_repeat = non_repeat.min_by_key(|ext| {
-            (
-                Self::coverage_ratio(current_count, ext.count),
-                Reverse(ext.read_support),
-                Reverse(ext.count),
-                ext.base_idx,
-            )
+        let best_non_repeat = non_repeat.min_by(|left, right| {
+            Self::compare_coverage_ratio(current_count, left.count, right.count)
+                .then_with(|| {
+                    Self::coverage_distance(current_count, left.count)
+                        .cmp(&Self::coverage_distance(current_count, right.count))
+                })
+                .then_with(|| right.read_support.cmp(&left.read_support))
+                .then_with(|| right.count.cmp(&left.count))
+                .then_with(|| left.base_idx.cmp(&right.base_idx))
+                .then_with(|| left.next.cmp(&right.next))
         });
 
         best_non_repeat.or_else(|| {
@@ -2252,12 +2255,24 @@ impl LargeGenomeAssembler {
         (best_support, second_support, best)
     }
 
-    fn coverage_ratio(current_count: u32, candidate_count: u32) -> u32 {
-        if candidate_count > current_count {
-            candidate_count / current_count.max(1)
-        } else {
-            current_count / candidate_count.max(1)
-        }
+    fn compare_coverage_ratio(
+        current_count: u32,
+        left_count: u32,
+        right_count: u32,
+    ) -> std::cmp::Ordering {
+        let (left_num, left_den) = Self::normalized_coverage_ratio(current_count, left_count);
+        let (right_num, right_den) = Self::normalized_coverage_ratio(current_count, right_count);
+        (left_num as u128 * right_den as u128).cmp(&(right_num as u128 * left_den as u128))
+    }
+
+    fn normalized_coverage_ratio(current_count: u32, candidate_count: u32) -> (u32, u32) {
+        let hi = current_count.max(candidate_count);
+        let lo = current_count.min(candidate_count).max(1);
+        (hi, lo)
+    }
+
+    fn coverage_distance(current_count: u32, candidate_count: u32) -> u32 {
+        current_count.abs_diff(candidate_count)
     }
 
     fn write_output(
@@ -2346,6 +2361,7 @@ mod tests {
     use super::*;
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
+    use rand::Rng;
     use rand::SeedableRng;
     use std::io::Write;
     use tempfile::{NamedTempFile, TempDir};
@@ -3335,6 +3351,54 @@ mod tests {
     }
 
     #[test]
+    fn test_choose_branch_extension_prefers_closer_coverage_ratio_over_weak_support() {
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig::default());
+        let extensions = [
+            BranchCandidate {
+                base_idx: 0,
+                next: 11,
+                count: 21,
+                is_repeat: false,
+                read_support: 0,
+            },
+            BranchCandidate {
+                base_idx: 1,
+                next: 22,
+                count: 39,
+                is_repeat: false,
+                read_support: 1,
+            },
+        ];
+
+        let best = assembler.choose_branch_extension(&extensions, 20).unwrap();
+        assert_eq!(best.next, 11);
+    }
+
+    #[test]
+    fn test_choose_branch_extension_breaks_equal_ratio_ties_by_closer_absolute_coverage() {
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig::default());
+        let extensions = [
+            BranchCandidate {
+                base_idx: 0,
+                next: 11,
+                count: 10,
+                is_repeat: false,
+                read_support: 0,
+            },
+            BranchCandidate {
+                base_idx: 1,
+                next: 22,
+                count: 40,
+                is_repeat: false,
+                read_support: 0,
+            },
+        ];
+
+        let best = assembler.choose_branch_extension(&extensions, 20).unwrap();
+        assert_eq!(best.next, 11);
+    }
+
+    #[test]
     fn test_choose_branch_extension_repeat_fallback_is_insertion_order_invariant() {
         let assembler = LargeGenomeAssembler::new(LargeGenomeConfig::default());
         let left = BranchCandidate {
@@ -3361,6 +3425,44 @@ mod tests {
 
         assert_eq!(best_ab.next, best_ba.next);
         assert_eq!(best_ab.next, 7);
+    }
+
+    #[test]
+    fn test_choose_branch_extension_is_order_invariant_under_randomized_inputs() {
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig::default());
+        let mut rng = StdRng::seed_from_u64(0xC0FFEE);
+
+        for case_idx in 0..256u64 {
+            let current_count = rng.gen_range(1..=64);
+            let extension_count = rng.gen_range(1..=4usize);
+            let mut extensions = Vec::with_capacity(extension_count);
+
+            for base_idx in 0..extension_count {
+                extensions.push(BranchCandidate {
+                    base_idx,
+                    next: (case_idx << 8) | base_idx as u64,
+                    count: rng.gen_range(0..=64),
+                    is_repeat: rng.gen_bool(0.4),
+                    read_support: rng.gen_range(0..=8),
+                });
+            }
+
+            let baseline = assembler
+                .choose_branch_extension(&extensions, current_count)
+                .map(|candidate| (candidate.base_idx, candidate.next));
+
+            for _ in 0..32 {
+                extensions.shuffle(&mut rng);
+                let observed = assembler
+                    .choose_branch_extension(&extensions, current_count)
+                    .map(|candidate| (candidate.base_idx, candidate.next));
+                assert_eq!(
+                    observed, baseline,
+                    "case={} current_count={} extensions={:?}",
+                    case_idx, current_count, extensions
+                );
+            }
+        }
     }
 
     #[test]
