@@ -672,7 +672,9 @@ impl LargeGenomeAssembler {
 
         for singleton in singleton_kmers {
             // Find a trusted neighbor within Hamming distance 1
-            if let Some(trusted_neighbor) = self.find_trusted_neighbor(singleton, k, &high_conf) {
+            if let Some(trusted_neighbor) =
+                self.find_trusted_neighbor(singleton, k, &high_conf, kmer_counts)
+            {
                 // Transfer count from error k-mer to trusted k-mer
                 if let Some(count) = corrected.get_mut(&trusted_neighbor) {
                     *count = count.saturating_add(1);
@@ -691,8 +693,10 @@ impl LargeGenomeAssembler {
         encoded: u64,
         k: usize,
         trusted: &AHashSet<u64>,
+        kmer_counts: &AHashMap<u64, u32>,
     ) -> Option<u64> {
         let bases: [u64; 4] = [0, 1, 2, 3]; // A, C, G, T in 2-bit encoding
+        let mut best: Option<(u32, u64)> = None;
 
         // Try substituting each position with each alternative base
         for pos in 0..k {
@@ -716,12 +720,21 @@ impl LargeGenomeAssembler {
                 let canonical = variant_kmer.canonical().encoded;
 
                 if trusted.contains(&canonical) {
-                    return Some(canonical);
+                    let count = kmer_counts.get(&canonical).copied().unwrap_or(0);
+                    match best {
+                        None => best = Some((count, canonical)),
+                        Some((best_count, best_kmer)) => {
+                            if count > best_count || (count == best_count && canonical < best_kmer)
+                            {
+                                best = Some((count, canonical));
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        None
+        best.map(|(_, kmer)| kmer)
     }
 
     fn select_min_count(&self, kmer_counts: &AHashMap<u64, u32>) -> u32 {
@@ -2379,6 +2392,55 @@ mod tests {
 
         // The pipeline should work and produce contigs
         assert!(stats.kmers_filtered > 0, "Should have filtered k-mers");
+    }
+
+    #[test]
+    fn test_find_trusted_neighbor_prefers_highest_coverage_candidate() {
+        let k = 4;
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig::default());
+
+        let singleton = KmerU64::from_str("AAAA").unwrap().canonical().encoded;
+        let low = KmerU64::from_str("AAAT").unwrap().canonical().encoded;
+        let high = KmerU64::from_str("AACA").unwrap().canonical().encoded;
+
+        let mut trusted = AHashSet::new();
+        trusted.insert(low);
+        trusted.insert(high);
+
+        let mut counts = AHashMap::new();
+        counts.insert(singleton, 1);
+        counts.insert(low, 9);
+        counts.insert(high, 25);
+
+        let picked = assembler
+            .find_trusted_neighbor(singleton, k, &trusted, &counts)
+            .unwrap();
+        assert_eq!(picked, high);
+    }
+
+    #[test]
+    fn test_find_trusted_neighbor_tie_breaks_by_kmer_value() {
+        let k = 4;
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig::default());
+
+        let singleton = KmerU64::from_str("AAAA").unwrap().canonical().encoded;
+        let first = KmerU64::from_str("AAAT").unwrap().canonical().encoded;
+        let second = KmerU64::from_str("AACA").unwrap().canonical().encoded;
+        let expected = first.min(second);
+
+        let mut trusted = AHashSet::new();
+        trusted.insert(first);
+        trusted.insert(second);
+
+        let mut counts = AHashMap::new();
+        counts.insert(singleton, 1);
+        counts.insert(first, 12);
+        counts.insert(second, 12);
+
+        let picked = assembler
+            .find_trusted_neighbor(singleton, k, &trusted, &counts)
+            .unwrap();
+        assert_eq!(picked, expected);
     }
 
     /// Test graph cleaning with tip-inducing reads
