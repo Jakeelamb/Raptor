@@ -11,7 +11,7 @@ use raptor::graph::assembler::{cleanup_graph, greedy_assembly_u64, Contig};
 use raptor::graph::isoform_filter::{filter_similar_transcripts, merge_transcripts};
 use raptor::graph::isoform_traverse::find_directed_paths;
 use raptor::graph::transcript::{stitch_isoform, Transcript};
-use raptor::io::gfa::{read_gfa_contigs, read_gfa_links};
+use raptor::io::gfa::{read_gfa_contigs, read_gfa_links, GfaWriter};
 use raptor::kmer::kmer::{encode_kmer, reverse_complement, KmerU64};
 use std::io::Write;
 use tempfile::NamedTempFile;
@@ -514,4 +514,43 @@ fn gfa_link_parsing_is_stable_under_link_record_order() {
     let links_b = read_gfa_links(file_b.path().to_str().unwrap()).unwrap();
     assert_eq!(links_a, links_b);
     assert_eq!(links_a, vec![(0, 1, 2), (0, 2, 3), (2, 0, 4)]);
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+    #[test]
+    fn gfa_rle_round_trip_preserves_sequence_content_and_order(
+        sequences in prop::collection::vec(dna_or_n_string(32), 1..16),
+        seed in any::<u64>()
+    ) {
+        let mut contigs: Vec<Contig> = sequences
+            .into_iter()
+            .enumerate()
+            .map(|(idx, sequence)| Contig {
+                id: idx * 7 + 3,
+                sequence,
+                kmer_path: Vec::new(),
+            })
+            .collect();
+
+        let mut rng = StdRng::seed_from_u64(seed);
+        contigs.shuffle(&mut rng);
+
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().to_str().unwrap();
+
+        let mut writer = GfaWriter::new(path);
+        writer.write_rle_segments(&contigs).unwrap();
+        drop(writer);
+
+        let observed = read_gfa_contigs(path).unwrap();
+        let observed_sequences: Vec<String> = observed.iter().map(|c| c.sequence.clone()).collect();
+        let expected_sequences: Vec<String> = contigs.iter().map(|c| c.sequence.clone()).collect();
+        let expected_len = expected_sequences.len();
+        prop_assert_eq!(observed_sequences, expected_sequences);
+
+        let observed_ids: Vec<usize> = observed.into_iter().map(|c| c.id).collect();
+        let expected_ids: Vec<usize> = (0..expected_len).collect();
+        prop_assert_eq!(observed_ids, expected_ids);
+    }
 }
