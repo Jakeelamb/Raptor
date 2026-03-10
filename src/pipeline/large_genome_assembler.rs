@@ -1446,8 +1446,19 @@ impl LargeGenomeAssembler {
                 continue;
             }
 
+            let seed_for_extension = if adjacency.contains_key(&seed) {
+                seed
+            } else {
+                KmerU64 {
+                    encoded: seed,
+                    len: k as u8,
+                }
+                .reverse_complement()
+                .encoded
+            };
+
             let contig = self.extend_bidirectional_with_coverage(
-                seed,
+                seed_for_extension,
                 k,
                 adjacency,
                 kmer_counts,
@@ -1652,8 +1663,9 @@ impl LargeGenomeAssembler {
                     if let Some(prev) = prev_node {
                         let edge = Self::canonical_edge_key(prev, current_node, k);
                         if branch_edges.contains(&edge) {
-                            *edge_support.entry(edge).or_insert(0) += 1;
-                            observations += 1;
+                            let support = edge_support.entry(edge).or_insert(0);
+                            *support = support.saturating_add(1);
+                            observations = observations.saturating_add(1);
                         }
                     }
                     prev_node = Some(current_node);
@@ -1995,23 +2007,30 @@ impl LargeGenomeAssembler {
     /// - Adjacency is stored for both forward and RC orientations
     fn extend_bidirectional(
         &self,
-        seed_canonical: u64,
+        seed_encoded: u64,
         k: usize,
         adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
         used: &mut AHashSet<u64>,
     ) -> String {
         let bases = [b'A', b'C', b'G', b'T'];
 
-        // Start with the seed k-mer sequence (use canonical form)
-        let seed_seq = decode_kmer(seed_canonical, k);
+        let seed_canonical = KmerU64 {
+            encoded: seed_encoded,
+            len: k as u8,
+        }
+        .canonical()
+        .encoded;
+
+        // Start with the seed k-mer sequence in the selected traversal orientation.
+        let seed_seq = decode_kmer(seed_encoded, k);
         let mut contig: Vec<u8> = seed_seq.into_bytes();
         let mut left_extension: Vec<u8> = Vec::new();
         used.insert(seed_canonical);
 
         // Track current ACTUAL k-mer at each end (not canonical)
         // This is crucial for correct extension direction
-        let mut right_kmer = seed_canonical;
-        let mut left_kmer = seed_canonical;
+        let mut right_kmer = seed_encoded;
+        let mut left_kmer = seed_encoded;
 
         // Extend right: look up adjacency for current k-mer (not canonical)
         loop {
@@ -2136,7 +2155,7 @@ impl LargeGenomeAssembler {
     /// Avoids entering repeat regions unless necessary.
     fn extend_bidirectional_with_coverage(
         &self,
-        seed_canonical: u64,
+        seed_encoded: u64,
         k: usize,
         adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
         kmer_counts: &AHashMap<u64, u32>,
@@ -2146,13 +2165,19 @@ impl LargeGenomeAssembler {
     ) -> String {
         let bases = [b'A', b'C', b'G', b'T'];
 
-        let seed_seq = decode_kmer(seed_canonical, k);
+        let seed_canonical = KmerU64 {
+            encoded: seed_encoded,
+            len: k as u8,
+        }
+        .canonical()
+        .encoded;
+        let seed_seq = decode_kmer(seed_encoded, k);
         let mut contig: Vec<u8> = seed_seq.into_bytes();
         let mut left_extension: Vec<u8> = Vec::new();
         used.insert(seed_canonical);
 
-        let mut right_kmer = seed_canonical;
-        let mut left_kmer = seed_canonical;
+        let mut right_kmer = seed_encoded;
+        let mut left_kmer = seed_encoded;
 
         // Extend right with coverage-guided traversal
         loop {
@@ -3465,6 +3490,59 @@ mod tests {
     }
 
     #[test]
+    fn test_extend_bidirectional_with_coverage_marks_used_by_canonical_seed() {
+        let sequence = "AAATCGG";
+        let k = 4;
+        let mut counts = AHashMap::new();
+
+        for i in 0..=sequence.len() - k {
+            let encoded = KmerU64::from_str(&sequence[i..i + k])
+                .unwrap()
+                .canonical()
+                .encoded;
+            counts.insert(encoded, 10);
+        }
+
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: 1,
+            ..Default::default()
+        });
+        let valid_kmers: AHashSet<u64> = counts.keys().copied().collect();
+        let adjacency = assembler.build_adjacency(&valid_kmers, k);
+        let branch_support: AHashMap<(u64, u64), u32> = AHashMap::new();
+        let repeat_kmers: AHashSet<u64> = AHashSet::new();
+        let mut used = AHashSet::new();
+
+        let canonical_seed = KmerU64::from_str("ATCG").unwrap().canonical().encoded;
+        let reverse_seed = KmerU64 {
+            encoded: canonical_seed,
+            len: k as u8,
+        }
+        .reverse_complement()
+        .encoded;
+        assert_ne!(canonical_seed, reverse_seed);
+
+        let contig = assembler.extend_bidirectional_with_coverage(
+            reverse_seed,
+            k,
+            &adjacency,
+            &counts,
+            &branch_support,
+            &repeat_kmers,
+            &mut used,
+        );
+
+        assert!(
+            used.contains(&canonical_seed),
+            "used-set should track canonical k-mers regardless of traversal orientation"
+        );
+        let reverse = reverse_complement(sequence);
+        assert!(contig == sequence || contig == reverse);
+    }
+
+    #[test]
     fn test_branch_threading_counts_ambiguous_edge_support() {
         let k = 4;
         let sequences = ["TACGATG", "TACGATG", "TACGACG"];
@@ -3559,6 +3637,51 @@ mod tests {
 
         assert_eq!(observations, 2);
         assert_eq!(edge_support.get(&canonical_key).copied(), Some(2));
+    }
+
+    #[test]
+    fn test_branch_threading_support_accumulator_saturates_at_u32_max() {
+        let k = 4;
+        let sequence = "TACGATG";
+        let mut counts = AHashMap::new();
+
+        for i in 0..=sequence.len() - k {
+            let encoded = KmerU64::from_str(&sequence[i..i + k])
+                .unwrap()
+                .canonical()
+                .encoded;
+            counts.insert(encoded, 10);
+        }
+
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: 1,
+            ..Default::default()
+        });
+        let valid_kmers: AHashSet<u64> = counts.keys().copied().collect();
+        let adjacency = assembler.build_adjacency(&valid_kmers, k);
+
+        let branch = KmerU64::from_str("ACGA").unwrap().encoded;
+        let next = KmerU64::from_str("CGAT").unwrap().encoded;
+        let edge_key = LargeGenomeAssembler::canonical_edge_key(branch, next, k);
+
+        let mut branch_edges = AHashSet::new();
+        branch_edges.insert(edge_key);
+
+        let mut edge_support = AHashMap::new();
+        edge_support.insert(edge_key, u32::MAX);
+
+        let observations = LargeGenomeAssembler::thread_branch_edges_in_sequence(
+            sequence.as_bytes(),
+            k,
+            &adjacency,
+            &branch_edges,
+            &mut edge_support,
+        );
+
+        assert_eq!(observations, 1);
+        assert_eq!(edge_support.get(&edge_key).copied(), Some(u32::MAX));
     }
 
     #[test]
