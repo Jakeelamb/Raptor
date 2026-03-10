@@ -342,9 +342,13 @@ impl ComputeBackend for CpuBackend {
                     let from = &contigs[from_idx];
                     let from_suffix_start = from.len().saturating_sub(max_suffix_len);
 
-                    // Try different overlap lengths
-                    for overlap_len in min_overlap..=prefix_len.min(from.len() - from_suffix_start)
-                    {
+                    let max_overlap_len = prefix_len.min(from.len() - from_suffix_start);
+                    if max_overlap_len < min_overlap {
+                        continue;
+                    }
+
+                    // Try longest overlap first; keep first valid hit.
+                    for overlap_len in (min_overlap..=max_overlap_len).rev() {
                         let from_suffix = &from[from.len() - overlap_len..];
                         let to_prefix = &contig[0..overlap_len];
 
@@ -357,7 +361,7 @@ impl ComputeBackend for CpuBackend {
 
                         if mismatches <= max_mismatch {
                             overlaps.push((from_idx, to_idx, overlap_len));
-                            break; // Found a valid overlap, move to next candidate
+                            break; // Found best valid overlap for this pair.
                         }
                     }
                 }
@@ -479,6 +483,18 @@ mod tests {
         assert!(overlaps
             .windows(2)
             .all(|w| { (w[0].0, w[0].1) <= (w[1].0, w[1].1) }));
+    }
+
+    #[test]
+    fn test_cpu_overlap_detection_prefers_longest_valid_overlap() {
+        let backend = CpuBackend::new();
+        let seq = "ACGT".repeat(10); // 40 bp
+        let contigs = vec![seq.clone(), seq];
+
+        let overlaps = backend.find_overlaps(&contigs, 8, 0);
+
+        assert!(overlaps.contains(&(0, 1, 40)));
+        assert!(overlaps.contains(&(1, 0, 40)));
     }
 
     #[test]
