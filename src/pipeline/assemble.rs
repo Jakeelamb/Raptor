@@ -655,6 +655,8 @@ pub fn assemble_reads_with_gpu(
         info!("Completed contig polishing");
     }
 
+    canonicalize_contig_output_order(&mut contigs);
+
     let quality = summarize_assembly_quality(&contigs);
     info!(
         "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN: {:.1}, Ungapped bases/N50/auN: {}/{}/{:.1}, Longest: {} bp ({:.2}%), GC/N/Ambiguous bases: {}/{}/{} (fractions {:.2}%/{:.2}%/{:.2}%), RLE mean/weighted runs ratio: {:.4}/{:.4} ({} runs), N-runs: count {}, max {}, mean {:.1} bp ({:.1} per 100kb), N/Ambiguous bases per 100kb: {:.1}/{:.1}, >=1kb/10kb/50kb/100kb contigs: {}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%)",
@@ -1157,12 +1159,28 @@ fn derive_contig_expression_map(
     expression_by_contig
 }
 
+#[inline]
+fn canonicalize_contig_output_order(contigs: &mut [Contig]) {
+    contigs.sort_unstable_by(|a, b| {
+        b.sequence
+            .len()
+            .cmp(&a.sequence.len())
+            .then_with(|| a.sequence.cmp(&b.sequence))
+            .then_with(|| a.kmer_path.cmp(&b.kmer_path))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    for (new_id, contig) in contigs.iter_mut().enumerate() {
+        contig.id = new_id;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        assemble_reads_with_gpu, derive_contig_expression_map, estimate_sequence_capacity,
-        sequence_only_record, summarize_assembly_quality, write_assembly_quality_reports,
-        AssemblyQualitySummary,
+        assemble_reads_with_gpu, canonicalize_contig_output_order, derive_contig_expression_map,
+        estimate_sequence_capacity, sequence_only_record, summarize_assembly_quality,
+        write_assembly_quality_reports, AssemblyQualitySummary,
     };
     use crate::graph::assembler::Contig;
     use crate::io::fastq::FastqRecord;
@@ -1203,6 +1221,54 @@ mod tests {
         assert_eq!(expression.get(&7), Some(&4));
         assert!(!expression.contains_key(&8));
         assert!(!expression.contains_key(&9));
+    }
+
+    #[test]
+    fn canonicalize_contig_output_order_sorts_and_reindexes_deterministically() {
+        let mut contigs = vec![
+            Contig {
+                id: 9,
+                sequence: "GGGG".to_string(),
+                kmer_path: vec![3, 4],
+            },
+            Contig {
+                id: 4,
+                sequence: "AAAA".to_string(),
+                kmer_path: vec![1, 2],
+            },
+            Contig {
+                id: 7,
+                sequence: "AAA".to_string(),
+                kmer_path: vec![8],
+            },
+            Contig {
+                id: 2,
+                sequence: "AAAA".to_string(),
+                kmer_path: vec![1, 3],
+            },
+        ];
+
+        canonicalize_contig_output_order(&mut contigs);
+
+        let fingerprints: Vec<(usize, &str, &[u64])> = contigs
+            .iter()
+            .map(|contig| {
+                (
+                    contig.id,
+                    contig.sequence.as_str(),
+                    contig.kmer_path.as_slice(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            fingerprints,
+            vec![
+                (0, "AAAA", &[1, 2][..]),
+                (1, "AAAA", &[1, 3][..]),
+                (2, "GGGG", &[3, 4][..]),
+                (3, "AAA", &[8][..]),
+            ]
+        );
     }
 
     #[test]
