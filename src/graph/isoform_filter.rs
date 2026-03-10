@@ -94,12 +94,11 @@ pub fn kmer_jaccard_similarity(seq1: &str, seq2: &str, k: usize) -> f64 {
 /// Extract k-mer hashes from a sequence using ntHash.
 #[inline]
 fn extract_kmer_hashes(seq: &[u8], k: usize) -> AHashSet<u64> {
-    let mut hashes = AHashSet::new();
-
     if seq.len() < k {
-        return hashes;
+        return AHashSet::new();
     }
 
+    let mut hashes = AHashSet::with_capacity(seq.len() - k + 1);
     for i in 0..=seq.len() - k {
         if let Some(hash) = nthash(&seq[i..i + k]) {
             hashes.insert(hash);
@@ -412,14 +411,17 @@ fn is_similar(a: &Transcript, b: &Transcript, threshold: f64) -> bool {
         &b.sequence
     };
 
-    let mut shorter_kmers = HashSet::new();
-    for i in 0..=shorter.len() - k {
-        shorter_kmers.insert(&shorter[i..i + k]);
+    let shorter_bytes = shorter.as_bytes();
+    let longer_bytes = longer.as_bytes();
+
+    let mut shorter_kmers: AHashSet<&[u8]> = AHashSet::with_capacity(shorter_bytes.len() - k + 1);
+    for i in 0..=shorter_bytes.len() - k {
+        shorter_kmers.insert(&shorter_bytes[i..i + k]);
     }
 
     let mut shared_kmers = 0;
-    for i in 0..=longer.len() - k {
-        if shorter_kmers.contains(&longer[i..i + k]) {
+    for i in 0..=longer_bytes.len() - k {
+        if shorter_kmers.contains(&longer_bytes[i..i + k]) {
             shared_kmers += 1;
         }
     }

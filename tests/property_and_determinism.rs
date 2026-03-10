@@ -6,7 +6,9 @@ use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use raptor::accel::backend::AdjacencyTableU64;
 use raptor::graph::assembler::{cleanup_graph, greedy_assembly_u64};
+use raptor::graph::isoform_filter::{filter_similar_transcripts, merge_transcripts};
 use raptor::graph::isoform_traverse::find_directed_paths;
+use raptor::graph::transcript::Transcript;
 use raptor::kmer::kmer::{encode_kmer, reverse_complement, KmerU64};
 
 fn dna_string(max_len: usize) -> impl Strategy<Value = String> {
@@ -247,5 +249,78 @@ fn cleanup_graph_collapses_bubble_without_tip_removal_under_randomized_edge_orde
             observed_graph,
             vec![(aaa, vec![(aac, 10)]), (aac, vec![(acc, 10)])]
         );
+    }
+}
+
+#[test]
+fn isoform_filtering_and_merging_are_stable_under_randomized_input_order() {
+    let transcripts = vec![
+        Transcript {
+            id: 11,
+            sequence: "AAAACCCCTTTT".to_string(),
+            path: vec![1, 2, 3],
+            confidence: f64::NAN,
+            length: 12,
+            strand: '+',
+            tpm: Some(5.0),
+            splicing: "linear".to_string(),
+        },
+        Transcript {
+            id: 2,
+            sequence: "AAAACCCCTTTT".to_string(),
+            path: vec![1, 2, 3],
+            confidence: 0.9,
+            length: 12,
+            strand: '+',
+            tpm: Some(10.0),
+            splicing: "linear".to_string(),
+        },
+        Transcript {
+            id: 5,
+            sequence: "AAAACCCCTTTT".to_string(),
+            path: vec![1, 2, 3],
+            confidence: 0.9,
+            length: 12,
+            strand: '+',
+            tpm: Some(20.0),
+            splicing: "linear".to_string(),
+        },
+        Transcript {
+            id: 20,
+            sequence: "TTTTGGGGAAAA".to_string(),
+            path: vec![7, 8, 9],
+            confidence: 0.1,
+            length: 12,
+            strand: '+',
+            tpm: Some(7.5),
+            splicing: "linear".to_string(),
+        },
+    ];
+
+    let baseline_filtered_ids: Vec<usize> = filter_similar_transcripts(&transcripts, 0.99)
+        .iter()
+        .map(|t| t.id)
+        .collect();
+    let baseline_merged_ids: Vec<usize> = merge_transcripts(&transcripts, 0.99)
+        .iter()
+        .map(|t| t.id)
+        .collect();
+
+    let mut rng = StdRng::seed_from_u64(0x150F_0F1F_u64);
+    for _ in 0..256 {
+        let mut shuffled = transcripts.clone();
+        shuffled.shuffle(&mut rng);
+
+        let filtered_ids: Vec<usize> = filter_similar_transcripts(&shuffled, 0.99)
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        let merged_ids: Vec<usize> = merge_transcripts(&shuffled, 0.99)
+            .iter()
+            .map(|t| t.id)
+            .collect();
+
+        assert_eq!(filtered_ids, baseline_filtered_ids);
+        assert_eq!(merged_ids, baseline_merged_ids);
     }
 }
