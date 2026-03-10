@@ -33,6 +33,7 @@ pub fn find_directed_paths(
     let end_node_set: HashSet<usize> = end_nodes.iter().cloned().collect();
     let mut ordered_starts: Vec<usize> = start_nodes.to_vec();
     ordered_starts.sort_unstable();
+    ordered_starts.dedup();
 
     for start in ordered_starts {
         // Check if we've hit the path limit
@@ -321,5 +322,19 @@ mod tests {
         let a_nodes: Vec<Vec<usize>> = paths_a.into_iter().map(|p| p.nodes).collect();
         let b_nodes: Vec<Vec<usize>> = paths_b.into_iter().map(|p| p.nodes).collect();
         assert_eq!(a_nodes, b_nodes);
+    }
+
+    #[test]
+    fn test_find_directed_paths_deduplicates_repeated_start_nodes() {
+        let mut graph = DiGraphMap::new();
+        graph.add_edge(0, 1, 0.9);
+        graph.add_edge(1, 2, 0.8);
+
+        let unique = find_directed_paths(&graph, &[0], &[2], 4);
+        let duplicated = find_directed_paths(&graph, &[0, 0, 0, 0], &[2], 4);
+
+        let unique_nodes: Vec<Vec<usize>> = unique.into_iter().map(|p| p.nodes).collect();
+        let duplicated_nodes: Vec<Vec<usize>> = duplicated.into_iter().map(|p| p.nodes).collect();
+        assert_eq!(duplicated_nodes, unique_nodes);
     }
 }

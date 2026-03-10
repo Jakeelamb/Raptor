@@ -20,6 +20,7 @@ pub fn parallel_path_discovery(
     // Sort starts once so output is deterministic regardless of caller order.
     let mut ordered_starts = start_nodes.to_vec();
     ordered_starts.sort_unstable();
+    ordered_starts.dedup();
 
     // Fixed-size chunking keeps output independent of runtime thread count.
     let mut chunked_results: Vec<Vec<TranscriptPath>> = ordered_starts
@@ -202,5 +203,18 @@ mod tests {
                 });
             assert_eq!(observed, baseline);
         }
+    }
+
+    #[test]
+    fn parallel_path_discovery_deduplicates_repeated_start_nodes() {
+        let mut graph = DiGraphMap::new();
+        graph.add_edge(0, 1, 0.9);
+        graph.add_edge(1, 2, 0.8);
+        graph.add_edge(2, 3, 0.7);
+
+        let unique = summarize_paths(parallel_path_discovery(&graph, &[0], &[3], 8));
+        let repeated = summarize_paths(parallel_path_discovery(&graph, &[0, 0, 0, 0], &[3], 8));
+
+        assert_eq!(repeated, unique);
     }
 }
