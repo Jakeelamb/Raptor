@@ -116,28 +116,31 @@ impl MinimizerIndex {
     }
 
     fn add_contig(&mut self, contig_id: usize, sequence: &[u8]) {
-        for (pos, minimizer) in self.extract_minimizers(sequence) {
+        Self::for_each_minimizer(self.k, self.w, sequence, |pos, minimizer| {
             self.index
                 .entry(minimizer)
                 .or_default()
                 .push((contig_id, pos));
-        }
+        });
     }
 
-    fn extract_minimizers(&self, seq: &[u8]) -> Vec<(usize, u64)> {
-        let mut minimizers = Vec::new();
-        if seq.len() < self.k + self.w - 1 {
-            return minimizers;
+    fn for_each_minimizer<F>(k: usize, w: usize, seq: &[u8], mut emit: F)
+    where
+        F: FnMut(usize, u64),
+    {
+        if seq.len() < k + w - 1 {
+            return;
         }
 
-        for window_start in 0..=(seq.len() - self.k - self.w + 1) {
+        let mut last_emitted_pos = usize::MAX;
+        for window_start in 0..=(seq.len() - k - w + 1) {
             let mut min_hash = u64::MAX;
             let mut min_pos = 0;
 
-            for i in 0..self.w {
+            for i in 0..w {
                 let pos = window_start + i;
-                if pos + self.k <= seq.len() {
-                    let hash = hash_kmer(&seq[pos..pos + self.k]);
+                if pos + k <= seq.len() {
+                    let hash = hash_kmer(&seq[pos..pos + k]);
                     if hash < min_hash {
                         min_hash = hash;
                         min_pos = pos;
@@ -145,30 +148,29 @@ impl MinimizerIndex {
                 }
             }
 
-            if minimizers.is_empty() || minimizers.last().map(|(p, _)| *p) != Some(min_pos) {
-                minimizers.push((min_pos, min_hash));
+            if min_pos != last_emitted_pos {
+                emit(min_pos, min_hash);
+                last_emitted_pos = min_pos;
             }
         }
-
-        minimizers
     }
 
     fn map_read(&self, sequence: &[u8]) -> Option<(usize, usize, bool)> {
         let mut hits: AHashMap<(usize, usize), usize> = AHashMap::new();
 
         // Forward mapping
-        for (read_pos, minimizer) in self.extract_minimizers(sequence) {
+        Self::for_each_minimizer(self.k, self.w, sequence, |read_pos, minimizer| {
             if let Some(entries) = self.index.get(&minimizer) {
                 for &(contig_id, contig_pos) in entries {
                     let start = contig_pos.saturating_sub(read_pos);
                     *hits.entry((contig_id, start)).or_default() += 1;
                 }
             }
-        }
+        });
 
         // Reverse complement mapping
         let rc = reverse_complement(sequence);
-        for (read_pos, minimizer) in self.extract_minimizers(&rc) {
+        Self::for_each_minimizer(self.k, self.w, &rc, |read_pos, minimizer| {
             if let Some(entries) = self.index.get(&minimizer) {
                 for &(contig_id, contig_pos) in entries {
                     let start = contig_pos.saturating_sub(read_pos);
@@ -177,7 +179,7 @@ impl MinimizerIndex {
                         .or_default() += 1;
                 }
             }
-        }
+        });
 
         // Find best hit with at least 3 minimizer matches using explicit,
         // insertion-order-independent tie-breaking.
