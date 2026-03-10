@@ -94,7 +94,12 @@ fn main() {
 
         // Write all k-mers with their counts for analysis
         writeln!(&mut file, "kmer\tcount").unwrap();
-        for (&kmer_encoded, &count) in &kmer_map {
+        let mut sorted_kmers: Vec<(u64, u32)> = kmer_map
+            .iter()
+            .map(|(&kmer, &count)| (kmer, count))
+            .collect();
+        sorted_kmers.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        for (kmer_encoded, count) in sorted_kmers {
             let kmer_str = decode_kmer(kmer_encoded, k);
             writeln!(&mut file, "{}\t{}", kmer_str, count).unwrap();
         }

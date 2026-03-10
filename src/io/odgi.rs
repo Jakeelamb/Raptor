@@ -1,7 +1,7 @@
 use crate::graph::navigation::PathMetadata;
 use crate::kmer::rle::rle_encode;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 
@@ -9,21 +9,28 @@ use std::io::{self, BufWriter, Write};
 struct OdgiNode {
     id: String,
     length: usize,
-    tags: HashMap<String, f32>,
+    tags: BTreeMap<String, f32>,
 }
 
 #[derive(Serialize)]
 struct OdgiPath {
     id: String,
     segments: Vec<String>,
-    metadata: HashMap<String, f32>,
+    metadata: BTreeMap<String, f32>,
 }
 
 #[derive(Serialize)]
 struct OdgiGraph {
     nodes: Vec<OdgiNode>,
     paths: Vec<OdgiPath>,
-    metadata: HashMap<String, f32>,
+    metadata: BTreeMap<String, f32>,
+}
+
+#[inline]
+fn sorted_entries<V>(map: &HashMap<String, V>) -> Vec<(&String, &V)> {
+    let mut entries: Vec<(&String, &V)> = map.iter().collect();
+    entries.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+    entries
 }
 
 /// Export the graph to an ODGI-compatible JSON format
@@ -36,12 +43,12 @@ pub fn export_odgi_json(
     let mut nodes = vec![];
 
     // Process nodes (segments)
-    for (id, seq) in segment_map {
+    for (id, seq) in sorted_entries(segment_map) {
         let rle = rle_encode(seq);
         let rc = 1.0 - (rle.len() as f32 / seq.len() as f32);
         let cov = *coverage.get(id).unwrap_or(&1.0);
 
-        let mut tags = HashMap::new();
+        let mut tags = BTreeMap::new();
         tags.insert("RC".to_string(), rc);
         tags.insert("CV".to_string(), cov);
 
@@ -66,13 +73,13 @@ pub fn export_odgi_json(
 
     // Process paths
     let mut paths = vec![];
-    for (id, segments) in path_map {
+    for (id, segments) in sorted_entries(path_map) {
         let segments_vec: Vec<String> = segments
             .iter()
             .map(|(s, dir)| format!("{}{}", s, dir))
             .collect();
 
-        let mut metadata = HashMap::new();
+        let mut metadata = BTreeMap::new();
         metadata.insert("length".to_string(), segments.len() as f32);
 
         // Calculate number of unique segments
@@ -95,7 +102,7 @@ pub fn export_odgi_json(
     }
 
     // Calculate graph-level metrics
-    let mut graph_metadata = HashMap::new();
+    let mut graph_metadata = BTreeMap::new();
     graph_metadata.insert("node_count".to_string(), nodes.len() as f32);
     graph_metadata.insert("path_count".to_string(), paths.len() as f32);
 
@@ -204,6 +211,7 @@ pub fn export_path_metadata_json(metadata: &[PathMetadata], output: &str) -> io:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
     use std::io::Read;
     use tempfile::NamedTempFile;
 
@@ -249,5 +257,88 @@ mod tests {
         // Check for node data
         assert!(contents.contains("\"id\": \"1\""));
         assert!(contents.contains("\"CV\": 10.5"));
+    }
+
+    #[test]
+    fn test_export_odgi_json_is_deterministic() {
+        let mut outputs = HashSet::new();
+
+        for reverse in [false, true, false, true] {
+            let segment_items = if reverse {
+                vec![
+                    ("3".to_string(), "AAAATTTT".to_string()),
+                    ("2".to_string(), "TTTTGGGG".to_string()),
+                    ("1".to_string(), "ACGTACGT".to_string()),
+                ]
+            } else {
+                vec![
+                    ("1".to_string(), "ACGTACGT".to_string()),
+                    ("2".to_string(), "TTTTGGGG".to_string()),
+                    ("3".to_string(), "AAAATTTT".to_string()),
+                ]
+            };
+            let segment_map: HashMap<String, String> = segment_items.into_iter().collect();
+
+            let path_items = if reverse {
+                vec![
+                    (
+                        "path2".to_string(),
+                        vec![("1".to_string(), '+'), ("3".to_string(), '-')],
+                    ),
+                    (
+                        "path1".to_string(),
+                        vec![("1".to_string(), '+'), ("2".to_string(), '+')],
+                    ),
+                ]
+            } else {
+                vec![
+                    (
+                        "path1".to_string(),
+                        vec![("1".to_string(), '+'), ("2".to_string(), '+')],
+                    ),
+                    (
+                        "path2".to_string(),
+                        vec![("1".to_string(), '+'), ("3".to_string(), '-')],
+                    ),
+                ]
+            };
+            let path_map: HashMap<String, Vec<(String, char)>> = path_items.into_iter().collect();
+
+            let coverage_items = if reverse {
+                vec![
+                    ("3".to_string(), 7.8),
+                    ("2".to_string(), 5.2),
+                    ("1".to_string(), 10.5),
+                ]
+            } else {
+                vec![
+                    ("1".to_string(), 10.5),
+                    ("2".to_string(), 5.2),
+                    ("3".to_string(), 7.8),
+                ]
+            };
+            let coverage: HashMap<String, f32> = coverage_items.into_iter().collect();
+
+            let temp_file = NamedTempFile::new().unwrap();
+            let path = temp_file.path().to_str().unwrap();
+            export_odgi_json(&segment_map, &path_map, &coverage, path).unwrap();
+
+            let mut file = File::open(path).unwrap();
+            let mut contents = String::new();
+            file.read_to_string(&mut contents).unwrap();
+
+            let id_1 = contents.find("\"id\": \"1\"").unwrap();
+            let id_2 = contents.find("\"id\": \"2\"").unwrap();
+            let id_3 = contents.find("\"id\": \"3\"").unwrap();
+            assert!(id_1 < id_2 && id_2 < id_3);
+
+            let path_1 = contents.find("\"id\": \"path1\"").unwrap();
+            let path_2 = contents.find("\"id\": \"path2\"").unwrap();
+            assert!(path_1 < path_2);
+
+            outputs.insert(contents);
+        }
+
+        assert_eq!(outputs.len(), 1);
     }
 }

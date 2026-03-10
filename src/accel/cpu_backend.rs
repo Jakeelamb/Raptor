@@ -345,10 +345,12 @@ impl ComputeBackend for CpuBackend {
             }
         }
 
-        best_overlaps
+        let mut overlaps: Vec<(usize, usize, usize)> = best_overlaps
             .into_iter()
             .map(|((from, to), len)| (from, to, len))
-            .collect()
+            .collect();
+        overlaps.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        overlaps
     }
 
     fn build_adjacency(&self, kmer_counts: &HashMap<String, u32>, k: usize) -> AdjacencyTable {
@@ -444,6 +446,9 @@ mod tests {
         // depending on the minimizer sampling. Just verify it doesn't crash.
         // For guaranteed overlap detection, would need longer, more distinct sequences.
         assert!(overlaps.iter().all(|_| true)); // Just verify iteration completes without error
+        assert!(overlaps
+            .windows(2)
+            .all(|w| { (w[0].0, w[0].1) <= (w[1].0, w[1].1) }));
     }
 
     #[test]
