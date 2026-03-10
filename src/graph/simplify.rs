@@ -1,5 +1,4 @@
 use crate::graph::assembler::Contig;
-use crate::kmer::rle::rle_encode;
 use std::cmp::Ordering;
 
 /// Collapse contigs with identical or highly similar RLE-encoded sequences
@@ -8,7 +7,10 @@ pub fn collapse_repeats(contigs: Vec<Contig>, min_repeat_len: usize) -> Vec<Cont
         return contigs;
     }
 
-    let signatures: Vec<Vec<(u8, u8)>> = contigs.iter().map(|c| rle_encode(&c.sequence)).collect();
+    let signatures: Vec<Vec<(u8, u8)>> = contigs
+        .iter()
+        .map(|c| normalized_rle_signature(&c.sequence))
+        .collect();
     let eligible: Vec<bool> = signatures
         .iter()
         .map(|sig| min_repeat_len == 0 || sig.len() >= min_repeat_len)
@@ -24,7 +26,9 @@ pub fn collapse_repeats(contigs: Vec<Contig>, min_repeat_len: usize) -> Vec<Cont
                 continue;
             }
 
-            let same_or_similar = contigs[i].sequence == contigs[j].sequence
+            let same_or_similar = contigs[i]
+                .sequence
+                .eq_ignore_ascii_case(&contigs[j].sequence)
                 || is_rle_similar_encoded(&signatures[i], &signatures[j], 0.9);
 
             if same_or_similar {
@@ -60,9 +64,40 @@ pub fn collapse_repeats(contigs: Vec<Contig>, min_repeat_len: usize) -> Vec<Cont
 /// Determine if two sequences are similar based on their run-length encoding
 /// Compares the base types and their frequencies
 fn is_rle_similar(seq1: &str, seq2: &str, threshold: f64) -> bool {
-    let rle1 = rle_encode(seq1);
-    let rle2 = rle_encode(seq2);
+    let rle1 = normalized_rle_signature(seq1);
+    let rle2 = normalized_rle_signature(seq2);
     is_rle_similar_encoded(&rle1, &rle2, threshold)
+}
+
+#[inline]
+fn normalized_rle_signature(seq: &str) -> Vec<(u8, u8)> {
+    let bytes = seq.as_bytes();
+    if bytes.is_empty() {
+        return Vec::new();
+    }
+
+    let mut encoded = Vec::new();
+    let mut current = bytes[0].to_ascii_uppercase();
+    let mut count: u8 = 1;
+
+    for &next_raw in &bytes[1..] {
+        let next = next_raw.to_ascii_uppercase();
+        if next == current {
+            if count == u8::MAX {
+                encoded.push((current, u8::MAX));
+                count = 1;
+            } else {
+                count += 1;
+            }
+        } else {
+            encoded.push((current, count));
+            current = next;
+            count = 1;
+        }
+    }
+
+    encoded.push((current, count));
+    encoded
 }
 
 /// Determine if two pre-encoded RLE signatures are similar.
@@ -155,6 +190,11 @@ mod tests {
 
         // Should not be similar with large changes
         assert!(!is_rle_similar("ATATATATATAT", "GCGCGCGCGCGC", 0.5));
+    }
+
+    #[test]
+    fn test_is_rle_similar_is_case_insensitive() {
+        assert!(is_rle_similar("aaaattttcccc", "AAAATTTTCCCC", 1.0));
     }
 
     #[test]
@@ -311,5 +351,25 @@ mod tests {
         let collapsed = collapse_repeats(contigs, 0);
         let ids: Vec<usize> = collapsed.iter().map(|c| c.id).collect();
         assert_eq!(ids, vec![0, 1]);
+    }
+
+    #[test]
+    fn collapse_repeats_deduplicates_case_only_sequence_variants() {
+        let contigs = vec![
+            Contig {
+                id: 5,
+                sequence: "aaaattttcccc".to_string(),
+                kmer_path: vec![encode_kmer("AAA").unwrap()],
+            },
+            Contig {
+                id: 6,
+                sequence: "AAAATTTTCCCC".to_string(),
+                kmer_path: vec![encode_kmer("AAC").unwrap()],
+            },
+        ];
+
+        let collapsed = collapse_repeats(contigs, 0);
+        assert_eq!(collapsed.len(), 1);
+        assert_eq!(collapsed[0].id, 0);
     }
 }
