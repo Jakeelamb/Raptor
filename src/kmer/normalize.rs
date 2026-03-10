@@ -41,6 +41,20 @@ pub fn should_keep_read(
     target: u16,
     min_abund: u16,
 ) -> bool {
+    let mut scratch = Vec::new();
+    should_keep_read_with_scratch(record, cms, k, target, min_abund, &mut scratch)
+}
+
+/// Determines whether a read should be kept based on its k-mer coverage
+/// using a caller-provided scratch buffer to avoid per-read allocations.
+pub fn should_keep_read_with_scratch(
+    record: &FastqRecord,
+    cms: &CountMinSketch,
+    k: usize,
+    target: u16,
+    min_abund: u16,
+    scratch: &mut Vec<u16>,
+) -> bool {
     if record.sequence.len() < k {
         return false; // Skip reads shorter than k
     }
@@ -48,17 +62,16 @@ pub fn should_keep_read(
     let bytes = record.sequence.as_bytes();
 
     // Get median abundance of k-mers in the read using ntHash
-    let mut abundances: Vec<u16> = NtHashIterator::new(bytes, k)
-        .map(|(_, hash)| cms.estimate_hash(hash))
-        .collect();
+    scratch.clear();
+    scratch.extend(NtHashIterator::new(bytes, k).map(|(_, hash)| cms.estimate_hash(hash)));
 
     // If no valid k-mers, skip this read
-    if abundances.is_empty() {
+    if scratch.is_empty() {
         return false;
     }
 
-    let median_idx = abundances.len() / 2;
-    let (_, median_abund, _) = abundances.select_nth_unstable(median_idx);
+    let median_idx = scratch.len() / 2;
+    let (_, median_abund, _) = scratch.select_nth_unstable(median_idx);
     let median_abund = *median_abund;
 
     // Skip reads with low abundance (potential errors)
@@ -85,9 +98,35 @@ pub fn should_keep_read_pair(
     target: u16,
     min_abund: u16,
 ) -> bool {
+    let mut scratch_r1 = Vec::new();
+    let mut scratch_r2 = Vec::new();
+    should_keep_read_pair_with_scratch(
+        r1,
+        r2,
+        cms,
+        k,
+        target,
+        min_abund,
+        &mut scratch_r1,
+        &mut scratch_r2,
+    )
+}
+
+/// Determines whether a read pair should be kept based on both reads' k-mer
+/// coverage while reusing caller-provided scratch buffers.
+pub fn should_keep_read_pair_with_scratch(
+    r1: &FastqRecord,
+    r2: &FastqRecord,
+    cms: &CountMinSketch,
+    k: usize,
+    target: u16,
+    min_abund: u16,
+    scratch_r1: &mut Vec<u16>,
+    scratch_r2: &mut Vec<u16>,
+) -> bool {
     // Keep a pair only if both reads should be kept
-    should_keep_read(r1, cms, k, target, min_abund)
-        && should_keep_read(r2, cms, k, target, min_abund)
+    should_keep_read_with_scratch(r1, cms, k, target, min_abund, scratch_r1)
+        && should_keep_read_with_scratch(r2, cms, k, target, min_abund, scratch_r2)
 }
 
 #[inline]
@@ -117,7 +156,7 @@ fn deterministic_roll(record: &FastqRecord) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::should_keep_read;
+    use super::{should_keep_read, should_keep_read_pair, should_keep_read_pair_with_scratch};
     use crate::io::fastq::FastqRecord;
     use crate::kmer::cms::CountMinSketch;
     use crate::kmer::nthash::NtHashIterator;
@@ -190,5 +229,35 @@ mod tests {
         let record = build_record("@short", "ACGT");
         let cms = CountMinSketch::new(4, 1024);
         assert!(!should_keep_read(&record, &cms, 7, 20, 2));
+    }
+
+    #[test]
+    fn scratch_pair_decision_matches_non_scratch_path() {
+        let r1 = build_record("@r1", "ACGTACGTACGTACGTACGTACGTACGT");
+        let r2 = build_record("@r2", "TGCATGCATGCATGCATGCATGCATGCA");
+        let mut cms = CountMinSketch::new(4, 1 << 15);
+        for _ in 0..64 {
+            for (_, hash) in NtHashIterator::new(r1.sequence.as_bytes(), 7) {
+                cms.insert_hash(hash);
+            }
+            for (_, hash) in NtHashIterator::new(r2.sequence.as_bytes(), 7) {
+                cms.insert_hash(hash);
+            }
+        }
+
+        let baseline = should_keep_read_pair(&r1, &r2, &cms, 7, 20, 2);
+        let mut scratch_r1 = Vec::new();
+        let mut scratch_r2 = Vec::new();
+        let observed = should_keep_read_pair_with_scratch(
+            &r1,
+            &r2,
+            &cms,
+            7,
+            20,
+            2,
+            &mut scratch_r1,
+            &mut scratch_r2,
+        );
+        assert_eq!(observed, baseline);
     }
 }

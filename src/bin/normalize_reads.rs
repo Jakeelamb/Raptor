@@ -1,6 +1,6 @@
 use raptor::io::fastq::{open_fastq, stream_fastq_records, FastqWriter};
 use raptor::kmer::cms::CountMinSketch;
-use raptor::kmer::normalize::should_keep_read;
+use raptor::kmer::normalize::should_keep_read_with_scratch;
 use raptor::kmer::nthash::NtHashIterator;
 
 fn main() {
@@ -56,9 +56,11 @@ fn main() {
     let mut writer = FastqWriter::new(&format!("{}_norm.fastq.gz", output_prefix));
     let mut kept_count = 0;
     let total_count = all_records.len();
+    let mut abundance_scratch = Vec::new();
 
     for record in &all_records {
-        if should_keep_read(record, &cms, k, target, min_abund) {
+        if should_keep_read_with_scratch(record, &cms, k, target, min_abund, &mut abundance_scratch)
+        {
             writer.write_record(record).expect("Failed to write record");
             kept_count += 1;
         }

@@ -2,7 +2,7 @@ use crate::io::fastq::{
     stream_fastq_records_checked, stream_paired_fastq_records_checked, try_open_fastq, FastqWriter,
 };
 use crate::kmer::cms::CountMinSketch;
-use crate::kmer::normalize::{should_keep_read, should_keep_read_pair};
+use crate::kmer::normalize::{should_keep_read_pair_with_scratch, should_keep_read_with_scratch};
 use crate::kmer::nthash::NtHashIterator;
 use std::io;
 use std::time::Instant;
@@ -64,13 +64,21 @@ pub fn normalize_single(
     let mut kept_count = 0;
     let second_pass_start = Instant::now();
     let mut current_record = 0;
+    let mut abundance_scratch = Vec::new();
 
     // Stream records for filtering
     for record in stream_fastq_records_checked(reader) {
         let record = record?;
         current_record += 1;
 
-        if should_keep_read(&record, &cms, k, target_coverage, min_abundance) {
+        if should_keep_read_with_scratch(
+            &record,
+            &cms,
+            k,
+            target_coverage,
+            min_abundance,
+            &mut abundance_scratch,
+        ) {
             writer.write_record(&record)?;
             kept_count += 1;
         }
@@ -162,13 +170,24 @@ pub fn normalize_paired(
     let mut kept_count = 0;
     let second_pass_start = Instant::now();
     let mut current_pair = 0;
+    let mut scratch_r1 = Vec::new();
+    let mut scratch_r2 = Vec::new();
 
     // Stream paired records for filtering
     for pair in stream_paired_fastq_records_checked(reader1, reader2) {
         let (r1, r2) = pair?;
         current_pair += 1;
 
-        if should_keep_read_pair(&r1, &r2, &cms, k, target_coverage, min_abundance) {
+        if should_keep_read_pair_with_scratch(
+            &r1,
+            &r2,
+            &cms,
+            k,
+            target_coverage,
+            min_abundance,
+            &mut scratch_r1,
+            &mut scratch_r2,
+        ) {
             writer1.write_record(&r1)?;
             writer2.write_record(&r2)?;
             kept_count += 1;

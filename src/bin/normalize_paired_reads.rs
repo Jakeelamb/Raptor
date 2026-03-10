@@ -3,7 +3,7 @@
 use raptor::accel::gpu::kmer_gpu::GpuKmerCounter;
 use raptor::io::fastq::{open_fastq, stream_paired_fastq_records, FastqWriter};
 use raptor::kmer::cms::CountMinSketch;
-use raptor::kmer::normalize::{estimate_read_abundance, should_keep_read_pair};
+use raptor::kmer::normalize::{estimate_read_abundance, should_keep_read_pair_with_scratch};
 use raptor::kmer::nthash::NtHashIterator;
 
 // Process reads in chunks to reduce memory usage
@@ -146,6 +146,8 @@ fn main() {
 
         // Create a much smaller CMS to reduce memory usage
         let mut cms = CountMinSketch::new(2, 1 << 17); // 2 hash functions, even smaller table
+        let mut scratch_r1 = Vec::new();
+        let mut scratch_r2 = Vec::new();
 
         let reader1 = open_fastq(input_r1);
         let reader2 = open_fastq(input_r2);
@@ -186,7 +188,16 @@ fn main() {
             for (r1, r2) in &chunk {
                 total_pairs += 1;
 
-                if should_keep_read_pair(r1, r2, &cms, k, target as u16, min_abund as u16) {
+                if should_keep_read_pair_with_scratch(
+                    r1,
+                    r2,
+                    &cms,
+                    k,
+                    target as u16,
+                    min_abund as u16,
+                    &mut scratch_r1,
+                    &mut scratch_r2,
+                ) {
                     writer1.write_record(r1).expect("Failed to write R1 record");
                     writer2.write_record(r2).expect("Failed to write R2 record");
                     kept_pairs += 1;
@@ -221,6 +232,8 @@ fn main() {
 
         // CPU-based normalization
         let mut cms = CountMinSketch::new(4, 1 << 20);
+        let mut scratch_r1 = Vec::new();
+        let mut scratch_r2 = Vec::new();
 
         // First pass - count k-mers from both mates using ntHash
         for (r1, r2) in &all_pairs {
@@ -237,7 +250,16 @@ fn main() {
 
         // Second pass - filter read pairs
         for (r1, r2) in &all_pairs {
-            if should_keep_read_pair(r1, r2, &cms, k, target as u16, min_abund as u16) {
+            if should_keep_read_pair_with_scratch(
+                r1,
+                r2,
+                &cms,
+                k,
+                target as u16,
+                min_abund as u16,
+                &mut scratch_r1,
+                &mut scratch_r2,
+            ) {
                 writer1.write_record(r1).expect("Failed to write R1 record");
                 writer2.write_record(r2).expect("Failed to write R2 record");
                 kept_pairs += 1;
