@@ -13,7 +13,9 @@
 
 use crate::eval::metrics::evaluate_lengths;
 use crate::io::fasta::FastaWriter;
-use crate::io::fastq::{open_fastq, stream_fastq_records, stream_paired_fastq_records};
+use crate::io::fastq::{
+    open_fastq, stream_fastq_records_checked, stream_paired_fastq_records_checked,
+};
 use crate::kmer::disk_counting_v2::{
     decode_kmer, extend_left, extend_right, DiskCounterConfig, DiskKmerCounterV2,
 };
@@ -476,7 +478,8 @@ impl LargeGenomeAssembler {
         const BATCH_SIZE: usize = 50_000;
         let mut batch: Vec<String> = Vec::with_capacity(BATCH_SIZE);
 
-        for record in stream_fastq_records(reader) {
+        for record in stream_fastq_records_checked(reader) {
+            let record = record?;
             reads += 1;
             bases += record.sequence.len() as u64;
             batch.push(record.sequence);
@@ -515,7 +518,8 @@ impl LargeGenomeAssembler {
         const INSERT_SAMPLE_SIZE: usize = 100_000;
         let mut batch: Vec<String> = Vec::with_capacity(BATCH_SIZE * 2);
 
-        for (r1, r2) in stream_paired_fastq_records(reader1, reader2) {
+        for pair in stream_paired_fastq_records_checked(reader1, reader2) {
+            let (r1, r2) = pair?;
             reads += 2;
             bases += (r1.sequence.len() + r2.sequence.len()) as u64;
 
@@ -1312,7 +1316,8 @@ impl LargeGenomeAssembler {
         }
 
         let reader = open_fastq(path);
-        for record in stream_fastq_records(reader) {
+        for record in stream_fastq_records_checked(reader) {
+            let record = record?;
             stats.edge_observations += Self::thread_branch_edges_in_sequence(
                 record.sequence.as_bytes(),
                 k,
@@ -1346,7 +1351,8 @@ impl LargeGenomeAssembler {
 
         let reader1 = open_fastq(path1);
         let reader2 = open_fastq(path2);
-        for (r1, r2) in stream_paired_fastq_records(reader1, reader2) {
+        for pair in stream_paired_fastq_records_checked(reader1, reader2) {
+            let (r1, r2) = pair?;
             stats.edge_observations += Self::thread_branch_edges_in_sequence(
                 r1.sequence.as_bytes(),
                 k,
@@ -2518,6 +2524,49 @@ mod tests {
             "Should have processed paired reads"
         );
         assert!(stats.kmers_filtered > 0, "Should have filtered k-mers");
+    }
+
+    #[test]
+    fn test_paired_end_assembly_rejects_mismatched_record_counts() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut r1_file = NamedTempFile::new().unwrap();
+        let mut r2_file = NamedTempFile::new().unwrap();
+
+        for i in 0..2 {
+            writeln!(r1_file, "@read_{}/1", i).unwrap();
+            writeln!(r1_file, "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT").unwrap();
+            writeln!(r1_file, "+").unwrap();
+            writeln!(r1_file, "IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII").unwrap();
+        }
+
+        writeln!(r2_file, "@read_0/2").unwrap();
+        writeln!(r2_file, "TGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA").unwrap();
+        writeln!(r2_file, "+").unwrap();
+        writeln!(r2_file, "IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII").unwrap();
+
+        r1_file.flush().unwrap();
+        r2_file.flush().unwrap();
+
+        let output = NamedTempFile::new().unwrap();
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k: 21,
+            min_count: 1,
+            min_contig_len: 21,
+            num_buckets: Some(4),
+            temp_dir: Some(temp_dir.path().to_str().unwrap().to_string()),
+            ..Default::default()
+        });
+
+        let err = assembler
+            .assemble_paired(
+                r1_file.path().to_str().unwrap(),
+                r2_file.path().to_str().unwrap(),
+                output.path().to_str().unwrap(),
+            )
+            .unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("different record counts"));
     }
 
     /// Test insert size statistics

@@ -14,7 +14,7 @@ use crate::accel::CpuBackend;
 use crate::eval::metrics::{evaluate_lengths, TranscriptStats};
 use crate::graph::assembler::{greedy_assembly_u64, Contig};
 use crate::io::fasta::FastaWriter;
-use crate::io::fastq::{open_fastq, stream_fastq_records};
+use crate::io::fastq::{open_fastq, stream_fastq_records_checked};
 use crate::kmer::disk_counting_v2::{DiskCounterConfig, DiskKmerCounterV2};
 use ahash::AHashMap;
 use std::path::Path;
@@ -227,7 +227,8 @@ impl StreamingAssembler {
         const BATCH_SIZE: usize = 10_000;
         let mut batch: Vec<String> = Vec::with_capacity(BATCH_SIZE);
 
-        for record in stream_fastq_records(reader) {
+        for record in stream_fastq_records_checked(reader) {
+            let record = record?;
             total_reads += 1;
             total_bases += record.sequence.len() as u64;
             batch.push(record.sequence);
@@ -365,6 +366,37 @@ mod tests {
                 .unwrap_err();
             assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         }
+    }
+
+    #[test]
+    fn streaming_assembly_rejects_truncated_fastq_records() {
+        let mut input = NamedTempFile::new().unwrap();
+        writeln!(input, "@read_0").unwrap();
+        writeln!(input, "ACGTACGT").unwrap();
+        writeln!(input, "+").unwrap();
+        writeln!(input, "IIIIIIII").unwrap();
+        writeln!(input, "@read_1").unwrap();
+        writeln!(input, "ACGTACGT").unwrap();
+        writeln!(input, "+").unwrap();
+        input.flush().unwrap();
+
+        let output = NamedTempFile::new().unwrap();
+        let assembler = StreamingAssembler::new(StreamingAssemblyConfig {
+            k: 5,
+            min_kmer_count: 1,
+            min_contig_len: 5,
+            num_buckets: Some(4),
+            max_ram: None,
+            temp_dir: None,
+        });
+
+        let err = assembler
+            .assemble(
+                input.path().to_str().unwrap(),
+                output.path().to_str().unwrap(),
+            )
+            .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
     }
 
     #[test]
