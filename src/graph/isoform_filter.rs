@@ -2,6 +2,7 @@ use crate::accel::simd::hamming_distance_simd;
 use crate::graph::transcript::Transcript;
 use crate::kmer::nthash::nthash;
 use ahash::AHashSet;
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use tracing::debug;
 
@@ -191,6 +192,20 @@ pub fn cluster_similar_transcripts(
     clusters
 }
 
+#[inline]
+fn normalized_confidence(confidence: f64) -> f64 {
+    if confidence.is_finite() {
+        confidence
+    } else {
+        f64::NEG_INFINITY
+    }
+}
+
+#[inline]
+fn cmp_confidence_desc(a: f64, b: f64) -> Ordering {
+    normalized_confidence(b).total_cmp(&normalized_confidence(a))
+}
+
 /// Filter out similar transcripts based on sequence similarity
 pub fn filter_similar_transcripts(
     transcripts: &[Transcript],
@@ -211,9 +226,12 @@ pub fn filter_similar_transcripts(
     sorted_transcripts.sort_by(|a, b| {
         let len_cmp = b.length.cmp(&a.length);
         if len_cmp == std::cmp::Ordering::Equal {
-            b.confidence
-                .partial_cmp(&a.confidence)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            let confidence_cmp = cmp_confidence_desc(a.confidence, b.confidence);
+            if confidence_cmp == Ordering::Equal {
+                a.id.cmp(&b.id)
+            } else {
+                confidence_cmp
+            }
         } else {
             len_cmp
         }
@@ -266,9 +284,17 @@ pub fn merge_transcripts(transcripts: &[Transcript], similarity_threshold: f64) 
     // Sort transcripts by confidence (descending)
     let mut sorted_transcripts = transcripts.to_vec();
     sorted_transcripts.sort_by(|a, b| {
-        b.confidence
-            .partial_cmp(&a.confidence)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        let confidence_cmp = cmp_confidence_desc(a.confidence, b.confidence);
+        if confidence_cmp != Ordering::Equal {
+            return confidence_cmp;
+        }
+
+        let len_cmp = b.length.cmp(&a.length);
+        if len_cmp != Ordering::Equal {
+            return len_cmp;
+        }
+
+        a.id.cmp(&b.id)
     });
 
     let mut merged_transcripts = Vec::new();
@@ -298,21 +324,32 @@ pub fn merge_transcripts(transcripts: &[Transcript], similarity_threshold: f64) 
         // If we found transcripts to merge
         if !merged_with.is_empty() {
             // Update confidence as weighted average
-            let total_confidence = merged_with
-                .iter()
-                .fold(merged.confidence, |acc, t| acc + t.confidence);
-
-            let avg_confidence = total_confidence / (merged_with.len() as f64 + 1.0);
-            merged.confidence = avg_confidence;
-
-            // Update TPM if available
-            if let Some(tpm) = merged.tpm {
-                let total_tpm = merged_with
-                    .iter()
-                    .fold(tpm, |acc, t| acc + t.tpm.unwrap_or(0.0));
-
-                merged.tpm = Some(total_tpm);
+            let mut confidence_sum = 0.0;
+            let mut confidence_count = 0usize;
+            for transcript in std::iter::once(&merged).chain(merged_with.iter().copied()) {
+                if transcript.confidence.is_finite() {
+                    confidence_sum += transcript.confidence;
+                    confidence_count += 1;
+                }
             }
+            if confidence_count > 0 {
+                merged.confidence = confidence_sum / confidence_count as f64;
+            }
+
+            // Update TPM if available, ignoring non-finite values.
+            let mut total_tpm = 0.0;
+            let mut has_finite_tpm = false;
+            if let Some(tpm) = merged.tpm.filter(|v| v.is_finite()) {
+                total_tpm += tpm;
+                has_finite_tpm = true;
+            }
+            for transcript in &merged_with {
+                if let Some(tpm) = transcript.tpm.filter(|v| v.is_finite()) {
+                    total_tpm += tpm;
+                    has_finite_tpm = true;
+                }
+            }
+            merged.tpm = has_finite_tpm.then_some(total_tpm);
 
             debug!(
                 "Merged transcript {} with {} others",
@@ -338,6 +375,9 @@ fn is_similar(a: &Transcript, b: &Transcript, threshold: f64) -> bool {
     // If length difference is too large, they're not similar
     let len_a = a.sequence.len();
     let len_b = b.sequence.len();
+    if len_a == 0 || len_b == 0 {
+        return len_a == len_b;
+    }
 
     // If one sequence is more than 50% longer than the other, they're not similar
     if len_a as f64 > len_b as f64 * 1.5 || len_b as f64 > len_a as f64 * 1.5 {
@@ -568,5 +608,131 @@ mod tests {
         let merged = merged_low.iter().find(|t| t.id == 1).unwrap();
         assert!((merged.confidence - 0.9).abs() < 0.01); // Average of 0.95 and 0.85
         assert!(merged.tpm.unwrap() > 100.0); // Should be sum of TPMs
+    }
+
+    #[test]
+    fn test_filter_similar_is_deterministic_with_nan_and_tied_confidence() {
+        let transcripts = vec![
+            Transcript {
+                id: 11,
+                sequence: "AAAACCCCTTTT".to_string(),
+                path: vec![1, 2, 3],
+                confidence: f64::NAN,
+                length: 12,
+                strand: '+',
+                tpm: Some(5.0),
+                splicing: "linear".to_string(),
+            },
+            Transcript {
+                id: 2,
+                sequence: "AAAACCCCTTTT".to_string(),
+                path: vec![1, 2, 3],
+                confidence: 0.9,
+                length: 12,
+                strand: '+',
+                tpm: Some(10.0),
+                splicing: "linear".to_string(),
+            },
+            Transcript {
+                id: 5,
+                sequence: "AAAACCCCTTTT".to_string(),
+                path: vec![1, 2, 3],
+                confidence: 0.9,
+                length: 12,
+                strand: '+',
+                tpm: Some(20.0),
+                splicing: "linear".to_string(),
+            },
+        ];
+
+        let mut reversed = transcripts.clone();
+        reversed.reverse();
+
+        let baseline = filter_similar_transcripts(&transcripts, 0.99);
+        let reversed_result = filter_similar_transcripts(&reversed, 0.99);
+
+        let baseline_ids: Vec<usize> = baseline.iter().map(|t| t.id).collect();
+        let reversed_ids: Vec<usize> = reversed_result.iter().map(|t| t.id).collect();
+        assert_eq!(baseline_ids, reversed_ids);
+        assert_eq!(baseline_ids, vec![2]);
+    }
+
+    #[test]
+    fn test_merge_transcripts_ignores_non_finite_values() {
+        let transcripts = vec![
+            Transcript {
+                id: 1,
+                sequence: "AAAACCCCTTTTGGGG".to_string(),
+                path: vec![1, 2],
+                confidence: 1.0,
+                length: 16,
+                strand: '+',
+                tpm: Some(10.0),
+                splicing: "linear".to_string(),
+            },
+            Transcript {
+                id: 2,
+                sequence: "AAAACCCCTTTTGGGG".to_string(),
+                path: vec![1, 3],
+                confidence: f64::INFINITY,
+                length: 16,
+                strand: '+',
+                tpm: Some(f64::NAN),
+                splicing: "linear".to_string(),
+            },
+            Transcript {
+                id: 3,
+                sequence: "AAAACCCCTTTTGGGG".to_string(),
+                path: vec![1, 4],
+                confidence: 0.5,
+                length: 16,
+                strand: '+',
+                tpm: Some(2.5),
+                splicing: "linear".to_string(),
+            },
+        ];
+
+        let merged = merge_transcripts(&transcripts, 0.99);
+        assert_eq!(merged.len(), 1);
+        let only = &merged[0];
+        assert!((only.confidence - 0.75).abs() < 1e-12);
+        assert_eq!(only.tpm, Some(12.5));
+    }
+
+    #[test]
+    fn test_is_similar_treats_empty_sequences_as_equal_only_when_both_empty() {
+        let empty_a = Transcript {
+            id: 1,
+            sequence: String::new(),
+            path: vec![],
+            confidence: 1.0,
+            length: 0,
+            strand: '+',
+            tpm: None,
+            splicing: "linear".to_string(),
+        };
+        let empty_b = Transcript {
+            id: 2,
+            sequence: String::new(),
+            path: vec![],
+            confidence: 1.0,
+            length: 0,
+            strand: '+',
+            tpm: None,
+            splicing: "linear".to_string(),
+        };
+        let non_empty = Transcript {
+            id: 3,
+            sequence: "A".to_string(),
+            path: vec![1],
+            confidence: 1.0,
+            length: 1,
+            strand: '+',
+            tpm: None,
+            splicing: "linear".to_string(),
+        };
+
+        assert!(is_similar(&empty_a, &empty_b, 0.99));
+        assert!(!is_similar(&empty_a, &non_empty, 0.99));
     }
 }
