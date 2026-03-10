@@ -7,10 +7,10 @@ use rand::Rng;
 use rand::SeedableRng;
 use raptor::accel::backend::AdjacencyTableU64;
 use raptor::accel::CpuBackend;
-use raptor::graph::assembler::{cleanup_graph, greedy_assembly_u64};
+use raptor::graph::assembler::{cleanup_graph, greedy_assembly_u64, Contig};
 use raptor::graph::isoform_filter::{filter_similar_transcripts, merge_transcripts};
 use raptor::graph::isoform_traverse::find_directed_paths;
-use raptor::graph::transcript::Transcript;
+use raptor::graph::transcript::{stitch_isoform, Transcript};
 use raptor::io::gfa::{read_gfa_contigs, read_gfa_links};
 use raptor::kmer::kmer::{encode_kmer, reverse_complement, KmerU64};
 use std::io::Write;
@@ -299,6 +299,38 @@ fn cleanup_graph_collapses_bubble_without_tip_removal_under_randomized_edge_orde
             observed_graph,
             vec![(aaa, vec![(aac, 10)]), (aac, vec![(acc, 10)])]
         );
+    }
+}
+
+#[test]
+fn stitch_isoform_is_stable_under_randomized_contig_order() {
+    let contigs = vec![
+        Contig {
+            id: 10,
+            sequence: "ATCGATCG".to_string(),
+            kmer_path: vec![],
+        },
+        Contig {
+            id: 20,
+            sequence: "GATCGTTA".to_string(),
+            kmer_path: vec![],
+        },
+        Contig {
+            id: 30,
+            sequence: "GTTACGTA".to_string(),
+            kmer_path: vec![],
+        },
+    ];
+    let path = vec![10, 20, 30];
+    let overlaps = vec![(10, 20, 4), (20, 30, 4)];
+    let baseline = stitch_isoform(&contigs, &path, &overlaps);
+
+    let mut rng = StdRng::seed_from_u64(0x5171_C4B1_u64);
+    for _ in 0..128 {
+        let mut shuffled = contigs.clone();
+        shuffled.shuffle(&mut rng);
+        let observed = stitch_isoform(&shuffled, &path, &overlaps);
+        assert_eq!(observed, baseline);
     }
 }
 

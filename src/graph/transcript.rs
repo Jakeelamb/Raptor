@@ -107,18 +107,20 @@ fn stitch_isoform_with_maps(
     }
 
     // Start with the first path node that resolves to a contig sequence.
-    let mut first_idx = None;
-    let mut sequence = String::new();
-    for (idx, &node_id) in path.iter().enumerate() {
-        if let Some(contig_seq) = contig_sequences.get(&node_id) {
-            sequence.push_str(contig_seq);
-            first_idx = Some(idx);
-            break;
-        }
-    }
-    let Some(start_idx) = first_idx else {
+    let Some((start_idx, first_contig)) = path
+        .iter()
+        .enumerate()
+        .find_map(|(idx, &node_id)| contig_sequences.get(&node_id).map(|&seq| (idx, seq)))
+    else {
         return String::new();
     };
+    let mut sequence = String::with_capacity(estimate_stitched_length(
+        contig_sequences,
+        path,
+        start_idx,
+        overlaps,
+    ));
+    sequence.push_str(first_contig);
     let mut prev_id = path[start_idx];
 
     // Stitch together subsequent contigs, accounting for overlaps
@@ -142,6 +144,35 @@ fn stitch_isoform_with_maps(
     }
 
     sequence
+}
+
+#[inline]
+fn estimate_stitched_length(
+    contig_sequences: &HashMap<usize, &str>,
+    path: &[usize],
+    start_idx: usize,
+    overlaps: &HashMap<(usize, usize), usize>,
+) -> usize {
+    let mut total = 0usize;
+    let mut prev_id: Option<usize> = None;
+
+    for &node_id in path.iter().skip(start_idx) {
+        let Some(contig_seq) = contig_sequences.get(&node_id) else {
+            continue;
+        };
+
+        let added_bases = match prev_id {
+            Some(prev) => {
+                let overlap_len = overlaps.get(&(prev, node_id)).copied().unwrap_or(0);
+                contig_seq.len().saturating_sub(overlap_len)
+            }
+            None => contig_seq.len(),
+        };
+        total = total.saturating_add(added_bases);
+        prev_id = Some(node_id);
+    }
+
+    total
 }
 
 /// Detect alternative splicing events in a transcript path
