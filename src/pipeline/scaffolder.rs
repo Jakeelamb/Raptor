@@ -25,13 +25,38 @@ pub struct ScaffoldStats {
     pub links_found: usize,
     pub links_after_filter: usize,
     pub num_scaffolds: usize,
+    pub scaffold_n25: usize,
     pub scaffold_n50: usize,
     pub scaffold_n75: usize,
     pub scaffold_n90: usize,
     pub scaffold_n95: usize,
     pub scaffold_n99: usize,
+    pub scaffold_l25: usize,
+    pub scaffold_l50: usize,
+    pub scaffold_l75: usize,
+    pub scaffold_l90: usize,
+    pub scaffold_l95: usize,
+    pub scaffold_l99: usize,
+    pub scaffold_avg_len: f64,
+    pub scaffold_median_len: f64,
     pub scaffold_au_n: f64,
     pub longest_scaffold: usize,
+    pub scaffolds_ge_1kb: usize,
+    pub scaffolds_ge_10kb: usize,
+    pub scaffolds_ge_50kb: usize,
+    pub scaffolds_ge_100kb: usize,
+    pub bases_ge_1kb: usize,
+    pub bases_ge_10kb: usize,
+    pub bases_ge_50kb: usize,
+    pub bases_ge_100kb: usize,
+    pub scaffolds_ge_1kb_frac: f64,
+    pub scaffolds_ge_10kb_frac: f64,
+    pub scaffolds_ge_50kb_frac: f64,
+    pub scaffolds_ge_100kb_frac: f64,
+    pub bases_ge_1kb_frac: f64,
+    pub bases_ge_10kb_frac: f64,
+    pub bases_ge_50kb_frac: f64,
+    pub bases_ge_100kb_frac: f64,
     pub total_length: usize,
     pub total_gaps: usize,
 }
@@ -132,13 +157,38 @@ fn update_scaffold_continuity(stats: &mut ScaffoldStats, scaffold_lengths: &mut 
     }
 
     let continuity = evaluate_lengths_sorted_desc(scaffold_lengths);
+    stats.scaffold_n25 = continuity.n25;
     stats.scaffold_n50 = continuity.n50;
     stats.scaffold_n75 = continuity.n75;
     stats.scaffold_n90 = continuity.n90;
     stats.scaffold_n95 = continuity.n95;
     stats.scaffold_n99 = continuity.n99;
+    stats.scaffold_l25 = continuity.l25;
+    stats.scaffold_l50 = continuity.l50;
+    stats.scaffold_l75 = continuity.l75;
+    stats.scaffold_l90 = continuity.l90;
+    stats.scaffold_l95 = continuity.l95;
+    stats.scaffold_l99 = continuity.l99;
+    stats.scaffold_avg_len = continuity.avg_length;
+    stats.scaffold_median_len = continuity.median_length;
     stats.scaffold_au_n = continuity.au_n;
     stats.longest_scaffold = continuity.longest;
+    stats.scaffolds_ge_1kb = continuity.contigs_ge_1kb;
+    stats.scaffolds_ge_10kb = continuity.contigs_ge_10kb;
+    stats.scaffolds_ge_50kb = continuity.contigs_ge_50kb;
+    stats.scaffolds_ge_100kb = continuity.contigs_ge_100kb;
+    stats.bases_ge_1kb = continuity.bases_ge_1kb;
+    stats.bases_ge_10kb = continuity.bases_ge_10kb;
+    stats.bases_ge_50kb = continuity.bases_ge_50kb;
+    stats.bases_ge_100kb = continuity.bases_ge_100kb;
+    stats.scaffolds_ge_1kb_frac = continuity.contigs_ge_1kb_frac;
+    stats.scaffolds_ge_10kb_frac = continuity.contigs_ge_10kb_frac;
+    stats.scaffolds_ge_50kb_frac = continuity.contigs_ge_50kb_frac;
+    stats.scaffolds_ge_100kb_frac = continuity.contigs_ge_100kb_frac;
+    stats.bases_ge_1kb_frac = continuity.bases_ge_1kb_frac;
+    stats.bases_ge_10kb_frac = continuity.bases_ge_10kb_frac;
+    stats.bases_ge_50kb_frac = continuity.bases_ge_50kb_frac;
+    stats.bases_ge_100kb_frac = continuity.bases_ge_100kb_frac;
 }
 
 /// A scaffold is a list of oriented contigs with gaps
@@ -632,13 +682,50 @@ mod tests {
         let mut lengths = vec![100, 50, 25];
         update_scaffold_continuity(&mut stats, &mut lengths);
 
+        assert_eq!(stats.scaffold_n25, 100);
         assert_eq!(stats.scaffold_n50, 100);
         assert_eq!(stats.scaffold_n75, 50);
         assert_eq!(stats.scaffold_n90, 25);
         assert_eq!(stats.scaffold_n95, 25);
         assert_eq!(stats.scaffold_n99, 25);
+        assert_eq!(stats.scaffold_l25, 1);
+        assert_eq!(stats.scaffold_l50, 1);
+        assert_eq!(stats.scaffold_l75, 2);
+        assert_eq!(stats.scaffold_l90, 3);
+        assert_eq!(stats.scaffold_l95, 3);
+        assert_eq!(stats.scaffold_l99, 3);
+        assert!((stats.scaffold_avg_len - 58.3333333333).abs() < 1e-9);
+        assert_eq!(stats.scaffold_median_len, 50.0);
         assert_eq!(stats.longest_scaffold, 100);
         assert!((stats.scaffold_au_n - 75.0).abs() < 1e-12);
+        assert_eq!(stats.scaffolds_ge_1kb, 0);
+        assert_eq!(stats.bases_ge_1kb, 0);
+        assert_eq!(stats.scaffolds_ge_1kb_frac, 0.0);
+        assert_eq!(stats.bases_ge_1kb_frac, 0.0);
+    }
+
+    #[test]
+    fn test_update_scaffold_continuity_reports_length_bucket_metrics() {
+        let mut stats = ScaffoldStats::default();
+        let mut lengths = vec![2_000, 1_200, 800, 400];
+        update_scaffold_continuity(&mut stats, &mut lengths);
+
+        assert_eq!(stats.scaffolds_ge_1kb, 2);
+        assert_eq!(stats.scaffolds_ge_10kb, 0);
+        assert_eq!(stats.scaffolds_ge_50kb, 0);
+        assert_eq!(stats.scaffolds_ge_100kb, 0);
+        assert_eq!(stats.bases_ge_1kb, 3_200);
+        assert_eq!(stats.bases_ge_10kb, 0);
+        assert_eq!(stats.bases_ge_50kb, 0);
+        assert_eq!(stats.bases_ge_100kb, 0);
+        assert!((stats.scaffolds_ge_1kb_frac - 0.5).abs() < 1e-12);
+        assert_eq!(stats.scaffolds_ge_10kb_frac, 0.0);
+        assert_eq!(stats.scaffolds_ge_50kb_frac, 0.0);
+        assert_eq!(stats.scaffolds_ge_100kb_frac, 0.0);
+        assert!((stats.bases_ge_1kb_frac - (3_200.0 / 4_400.0)).abs() < 1e-12);
+        assert_eq!(stats.bases_ge_10kb_frac, 0.0);
+        assert_eq!(stats.bases_ge_50kb_frac, 0.0);
+        assert_eq!(stats.bases_ge_100kb_frac, 0.0);
     }
 
     fn make_link(a: usize, b: usize, support_count: usize) -> ContigLink {

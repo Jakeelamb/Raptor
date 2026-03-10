@@ -796,13 +796,27 @@ fn main() {
                             Ok(scaffold_stats) => {
                                 println!("Scaffolding completed:");
                                 println!("  Scaffolds: {}", scaffold_stats.num_scaffolds);
+                                println!("  N25: {} bp", scaffold_stats.scaffold_n25);
                                 println!("  N50: {} bp", scaffold_stats.scaffold_n50);
                                 println!("  N75: {} bp", scaffold_stats.scaffold_n75);
                                 println!("  N90: {} bp", scaffold_stats.scaffold_n90);
                                 println!("  N95: {} bp", scaffold_stats.scaffold_n95);
                                 println!("  N99: {} bp", scaffold_stats.scaffold_n99);
+                                println!("  L50: {}", scaffold_stats.scaffold_l50);
+                                println!(
+                                    "  Mean/Median: {:.2}/{:.2} bp",
+                                    scaffold_stats.scaffold_avg_len,
+                                    scaffold_stats.scaffold_median_len
+                                );
                                 println!("  auN: {:.2} bp", scaffold_stats.scaffold_au_n);
                                 println!("  Longest: {} bp", scaffold_stats.longest_scaffold);
+                                println!(
+                                    "  >=1kb scaffolds/span: {} ({:.2}%) / {} bp ({:.2}%)",
+                                    scaffold_stats.scaffolds_ge_1kb,
+                                    scaffold_stats.scaffolds_ge_1kb_frac * 100.0,
+                                    scaffold_stats.bases_ge_1kb,
+                                    scaffold_stats.bases_ge_1kb_frac * 100.0
+                                );
                             }
                             Err(e) => eprintln!("Scaffolding failed: {}", e),
                         }
