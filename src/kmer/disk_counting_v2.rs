@@ -14,6 +14,15 @@ use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
+#[inline]
+fn kmer_mask(k: usize) -> u64 {
+    if k >= 32 {
+        u64::MAX
+    } else {
+        (1u64 << (k * 2)) - 1
+    }
+}
+
 /// Configuration for disk-based k-mer counting
 #[derive(Clone, Debug)]
 pub struct DiskCounterConfig {
@@ -322,7 +331,7 @@ pub fn extend_right(encoded: u64, base: u8, k: usize) -> Option<u64> {
         _ => return None,
     };
 
-    let mask = (1u64 << (k * 2)) - 1;
+    let mask = kmer_mask(k);
     Some(((encoded << 2) | base_bits) & mask)
 }
 
@@ -369,6 +378,18 @@ mod tests {
             len: 4,
         };
         assert_eq!(result.decode(), "CGTA");
+    }
+
+    #[test]
+    fn test_extend_right_handles_k32_without_shift_overflow() {
+        let input = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let kmer = KmerU64::from_str(input).unwrap();
+        let extended = extend_right(kmer.encoded, b'T', 32).unwrap();
+        let result = KmerU64 {
+            encoded: extended,
+            len: 32,
+        };
+        assert_eq!(result.decode(), "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAT");
     }
 
     #[test]

@@ -324,9 +324,7 @@ mod tests {
     fn test_nthash_iterator_restarts_after_invalid_run() {
         let seq = b"AACNCAA";
         let k = 3;
-        let positions: Vec<usize> = NtHashIterator::new(seq, k)
-            .map(|(pos, _)| pos)
-            .collect();
+        let positions: Vec<usize> = NtHashIterator::new(seq, k).map(|(pos, _)| pos).collect();
         assert_eq!(positions, vec![0, 4]);
     }
 
