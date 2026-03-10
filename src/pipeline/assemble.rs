@@ -48,9 +48,15 @@ struct AssemblyQualitySummary {
     contigs_with_n: usize,
     contigs_with_ambiguous: usize,
     contigs_all_acgt: usize,
+    distinct_sequences: usize,
+    duplicate_sequences: usize,
+    duplicate_bases: usize,
     contigs_with_n_frac: f64,
     contigs_with_ambiguous_frac: f64,
     contigs_all_acgt_frac: f64,
+    distinct_sequences_frac: f64,
+    duplicate_sequences_frac: f64,
+    duplicate_bases_frac: f64,
     mean_rle_ratio: f64,
     length_weighted_rle_ratio: f64,
     total_rle_runs: usize,
@@ -191,11 +197,14 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
     let mut composition = BaseComposition::default();
     let mut n_runs = NRunSummary::default();
     let mut contig_quality = ContigQualitySummary::default();
+    let mut sequence_counts: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::with_capacity(contigs.len());
     let mut total_rle_ratio_scaled = 0u128;
     let mut total_rle_runs = 0usize;
 
     for contig in contigs {
         let contig_len = contig.sequence.len();
+        *sequence_counts.entry(contig.sequence.as_str()).or_insert(0) += 1;
         lengths.push(contig_len);
         let sequence = contig.sequence.as_bytes();
         let analysis = analyze_sequence(sequence, &mut composition, &mut n_runs);
@@ -243,17 +252,40 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
     } else {
         0.0
     };
-    let total_contigs = length_stats.total as f64;
+    let mut distinct_sequences = 0usize;
+    let mut duplicate_sequences = 0usize;
+    let mut duplicate_bases = 0usize;
+    for (sequence, count) in &sequence_counts {
+        distinct_sequences += 1;
+        let duplicates = count.saturating_sub(1);
+        duplicate_sequences = duplicate_sequences.saturating_add(duplicates);
+        duplicate_bases =
+            duplicate_bases.saturating_add(sequence.len().saturating_mul(duplicates));
+    }
+    let total_contigs_f = length_stats.total as f64;
     let (contigs_with_n_frac, contigs_with_ambiguous_frac, contigs_all_acgt_frac) =
-        if total_contigs > 0.0 {
+        if total_contigs_f > 0.0 {
             (
-                contig_quality.with_n as f64 / total_contigs,
-                contig_quality.with_ambiguous as f64 / total_contigs,
-                contig_quality.all_acgt as f64 / total_contigs,
+                contig_quality.with_n as f64 / total_contigs_f,
+                contig_quality.with_ambiguous as f64 / total_contigs_f,
+                contig_quality.all_acgt as f64 / total_contigs_f,
             )
         } else {
             (0.0, 0.0, 0.0)
         };
+    let (distinct_sequences_frac, duplicate_sequences_frac) = if total_contigs_f > 0.0 {
+        (
+            distinct_sequences as f64 / total_contigs_f,
+            duplicate_sequences as f64 / total_contigs_f,
+        )
+    } else {
+        (0.0, 0.0)
+    };
+    let duplicate_bases_frac = if length_stats.total_bases > 0 {
+        duplicate_bases as f64 / length_stats.total_bases as f64
+    } else {
+        0.0
+    };
     AssemblyQualitySummary {
         total_contigs: length_stats.total,
         total_bases: length_stats.total_bases,
@@ -288,9 +320,15 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
         contigs_with_n: contig_quality.with_n,
         contigs_with_ambiguous: contig_quality.with_ambiguous,
         contigs_all_acgt: contig_quality.all_acgt,
+        distinct_sequences,
+        duplicate_sequences,
+        duplicate_bases,
         contigs_with_n_frac,
         contigs_with_ambiguous_frac,
         contigs_all_acgt_frac,
+        distinct_sequences_frac,
+        duplicate_sequences_frac,
+        duplicate_bases_frac,
         mean_rle_ratio,
         length_weighted_rle_ratio,
         total_rle_runs,
@@ -390,6 +428,9 @@ fn write_assembly_quality_reports(
             quality.contigs_with_ambiguous.to_string(),
         ),
         ("contigs_all_acgt", quality.contigs_all_acgt.to_string()),
+        ("distinct_sequences", quality.distinct_sequences.to_string()),
+        ("duplicate_sequences", quality.duplicate_sequences.to_string()),
+        ("duplicate_bases", quality.duplicate_bases.to_string()),
         (
             "contigs_with_n_frac",
             format!("{:.12}", quality.contigs_with_n_frac),
@@ -401,6 +442,18 @@ fn write_assembly_quality_reports(
         (
             "contigs_all_acgt_frac",
             format!("{:.12}", quality.contigs_all_acgt_frac),
+        ),
+        (
+            "distinct_sequences_frac",
+            format!("{:.12}", quality.distinct_sequences_frac),
+        ),
+        (
+            "duplicate_sequences_frac",
+            format!("{:.12}", quality.duplicate_sequences_frac),
+        ),
+        (
+            "duplicate_bases_frac",
+            format!("{:.12}", quality.duplicate_bases_frac),
         ),
         ("mean_rle_ratio", format!("{:.12}", quality.mean_rle_ratio)),
         (
@@ -1512,9 +1565,15 @@ mod tests {
         assert_eq!(summary.contigs_with_n, 1);
         assert_eq!(summary.contigs_with_ambiguous, 1);
         assert_eq!(summary.contigs_all_acgt, 1);
+        assert_eq!(summary.distinct_sequences, 3);
+        assert_eq!(summary.duplicate_sequences, 0);
+        assert_eq!(summary.duplicate_bases, 0);
         assert!((summary.contigs_with_n_frac - (1.0 / 3.0)).abs() < 1e-12);
         assert!((summary.contigs_with_ambiguous_frac - (1.0 / 3.0)).abs() < 1e-12);
         assert!((summary.contigs_all_acgt_frac - (1.0 / 3.0)).abs() < 1e-12);
+        assert_eq!(summary.distinct_sequences_frac, 1.0);
+        assert_eq!(summary.duplicate_sequences_frac, 0.0);
+        assert_eq!(summary.duplicate_bases_frac, 0.0);
         assert!((summary.mean_rle_ratio - 0.75).abs() < 1e-12);
         assert!((summary.length_weighted_rle_ratio - 0.75).abs() < 1e-12);
         assert_eq!(summary.total_rle_runs, 9);
@@ -1715,6 +1774,42 @@ mod tests {
     }
 
     #[test]
+    fn summarize_assembly_quality_reports_duplicate_sequence_metrics() {
+        let contigs = vec![
+            Contig {
+                id: 0,
+                sequence: "ACGT".to_string(),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 1,
+                sequence: "TT".to_string(),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 2,
+                sequence: "ACGT".to_string(),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 3,
+                sequence: "ACGT".to_string(),
+                kmer_path: vec![],
+            },
+        ];
+
+        let summary = summarize_assembly_quality(&contigs);
+        assert_eq!(summary.total_contigs, 4);
+        assert_eq!(summary.total_bases, 14);
+        assert_eq!(summary.distinct_sequences, 2);
+        assert_eq!(summary.duplicate_sequences, 2);
+        assert_eq!(summary.duplicate_bases, 8);
+        assert!((summary.distinct_sequences_frac - 0.5).abs() < 1e-12);
+        assert!((summary.duplicate_sequences_frac - 0.5).abs() < 1e-12);
+        assert!((summary.duplicate_bases_frac - (8.0 / 14.0)).abs() < 1e-12);
+    }
+
+    #[test]
     fn summarize_assembly_quality_is_invariant_to_contig_order() {
         let base_contigs = vec![
             Contig {
@@ -1817,6 +1912,19 @@ mod tests {
                 .iter()
                 .filter(|sequence| sequence.bytes().all(|base| is_acgt_or_u(base)))
                 .count();
+            let mut sequence_counts = std::collections::HashMap::new();
+            for sequence in &sequences {
+                *sequence_counts.entry(sequence.as_str()).or_insert(0usize) += 1;
+            }
+            let distinct_sequences = sequence_counts.len();
+            let duplicate_sequences: usize = sequence_counts
+                .values()
+                .map(|count| count.saturating_sub(1))
+                .sum();
+            let duplicate_bases: usize = sequence_counts
+                .iter()
+                .map(|(sequence, count)| sequence.len().saturating_mul(count.saturating_sub(1)))
+                .sum();
             let total_rle_runs: usize = sequences.iter().map(|sequence| count_rle_runs(sequence)).sum();
             let (n_runs, longest_n_run) = sequences
                 .iter()
@@ -1835,10 +1943,15 @@ mod tests {
             prop_assert_eq!(summary.contigs_with_n, contigs_with_n);
             prop_assert_eq!(summary.contigs_with_ambiguous, contigs_with_ambiguous);
             prop_assert_eq!(summary.contigs_all_acgt, contigs_all_acgt);
+            prop_assert_eq!(summary.distinct_sequences, distinct_sequences);
+            prop_assert_eq!(summary.duplicate_sequences, duplicate_sequences);
+            prop_assert_eq!(summary.duplicate_bases, duplicate_bases);
             prop_assert_eq!(summary.total_rle_runs, total_rle_runs);
             prop_assert_eq!(summary.n_runs, n_runs);
             prop_assert_eq!(summary.longest_n_run, longest_n_run);
             prop_assert!(summary.ungapped_total_bases <= summary.total_bases);
+            prop_assert_eq!(summary.distinct_sequences + summary.duplicate_sequences, summary.total_contigs);
+            prop_assert!(summary.duplicate_bases <= summary.total_bases);
 
             prop_assert!(summary.contigs_ge_1mb <= summary.contigs_ge_100kb);
             prop_assert!(summary.contigs_ge_100kb <= summary.contigs_ge_50kb);
@@ -1856,11 +1969,14 @@ mod tests {
                 summary.contigs_with_n_frac,
                 summary.contigs_with_ambiguous_frac,
                 summary.contigs_all_acgt_frac,
+                summary.distinct_sequences_frac,
+                summary.duplicate_sequences_frac,
                 summary.contigs_ge_1kb_frac,
                 summary.contigs_ge_10kb_frac,
                 summary.contigs_ge_50kb_frac,
                 summary.contigs_ge_100kb_frac,
                 summary.contigs_ge_1mb_frac,
+                summary.duplicate_bases_frac,
                 summary.bases_ge_1kb_frac,
                 summary.bases_ge_10kb_frac,
                 summary.bases_ge_50kb_frac,
@@ -1877,6 +1993,7 @@ mod tests {
                 let total_bases_f = summary.total_bases as f64;
                 prop_assert!((summary.n_content - summary.n_bases as f64 / total_bases_f).abs() < 1e-12);
                 prop_assert!((summary.ambiguous_content - summary.ambiguous_bases as f64 / total_bases_f).abs() < 1e-12);
+                prop_assert!((summary.duplicate_bases_frac - summary.duplicate_bases as f64 / total_bases_f).abs() < 1e-12);
                 prop_assert!((summary.length_weighted_rle_ratio - summary.total_rle_runs as f64 / total_bases_f).abs() < 1e-12);
                 prop_assert!((summary.n_runs_per_100kb - summary.n_runs as f64 * 100_000.0 / total_bases_f).abs() < 1e-12);
                 prop_assert!((summary.n_bases_per_100kb - summary.n_bases as f64 * 100_000.0 / total_bases_f).abs() < 1e-12);
@@ -1884,6 +2001,7 @@ mod tests {
             } else {
                 prop_assert_eq!(summary.n_content, 0.0);
                 prop_assert_eq!(summary.ambiguous_content, 0.0);
+                prop_assert_eq!(summary.duplicate_bases_frac, 0.0);
                 prop_assert_eq!(summary.length_weighted_rle_ratio, 0.0);
                 prop_assert_eq!(summary.n_runs_per_100kb, 0.0);
                 prop_assert_eq!(summary.n_bases_per_100kb, 0.0);
@@ -2018,9 +2136,15 @@ mod tests {
             contigs_with_n: 2,
             contigs_with_ambiguous: 1,
             contigs_all_acgt: 2,
+            distinct_sequences: 4,
+            duplicate_sequences: 1,
+            duplicate_bases: 120,
             contigs_with_n_frac: 0.4,
             contigs_with_ambiguous_frac: 0.2,
             contigs_all_acgt_frac: 0.4,
+            distinct_sequences_frac: 0.8,
+            duplicate_sequences_frac: 0.2,
+            duplicate_bases_frac: 120.0 / 1234.0,
             mean_rle_ratio: 0.75,
             length_weighted_rle_ratio: 0.8,
             total_rle_runs: 987,
@@ -2094,9 +2218,15 @@ mod tests {
         assert_eq!(parsed["contigs_with_n"], 2);
         assert_eq!(parsed["contigs_with_ambiguous"], 1);
         assert_eq!(parsed["contigs_all_acgt"], 2);
+        assert_eq!(parsed["distinct_sequences"], 4);
+        assert_eq!(parsed["duplicate_sequences"], 1);
+        assert_eq!(parsed["duplicate_bases"], 120);
         assert_eq!(parsed["contigs_with_n_frac"], 0.4);
         assert_eq!(parsed["contigs_with_ambiguous_frac"], 0.2);
         assert_eq!(parsed["contigs_all_acgt_frac"], 0.4);
+        assert_eq!(parsed["distinct_sequences_frac"], 0.8);
+        assert_eq!(parsed["duplicate_sequences_frac"], 0.2);
+        assert_eq!(parsed["duplicate_bases_frac"], 120.0 / 1234.0);
 
         let tsv = std::fs::read_to_string(&tsv_path).expect("read tsv report");
         let mut lines = tsv.lines();
@@ -2125,9 +2255,15 @@ mod tests {
         assert!(tsv.contains("contigs_with_n\t2"));
         assert!(tsv.contains("contigs_with_ambiguous\t1"));
         assert!(tsv.contains("contigs_all_acgt\t2"));
+        assert!(tsv.contains("distinct_sequences\t4"));
+        assert!(tsv.contains("duplicate_sequences\t1"));
+        assert!(tsv.contains("duplicate_bases\t120"));
         assert!(tsv.contains("contigs_with_n_frac\t0.400000000000"));
         assert!(tsv.contains("contigs_with_ambiguous_frac\t0.200000000000"));
         assert!(tsv.contains("contigs_all_acgt_frac\t0.400000000000"));
+        assert!(tsv.contains("distinct_sequences_frac\t0.800000000000"));
+        assert!(tsv.contains("duplicate_sequences_frac\t0.200000000000"));
+        assert!(tsv.contains("duplicate_bases_frac\t0.097244732577"));
         assert!(tsv.contains("bases_ge_1kb_frac\t0.810000000000"));
         assert!(tsv.contains("contigs_ge_1mb\t0"));
         assert!(tsv.contains("bases_ge_1mb\t0"));
