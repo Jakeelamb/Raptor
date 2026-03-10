@@ -277,6 +277,9 @@ mod tests {
                 ("AAT".to_string(), 1),
             ])
         );
-        assert_eq!(adjacency_a.forward.get("AAA"), adjacency_b.forward.get("AAA"));
+        assert_eq!(
+            adjacency_a.forward.get("AAA"),
+            adjacency_b.forward.get("AAA")
+        );
     }
 }
