@@ -29,6 +29,30 @@ pub fn rle_encode(seq: &str) -> Vec<(u8, u8)> {
     result
 }
 
+/// Return the number of RLE entries that `rle_encode(seq)` would produce,
+/// without allocating the encoded vector.
+pub fn rle_encoded_len(seq: &str) -> usize {
+    let bytes = seq.as_bytes();
+    if bytes.is_empty() {
+        return 0;
+    }
+
+    let mut runs = 0usize;
+    let mut current = bytes[0];
+    let mut run_len = 1usize;
+
+    for &base in &bytes[1..] {
+        if base == current {
+            run_len += 1;
+        } else {
+            runs += run_len.div_ceil(u8::MAX as usize);
+            current = base;
+            run_len = 1;
+        }
+    }
+    runs + run_len.div_ceil(u8::MAX as usize)
+}
+
 /// Decode RLE back to a DNA string
 pub fn rle_decode(encoded: &[(u8, u8)]) -> String {
     encoded
@@ -78,7 +102,27 @@ mod tests {
         let encoded = rle_encode(&seq);
 
         assert_eq!(encoded, vec![(b'A', 255), (b'A', 45)]);
+        assert_eq!(rle_encoded_len(&seq), encoded.len());
         let decoded = rle_decode(&encoded);
         assert_eq!(decoded, seq);
+    }
+
+    #[test]
+    fn test_rle_encoded_len_matches_materialized_encoding() {
+        let cases = [
+            "",
+            "A",
+            "ACGT",
+            "AAAACCCGGGGTTT",
+            "AAATTTCCCAAAGGG",
+            "AACCGGTTNNNN",
+        ];
+
+        for seq in cases {
+            assert_eq!(rle_encoded_len(seq), rle_encode(seq).len());
+        }
+
+        let long = format!("{}{}{}", "A".repeat(700), "C".repeat(2), "G".repeat(512));
+        assert_eq!(rle_encoded_len(&long), rle_encode(&long).len());
     }
 }

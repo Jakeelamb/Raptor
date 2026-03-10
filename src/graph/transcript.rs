@@ -359,7 +359,7 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
         composition.add_sequence(sequence);
         total_sequence_bases = total_sequence_bases.saturating_add(sequence.len());
 
-        let compressed_len = rle::rle_encode(&transcript.sequence).len();
+        let compressed_len = rle::rle_encoded_len(&transcript.sequence);
         total_rle_ratio += if sequence.is_empty() {
             1.0
         } else {
