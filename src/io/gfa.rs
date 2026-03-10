@@ -2,11 +2,19 @@ use crate::graph::assembler::Contig;
 use crate::graph::navigation::traverse_path;
 use crate::graph::stitch::Path;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Result, Write};
 
 pub struct GfaWriter {
     writer: BufWriter<File>,
+}
+
+#[inline]
+fn parse_contig_index(id: &str) -> Option<usize> {
+    let raw = id.strip_prefix("contig_")?;
+    let one_based = raw.parse::<usize>().ok()?;
+    one_based.checked_sub(1)
 }
 
 impl GfaWriter {
@@ -101,11 +109,7 @@ pub fn read_gfa_contigs(gfa_path: &str) -> Result<Vec<Contig>> {
             }
 
             let id_str = parts[1];
-            let id = if let Some(stripped) = id_str.strip_prefix("contig_") {
-                stripped.parse::<usize>().unwrap_or(contigs.len()) - 1
-            } else {
-                contigs.len()
-            };
+            let id = parse_contig_index(id_str).unwrap_or(contigs.len());
 
             let sequence = parts[2].to_string();
 
@@ -140,8 +144,11 @@ pub fn read_gfa_links(gfa_path: &str) -> Result<Vec<(usize, usize, usize)>> {
             }
 
             let id_str = parts[1];
-            if !id_str.starts_with("contig_") {
-                id_map.insert(id_str.to_string(), id_map.len());
+            if parse_contig_index(id_str).is_none() {
+                let fallback_idx = id_map.len();
+                if let Entry::Vacant(slot) = id_map.entry(id_str.to_string()) {
+                    slot.insert(fallback_idx);
+                }
             }
         }
     }
@@ -168,21 +175,52 @@ pub fn read_gfa_links(gfa_path: &str) -> Result<Vec<(usize, usize, usize)>> {
                 .unwrap_or(0);
 
             // Convert IDs to numeric indices
-            let from_idx = if let Some(stripped) = from_id.strip_prefix("contig_") {
-                stripped.parse::<usize>().unwrap_or(0) - 1
-            } else {
-                *id_map.get(from_id).unwrap_or(&0)
-            };
-
-            let to_idx = if let Some(stripped) = to_id.strip_prefix("contig_") {
-                stripped.parse::<usize>().unwrap_or(0) - 1
-            } else {
-                *id_map.get(to_id).unwrap_or(&0)
-            };
+            let from_idx = parse_contig_index(from_id)
+                .or_else(|| id_map.get(from_id).copied())
+                .unwrap_or(0);
+            let to_idx = parse_contig_index(to_id)
+                .or_else(|| id_map.get(to_id).copied())
+                .unwrap_or(0);
 
             links.push((from_idx, to_idx, overlap_size));
         }
     }
 
     Ok(links)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_gfa_contigs, read_gfa_links};
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn read_gfa_contigs_handles_malformed_contig_ids_without_underflow() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "H\tVN:Z:1.0").unwrap();
+        writeln!(file, "S\tcontig_x\tAAAA").unwrap();
+        writeln!(file, "S\tcontig_0\tCCCC").unwrap();
+        writeln!(file, "S\tcontig_2\tGGGG").unwrap();
+
+        let contigs = read_gfa_contigs(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(contigs.len(), 3);
+        assert_eq!(contigs[0].id, 0);
+        assert_eq!(contigs[1].id, 1);
+        assert_eq!(contigs[2].id, 1);
+    }
+
+    #[test]
+    fn read_gfa_links_handles_malformed_contig_ids_deterministically() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "H\tVN:Z:1.0").unwrap();
+        writeln!(file, "S\tcontig_x\tAAAA").unwrap();
+        writeln!(file, "S\tcustom\tCCCC").unwrap();
+        writeln!(file, "S\tcontig_2\tGGGG").unwrap();
+        writeln!(file, "L\tcontig_x\t+\tcustom\t+\t3M").unwrap();
+        writeln!(file, "L\tcontig_2\t+\tcontig_x\t+\t2M").unwrap();
+
+        let links = read_gfa_links(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(links, vec![(0, 1, 3), (1, 0, 2)]);
+    }
 }
