@@ -72,6 +72,9 @@ pub struct AssemblyStats {
     pub bubbles_popped: usize,
     pub contigs: usize,
     pub total_length: usize,
+    pub gc_content: f64,
+    pub n_content: f64,
+    pub ambiguous_content: f64,
     pub n50: usize,
     pub n75: usize,
     pub n90: usize,
@@ -115,6 +118,9 @@ impl std::fmt::Display for AssemblyStats {
         }
         writeln!(f, "Contigs: {}", self.contigs)?;
         writeln!(f, "Total length: {} bp", self.total_length)?;
+        writeln!(f, "GC content: {:.2}%", self.gc_content * 100.0)?;
+        writeln!(f, "N content: {:.2}%", self.n_content * 100.0)?;
+        writeln!(f, "Ambiguous content: {:.2}%", self.ambiguous_content * 100.0)?;
         writeln!(f, "Mean contig: {:.2} bp", self.avg_contig_len)?;
         writeln!(f, "N50: {} bp", self.n50)?;
         writeln!(f, "N75: {} bp", self.n75)?;
@@ -2167,17 +2173,48 @@ impl LargeGenomeAssembler {
 
         let mut lengths: Vec<usize> = Vec::with_capacity(valid.len());
         let mut total_len = 0usize;
+        let mut gc_bases = 0usize;
+        let mut acgt_bases = 0usize;
+        let mut n_bases = 0usize;
+        let mut ambiguous_bases = 0usize;
 
         for (i, contig) in valid.iter().enumerate() {
             writer.write_record(&format!("contig_{} len={}", i + 1, contig.len()), contig)?;
             lengths.push(contig.len());
             total_len += contig.len();
+            for &base in contig.as_bytes() {
+                match base.to_ascii_uppercase() {
+                    b'A' | b'T' => acgt_bases += 1,
+                    b'G' | b'C' => {
+                        gc_bases += 1;
+                        acgt_bases += 1;
+                    }
+                    b'N' => n_bases += 1,
+                    _ => ambiguous_bases += 1,
+                }
+            }
         }
 
         let contig_stats = evaluate_lengths(&lengths);
+        let total_bases = contig_stats.total_bases;
 
         stats.contigs = valid.len();
         stats.total_length = total_len;
+        stats.gc_content = if acgt_bases > 0 {
+            gc_bases as f64 / acgt_bases as f64
+        } else {
+            0.0
+        };
+        stats.n_content = if total_bases > 0 {
+            n_bases as f64 / total_bases as f64
+        } else {
+            0.0
+        };
+        stats.ambiguous_content = if total_bases > 0 {
+            ambiguous_bases as f64 / total_bases as f64
+        } else {
+            0.0
+        };
         stats.n50 = contig_stats.n50;
         stats.n75 = contig_stats.n75;
         stats.n90 = contig_stats.n90;
@@ -2672,8 +2709,34 @@ mod tests {
         assert_eq!(stats.l95, 3);
         assert_eq!(stats.l99, 3);
         assert_eq!(stats.largest, 100);
+        assert!((stats.gc_content - (75.0 / 175.0)).abs() < 1e-12);
+        assert_eq!(stats.n_content, 0.0);
+        assert_eq!(stats.ambiguous_content, 0.0);
         assert!((stats.avg_contig_len - (175.0 / 3.0)).abs() < 1e-12);
         assert!((stats.au_n - 75.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_write_output_reports_base_composition_metrics() {
+        let output = NamedTempFile::new().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            min_contig_len: 1,
+            num_buckets: Some(4),
+            temp_dir: Some(temp_dir.path().to_str().unwrap().to_string()),
+            ..Default::default()
+        });
+
+        let contigs = vec!["GCGCNN".to_string(), "atry".to_string()];
+        let mut stats = AssemblyStats::default();
+        assembler
+            .write_output(&contigs, output.path().to_str().unwrap(), &mut stats)
+            .unwrap();
+
+        assert_eq!(stats.total_length, 10);
+        assert!((stats.gc_content - (4.0 / 6.0)).abs() < 1e-12);
+        assert!((stats.n_content - 0.2).abs() < 1e-12);
+        assert!((stats.ambiguous_content - 0.2).abs() < 1e-12);
     }
 
     #[test]
