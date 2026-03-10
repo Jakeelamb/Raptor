@@ -48,7 +48,7 @@ pub fn calculate_stats(path: &str) -> Stats {
     for line in reader.lines().map_while(Result::ok) {
         if line.starts_with('>') {
             // If we were in a sequence, add its final length.
-            if in_sequence && current_len > 0 {
+            if in_sequence {
                 lengths.push(current_len);
             }
             in_sequence = true;
@@ -61,7 +61,7 @@ pub fn calculate_stats(path: &str) -> Stats {
     }
 
     // Add the last sequence if there is one
-    if in_sequence && current_len > 0 {
+    if in_sequence {
         lengths.push(current_len);
     }
 
@@ -301,5 +301,31 @@ mod tests {
         assert!((stats.gc_content - (4.0 / 7.0)).abs() < 1e-12);
         assert!((stats.n_content - (4.0 / 12.0)).abs() < 1e-12);
         assert!((stats.ambiguous_content - (1.0 / 12.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_calculate_stats_counts_zero_length_contigs() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, ">contig_1").unwrap();
+        writeln!(file, "AT").unwrap();
+        writeln!(file, ">contig_2").unwrap(); // empty contig
+        writeln!(file, ">contig_3").unwrap();
+        writeln!(file, "G").unwrap();
+        writeln!(file, ">contig_4").unwrap(); // empty contig at EOF
+
+        let stats = calculate_stats(file.path().to_str().unwrap());
+        assert_eq!(stats.total_contigs, 4);
+        assert_eq!(stats.total_length, 3);
+        assert!((stats.average_length - 0.75).abs() < 1e-12);
+        assert_eq!(stats.n50, 2);
+        assert_eq!(stats.n75, 1);
+        assert_eq!(stats.n90, 1);
+        assert_eq!(stats.n95, 1);
+        assert_eq!(stats.n99, 1);
+        assert_eq!(stats.l50, 1);
+        assert_eq!(stats.l75, 2);
+        assert_eq!(stats.l90, 2);
+        assert_eq!(stats.l95, 2);
+        assert_eq!(stats.l99, 2);
     }
 }

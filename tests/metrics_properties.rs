@@ -88,6 +88,59 @@ proptest! {
     }
 
     #[test]
+    fn evaluate_lengths_handles_zero_length_contigs_consistently(
+        lengths in prop::collection::vec(0usize..2_000, 1..64),
+        seed in any::<u64>()
+    ) {
+        let baseline = evaluate_lengths(&lengths);
+        let total: usize = lengths.iter().sum();
+
+        prop_assert_eq!(baseline.total, lengths.len());
+        prop_assert_eq!(baseline.total_bases, total);
+        if total == 0 {
+            prop_assert_eq!(baseline.n50, 0);
+            prop_assert_eq!(baseline.n75, 0);
+            prop_assert_eq!(baseline.n90, 0);
+            prop_assert_eq!(baseline.n95, 0);
+            prop_assert_eq!(baseline.n99, 0);
+            prop_assert_eq!(baseline.l50, 0);
+            prop_assert_eq!(baseline.l75, 0);
+            prop_assert_eq!(baseline.l90, 0);
+            prop_assert_eq!(baseline.l95, 0);
+            prop_assert_eq!(baseline.l99, 0);
+            prop_assert_eq!(baseline.longest, 0);
+            prop_assert_eq!(baseline.au_n, 0.0);
+        }
+
+        let mut shuffled = lengths.clone();
+        let mut rng = StdRng::seed_from_u64(seed);
+        shuffled.shuffle(&mut rng);
+        let observed = evaluate_lengths(&shuffled);
+
+        prop_assert_eq!(observed.total, baseline.total);
+        prop_assert_eq!(observed.total_bases, baseline.total_bases);
+        prop_assert_eq!(observed.n50, baseline.n50);
+        prop_assert_eq!(observed.n75, baseline.n75);
+        prop_assert_eq!(observed.n90, baseline.n90);
+        prop_assert_eq!(observed.n95, baseline.n95);
+        prop_assert_eq!(observed.n99, baseline.n99);
+        prop_assert_eq!(observed.l50, baseline.l50);
+        prop_assert_eq!(observed.l75, baseline.l75);
+        prop_assert_eq!(observed.l90, baseline.l90);
+        prop_assert_eq!(observed.l95, baseline.l95);
+        prop_assert_eq!(observed.l99, baseline.l99);
+        prop_assert_eq!(observed.longest, baseline.longest);
+        prop_assert_eq!(observed.contigs_ge_1kb, baseline.contigs_ge_1kb);
+        prop_assert_eq!(observed.contigs_ge_10kb, baseline.contigs_ge_10kb);
+        prop_assert_eq!(observed.contigs_ge_50kb, baseline.contigs_ge_50kb);
+        prop_assert_eq!(observed.bases_ge_1kb, baseline.bases_ge_1kb);
+        prop_assert_eq!(observed.bases_ge_10kb, baseline.bases_ge_10kb);
+        prop_assert_eq!(observed.bases_ge_50kb, baseline.bases_ge_50kb);
+        prop_assert!((observed.avg_length - baseline.avg_length).abs() < 1e-12);
+        prop_assert!((observed.au_n - baseline.au_n).abs() < 1e-12);
+    }
+
+    #[test]
     fn transcript_stats_length_metrics_match_evaluate_lengths_and_are_permutation_invariant(
         lengths in prop::collection::vec(1usize..2_000, 1..64),
         seed in any::<u64>()

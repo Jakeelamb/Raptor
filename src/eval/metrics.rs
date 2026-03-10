@@ -307,4 +307,30 @@ mod tests {
         assert_eq!(observed.bases_ge_10kb, expected.bases_ge_10kb);
         assert_eq!(observed.bases_ge_50kb, expected.bases_ge_50kb);
     }
+
+    #[test]
+    fn evaluate_lengths_handles_all_zero_lengths() {
+        let stats = evaluate_lengths(&[0, 0, 0, 0]);
+        assert_eq!(stats.total, 4);
+        assert_eq!(stats.total_bases, 0);
+        assert_eq!(stats.avg_length, 0.0);
+        assert_eq!(stats.n50, 0);
+        assert_eq!(stats.n75, 0);
+        assert_eq!(stats.n90, 0);
+        assert_eq!(stats.n95, 0);
+        assert_eq!(stats.n99, 0);
+        assert_eq!(stats.l50, 0);
+        assert_eq!(stats.l75, 0);
+        assert_eq!(stats.l90, 0);
+        assert_eq!(stats.l95, 0);
+        assert_eq!(stats.l99, 0);
+        assert_eq!(stats.au_n, 0.0);
+        assert_eq!(stats.longest, 0);
+        assert_eq!(stats.contigs_ge_1kb, 0);
+        assert_eq!(stats.contigs_ge_10kb, 0);
+        assert_eq!(stats.contigs_ge_50kb, 0);
+        assert_eq!(stats.bases_ge_1kb, 0);
+        assert_eq!(stats.bases_ge_10kb, 0);
+        assert_eq!(stats.bases_ge_50kb, 0);
+    }
 }
