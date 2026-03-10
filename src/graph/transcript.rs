@@ -442,7 +442,11 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
 
     let length_metrics = evaluate_lengths_in_place(&mut lengths);
     let ungapped_length_metrics = evaluate_lengths_in_place(&mut ungapped_lengths);
-    set_transcript_stat(&mut stats, "total_length", length_metrics.total_bases as f64);
+    set_transcript_stat(
+        &mut stats,
+        "total_length",
+        length_metrics.total_bases as f64,
+    );
     set_transcript_stat(
         &mut stats,
         "ungapped_total_length",
@@ -467,7 +471,11 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
     set_transcript_stat(&mut stats, "l95", length_metrics.l95 as f64);
     set_transcript_stat(&mut stats, "l99", length_metrics.l99 as f64);
     set_transcript_stat(&mut stats, "au_n", length_metrics.au_n);
-    set_transcript_stat(&mut stats, "ungapped_n50", ungapped_length_metrics.n50 as f64);
+    set_transcript_stat(
+        &mut stats,
+        "ungapped_n50",
+        ungapped_length_metrics.n50 as f64,
+    );
     set_transcript_stat(&mut stats, "ungapped_au_n", ungapped_length_metrics.au_n);
     set_transcript_stat(
         &mut stats,
@@ -895,10 +903,7 @@ mod tests {
         assert_eq!(stats.get("ungapped_n50").copied(), Some(6.0));
         assert_eq!(stats.get("total_rle_runs").copied(), Some(7.0));
         assert_eq!(stats.get("mean_rle_ratio").copied(), Some(1.0));
-        assert_eq!(
-            stats.get("length_weighted_rle_ratio").copied(),
-            Some(1.0)
-        );
+        assert_eq!(stats.get("length_weighted_rle_ratio").copied(), Some(1.0));
     }
 
     #[test]
