@@ -3,13 +3,17 @@ use petgraph::graphmap::DiGraphMap;
 use proptest::prelude::*;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
+use rand::Rng;
 use rand::SeedableRng;
 use raptor::accel::backend::AdjacencyTableU64;
 use raptor::graph::assembler::{cleanup_graph, greedy_assembly_u64};
 use raptor::graph::isoform_filter::{filter_similar_transcripts, merge_transcripts};
 use raptor::graph::isoform_traverse::find_directed_paths;
 use raptor::graph::transcript::Transcript;
+use raptor::io::gfa::{read_gfa_contigs, read_gfa_links};
 use raptor::kmer::kmer::{encode_kmer, reverse_complement, KmerU64};
+use std::io::Write;
+use tempfile::NamedTempFile;
 
 fn dna_string(max_len: usize) -> impl Strategy<Value = String> {
     prop::collection::vec(
@@ -322,5 +326,72 @@ fn isoform_filtering_and_merging_are_stable_under_randomized_input_order() {
 
         assert_eq!(filtered_ids, baseline_filtered_ids);
         assert_eq!(merged_ids, baseline_merged_ids);
+    }
+}
+
+#[test]
+fn gfa_link_parsing_skips_unknown_segments_and_keeps_indices_in_bounds() {
+    let mut rng = StdRng::seed_from_u64(0x61FA_1A5E_u64);
+
+    for _ in 0..128 {
+        let segment_count = rng.gen_range(1..=16usize);
+        let mut segment_ids: Vec<String> =
+            (0..segment_count).map(|i| format!("seg_{}", i)).collect();
+        segment_ids.shuffle(&mut rng);
+
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "H\tVN:Z:1.0").unwrap();
+        for id in &segment_ids {
+            writeln!(file, "S\t{}\tACGT", id).unwrap();
+        }
+
+        let mut expected_links = 0usize;
+        let link_count = rng.gen_range(0..=64usize);
+        for i in 0..link_count {
+            let from_known = rng.gen_bool(0.8);
+            let to_known = rng.gen_bool(0.8);
+
+            let from_id = if from_known {
+                segment_ids.choose(&mut rng).unwrap().clone()
+            } else {
+                format!("missing_from_{}_{}", i, rng.gen::<u32>())
+            };
+            let to_id = if to_known {
+                segment_ids.choose(&mut rng).unwrap().clone()
+            } else {
+                format!("missing_to_{}_{}", i, rng.gen::<u32>())
+            };
+
+            let overlap = rng.gen_range(0..=500usize);
+            let valid_cigar = rng.gen_bool(0.85);
+            let cigar = if valid_cigar {
+                if rng.gen_bool(0.2) {
+                    "*".to_string()
+                } else if rng.gen_bool(0.3) {
+                    format!("{}M1I", overlap)
+                } else {
+                    format!("{}M", overlap)
+                }
+            } else {
+                "ZZM".to_string()
+            };
+
+            writeln!(file, "L\t{}\t+\t{}\t+\t{}", from_id, to_id, cigar).unwrap();
+            if from_known && to_known && valid_cigar {
+                expected_links += 1;
+            }
+        }
+
+        let contigs = read_gfa_contigs(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(contigs.len(), segment_count);
+        let observed_ids: Vec<usize> = contigs.iter().map(|c| c.id).collect();
+        let expected_ids: Vec<usize> = (0..segment_count).collect();
+        assert_eq!(observed_ids, expected_ids);
+
+        let links = read_gfa_links(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(links.len(), expected_links);
+        assert!(links
+            .iter()
+            .all(|(from, to, _)| *from < contigs.len() && *to < contigs.len()));
     }
 }

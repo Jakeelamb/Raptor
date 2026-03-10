@@ -1,8 +1,8 @@
 use crate::graph::assembler::Contig;
 use crate::graph::navigation::traverse_path;
 use crate::graph::stitch::Path;
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Result, Write};
 
@@ -11,10 +11,76 @@ pub struct GfaWriter {
 }
 
 #[inline]
-fn parse_contig_index(id: &str) -> Option<usize> {
-    let raw = id.strip_prefix("contig_")?;
-    let one_based = raw.parse::<usize>().ok()?;
-    one_based.checked_sub(1)
+fn parse_segment_line(line: &str) -> Option<(&str, &str)> {
+    if !line.starts_with("S\t") {
+        return None;
+    }
+
+    let mut fields = line.split('\t');
+    let record_type = fields.next()?;
+    debug_assert_eq!(record_type, "S");
+    let id = fields.next()?;
+    let sequence = fields.next()?;
+    Some((id, sequence))
+}
+
+#[inline]
+fn parse_link_line(line: &str) -> Option<(&str, &str, &str)> {
+    if !line.starts_with("L\t") {
+        return None;
+    }
+
+    let mut fields = line.split('\t');
+    let record_type = fields.next()?;
+    debug_assert_eq!(record_type, "L");
+    let from_id = fields.next()?;
+    fields.next()?;
+    let to_id = fields.next()?;
+    fields.next()?;
+    let cigar = fields.next()?;
+    Some((from_id, to_id, cigar))
+}
+
+#[inline]
+fn parse_overlap_size(cigar: &str) -> Option<usize> {
+    if cigar == "*" {
+        return Some(0);
+    }
+
+    let mut overlap = 0usize;
+    let mut saw_digit = false;
+    for byte in cigar.bytes() {
+        if byte.is_ascii_digit() {
+            saw_digit = true;
+            overlap = overlap
+                .checked_mul(10)?
+                .checked_add((byte - b'0') as usize)?;
+        } else {
+            break;
+        }
+    }
+
+    saw_digit.then_some(overlap)
+}
+
+fn collect_segment_id_map(gfa_path: &str) -> Result<HashMap<String, usize>> {
+    let file = File::open(gfa_path)?;
+    let reader = BufReader::new(file);
+    let mut id_map = HashMap::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        let Some((id, _sequence)) = parse_segment_line(&line) else {
+            continue;
+        };
+
+        let fallback_idx = id_map.len();
+        if let Entry::Vacant(slot) = id_map.entry(id.to_string()) {
+            slot.insert(fallback_idx);
+        }
+    }
+
+    Ok(id_map)
 }
 
 impl GfaWriter {
@@ -98,29 +164,23 @@ impl GfaWriter {
 pub fn read_gfa_contigs(gfa_path: &str) -> Result<Vec<Contig>> {
     let file = File::open(gfa_path)?;
     let reader = BufReader::new(file);
+    let mut id_map = HashMap::new();
     let mut contigs = Vec::new();
 
     for line in reader.lines() {
         let line = line?;
-        if line.starts_with('S') {
-            let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() < 3 {
-                continue;
-            }
+        let Some((id, sequence)) = parse_segment_line(&line) else {
+            continue;
+        };
 
-            let id_str = parts[1];
-            let id = parse_contig_index(id_str).unwrap_or(contigs.len());
-
-            let sequence = parts[2].to_string();
-
-            // Create a contig with empty kmer_path for now
-            let contig = Contig {
-                id,
-                sequence,
+        let next_idx = id_map.len();
+        if let Entry::Vacant(slot) = id_map.entry(id.to_string()) {
+            slot.insert(next_idx);
+            contigs.push(Contig {
+                id: next_idx,
+                sequence: sequence.to_string(),
                 kmer_path: Vec::new(),
-            };
-
-            contigs.push(contig);
+            });
         }
     }
 
@@ -129,61 +189,33 @@ pub fn read_gfa_contigs(gfa_path: &str) -> Result<Vec<Contig>> {
 
 /// Read links from a GFA file
 pub fn read_gfa_links(gfa_path: &str) -> Result<Vec<(usize, usize, usize)>> {
-    let file = File::open(gfa_path)?;
-    let reader = BufReader::new(file);
-    let mut links = Vec::new();
-    let mut id_map = HashMap::new();
-
-    // First pass: build id mapping if needed
-    for line in reader.lines() {
-        let line = line?;
-        if line.starts_with('S') {
-            let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() < 3 {
-                continue;
-            }
-
-            let id_str = parts[1];
-            if parse_contig_index(id_str).is_none() {
-                let fallback_idx = id_map.len();
-                if let Entry::Vacant(slot) = id_map.entry(id_str.to_string()) {
-                    slot.insert(fallback_idx);
-                }
-            }
-        }
+    let id_map = collect_segment_id_map(gfa_path)?;
+    if id_map.is_empty() {
+        return Ok(Vec::new());
     }
 
-    // Second pass: read links
+    let mut links = Vec::new();
+
+    // Read links and keep only those whose segment IDs exist.
     let file = File::open(gfa_path)?;
     let reader = BufReader::new(file);
     for line in reader.lines() {
         let line = line?;
-        if line.starts_with('L') {
-            let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() < 6 {
-                continue;
-            }
+        let Some((from_id, to_id, cigar)) = parse_link_line(&line) else {
+            continue;
+        };
 
-            let from_id = parts[1];
-            let to_id = parts[3];
+        let Some(from_idx) = id_map.get(from_id).copied() else {
+            continue;
+        };
+        let Some(to_idx) = id_map.get(to_id).copied() else {
+            continue;
+        };
+        let Some(overlap_size) = parse_overlap_size(cigar) else {
+            continue;
+        };
 
-            // Extract overlap size from CIGAR (format like "10M")
-            let cigar = parts[5];
-            let overlap_size = cigar
-                .trim_end_matches(['M', 'm'])
-                .parse::<usize>()
-                .unwrap_or(0);
-
-            // Convert IDs to numeric indices
-            let from_idx = parse_contig_index(from_id)
-                .or_else(|| id_map.get(from_id).copied())
-                .unwrap_or(0);
-            let to_idx = parse_contig_index(to_id)
-                .or_else(|| id_map.get(to_id).copied())
-                .unwrap_or(0);
-
-            links.push((from_idx, to_idx, overlap_size));
-        }
+        links.push((from_idx, to_idx, overlap_size));
     }
 
     Ok(links)
@@ -196,18 +228,18 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn read_gfa_contigs_handles_malformed_contig_ids_without_underflow() {
+    fn read_gfa_contigs_assigns_dense_ids_for_malformed_and_sparse_ids() {
         let mut file = NamedTempFile::new().unwrap();
         writeln!(file, "H\tVN:Z:1.0").unwrap();
         writeln!(file, "S\tcontig_x\tAAAA").unwrap();
         writeln!(file, "S\tcontig_0\tCCCC").unwrap();
-        writeln!(file, "S\tcontig_2\tGGGG").unwrap();
+        writeln!(file, "S\tcontig_42\tGGGG").unwrap();
 
         let contigs = read_gfa_contigs(file.path().to_str().unwrap()).unwrap();
         assert_eq!(contigs.len(), 3);
         assert_eq!(contigs[0].id, 0);
         assert_eq!(contigs[1].id, 1);
-        assert_eq!(contigs[2].id, 1);
+        assert_eq!(contigs[2].id, 2);
     }
 
     #[test]
@@ -221,6 +253,37 @@ mod tests {
         writeln!(file, "L\tcontig_2\t+\tcontig_x\t+\t2M").unwrap();
 
         let links = read_gfa_links(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(links, vec![(0, 1, 3), (1, 0, 2)]);
+        assert_eq!(links, vec![(0, 1, 3), (2, 0, 2)]);
+    }
+
+    #[test]
+    fn read_gfa_links_ignores_unknown_segments_and_invalid_cigar() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "H\tVN:Z:1.0").unwrap();
+        writeln!(file, "S\tseg_a\tAAAA").unwrap();
+        writeln!(file, "S\tseg_b\tCCCC").unwrap();
+        writeln!(file, "L\tseg_a\t+\tseg_b\t+\t12M1I").unwrap();
+        writeln!(file, "L\tseg_a\t+\tmissing\t+\t5M").unwrap();
+        writeln!(file, "L\tmissing\t+\tseg_b\t+\t5M").unwrap();
+        writeln!(file, "L\tseg_b\t+\tseg_a\t+\tZZM").unwrap();
+
+        let links = read_gfa_links(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(links, vec![(0, 1, 12)]);
+    }
+
+    #[test]
+    fn read_gfa_contigs_deduplicates_segments_by_first_occurrence() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "H\tVN:Z:1.0").unwrap();
+        writeln!(file, "S\tdup\tAAAA").unwrap();
+        writeln!(file, "S\tdup\tCCCC").unwrap();
+        writeln!(file, "S\tother\tGGGG").unwrap();
+
+        let contigs = read_gfa_contigs(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(contigs.len(), 2);
+        assert_eq!(contigs[0].id, 0);
+        assert_eq!(contigs[0].sequence, "AAAA");
+        assert_eq!(contigs[1].id, 1);
+        assert_eq!(contigs[1].sequence, "GGGG");
     }
 }
