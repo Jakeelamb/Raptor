@@ -1,4 +1,4 @@
-use crate::eval::metrics::evaluate_lengths;
+use crate::eval::metrics::evaluate_lengths_in_place;
 use petgraph::graphmap::DiGraphMap;
 use petgraph::visit::EdgeRef;
 use petgraph::Graph;
@@ -167,7 +167,7 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
     let bubble_count = count_bubbles_simple(&digraph);
 
     // Calculate path-length distribution metrics.
-    let path_length_stats = evaluate_lengths(&path_lengths);
+    let path_length_stats = evaluate_lengths_in_place(&mut path_lengths);
 
     // Calculate branchiness
     let branchiness = if segments.is_empty() {

@@ -1,4 +1,4 @@
-use crate::eval::metrics::{evaluate_lengths, BaseComposition};
+use crate::eval::metrics::{evaluate_lengths_in_place, BaseComposition};
 use crate::io::fasta::try_open_fasta;
 use serde::Serialize;
 use std::io::BufRead;
@@ -83,7 +83,7 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         lengths.push(current_len);
     }
 
-    let length_stats = evaluate_lengths(&lengths);
+    let length_stats = evaluate_lengths_in_place(&mut lengths);
     let gc_content = composition.gc_content();
     let n_content = composition.n_content(length_stats.total_bases);
     let ambiguous_content = composition.ambiguous_content(length_stats.total_bases);

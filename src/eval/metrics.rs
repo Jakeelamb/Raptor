@@ -304,14 +304,29 @@ pub fn evaluate_lengths(lengths: &[usize]) -> TranscriptStats {
         return empty_transcript_stats();
     }
 
-    let mut sorted_lengths = lengths.to_vec();
-    sorted_lengths.sort_unstable_by(|a, b| b.cmp(a));
-    evaluate_lengths_sorted_desc(&sorted_lengths)
+    let mut scratch = lengths.to_vec();
+    evaluate_lengths_in_place(&mut scratch)
+}
+
+/// Evaluate contig/transcript lengths in place by sorting them descending first.
+///
+/// This variant avoids allocating a second vector when the caller already owns
+/// a mutable length buffer.
+pub fn evaluate_lengths_in_place(lengths: &mut [usize]) -> TranscriptStats {
+    if lengths.is_empty() {
+        return empty_transcript_stats();
+    }
+
+    lengths.sort_unstable_by(|a, b| b.cmp(a));
+    evaluate_lengths_sorted_desc(lengths)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{evaluate_lengths, evaluate_lengths_sorted_desc, nx_lx, BaseComposition};
+    use super::{
+        evaluate_lengths, evaluate_lengths_in_place, evaluate_lengths_sorted_desc, nx_lx,
+        BaseComposition,
+    };
 
     #[test]
     fn evaluate_lengths_reports_nx_metrics() {
@@ -447,6 +462,31 @@ mod tests {
         assert_eq!(observed.bases_ge_10kb, expected.bases_ge_10kb);
         assert_eq!(observed.bases_ge_50kb, expected.bases_ge_50kb);
         assert_eq!(observed.bases_ge_100kb, expected.bases_ge_100kb);
+    }
+
+    #[test]
+    fn evaluate_lengths_in_place_matches_unsorted_entrypoint_and_sorts_descending() {
+        let input = [999, 50_000, 1_000, 10_000];
+        let expected = evaluate_lengths(&input);
+
+        let mut scratch = input.to_vec();
+        let observed = evaluate_lengths_in_place(&mut scratch);
+
+        assert_eq!(observed.total, expected.total);
+        assert_eq!(observed.total_bases, expected.total_bases);
+        assert_eq!(observed.n25, expected.n25);
+        assert_eq!(observed.n50, expected.n50);
+        assert_eq!(observed.n75, expected.n75);
+        assert_eq!(observed.n90, expected.n90);
+        assert_eq!(observed.n95, expected.n95);
+        assert_eq!(observed.n99, expected.n99);
+        assert_eq!(observed.l25, expected.l25);
+        assert_eq!(observed.l50, expected.l50);
+        assert_eq!(observed.l75, expected.l75);
+        assert_eq!(observed.l90, expected.l90);
+        assert_eq!(observed.l95, expected.l95);
+        assert_eq!(observed.l99, expected.l99);
+        assert_eq!(scratch, vec![50_000, 10_000, 1_000, 999]);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use crate::accel::{create_backend, CpuBackend};
-use crate::eval::metrics::evaluate_lengths;
+use crate::eval::metrics::evaluate_lengths_in_place;
 use crate::graph::assembler::greedy_assembly_u64;
 use crate::graph::overlap::find_overlaps;
 use crate::graph::stitch::OverlapGraphBuilder;
@@ -557,9 +557,9 @@ pub fn assemble_reads_with_gpu(
             }
 
             // Display transcript evaluation metrics
-            let transcript_lengths: Vec<usize> =
+            let mut transcript_lengths: Vec<usize> =
                 transcripts.iter().map(|t| t.sequence.len()).collect();
-            let stats = evaluate_lengths(&transcript_lengths);
+            let stats = evaluate_lengths_in_place(&mut transcript_lengths);
             info!(
                 "Transcript statistics: {} transcripts, {} bp total, Avg: {:.1} bp, N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{} bp, L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}, auN: {:.1}",
                 stats.total,

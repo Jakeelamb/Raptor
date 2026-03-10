@@ -1,4 +1,4 @@
-use crate::eval::metrics::{evaluate_lengths, BaseComposition};
+use crate::eval::metrics::{evaluate_lengths_in_place, BaseComposition};
 use crate::graph::assembler::Contig;
 use crate::graph::isoform_traverse::TranscriptPath;
 use crate::kmer::rle;
@@ -367,7 +367,7 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
         };
     }
 
-    let length_metrics = evaluate_lengths(&lengths);
+    let length_metrics = evaluate_lengths_in_place(&mut lengths);
     stats.insert(
         "total_length".to_string(),
         length_metrics.total_bases as f64,
