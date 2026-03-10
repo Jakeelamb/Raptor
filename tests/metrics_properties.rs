@@ -177,6 +177,13 @@ proptest! {
         prop_assert_eq!(observed.get("bases_ge_10kb").copied().unwrap_or(-1.0) as usize, expected.bases_ge_10kb);
         prop_assert_eq!(observed.get("bases_ge_50kb").copied().unwrap_or(-1.0) as usize, expected.bases_ge_50kb);
         prop_assert_eq!(observed.get("bases_ge_100kb").copied().unwrap_or(-1.0) as usize, expected.bases_ge_100kb);
+        prop_assert_eq!(observed.get("acgt_bases").copied().unwrap_or(-1.0) as usize, expected.total_bases);
+        prop_assert_eq!(observed.get("n_bases").copied().unwrap_or(-1.0), 0.0);
+        prop_assert_eq!(observed.get("ambiguous_bases").copied().unwrap_or(-1.0), 0.0);
+        prop_assert_eq!(observed.get("gc_content").copied().unwrap_or(-1.0), 0.0);
+        prop_assert_eq!(observed.get("gc_content_acgt").copied().unwrap_or(-1.0), 0.0);
+        prop_assert_eq!(observed.get("n_content").copied().unwrap_or(-1.0), 0.0);
+        prop_assert_eq!(observed.get("ambiguous_content").copied().unwrap_or(-1.0), 0.0);
 
         let mut shuffled = lengths.clone();
         let mut rng = StdRng::seed_from_u64(seed);
@@ -207,6 +214,13 @@ proptest! {
             "bases_ge_10kb",
             "bases_ge_50kb",
             "bases_ge_100kb",
+            "gc_content",
+            "gc_content_acgt",
+            "n_content",
+            "ambiguous_content",
+            "acgt_bases",
+            "n_bases",
+            "ambiguous_bases",
         ] {
             let lhs = observed.get(key).copied().unwrap_or(f64::NAN);
             let rhs = shuffled_stats.get(key).copied().unwrap_or(f64::NAN);

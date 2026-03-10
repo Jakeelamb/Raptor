@@ -1,4 +1,4 @@
-use crate::eval::metrics::evaluate_lengths;
+use crate::eval::metrics::{evaluate_lengths, BaseComposition};
 use crate::graph::assembler::Contig;
 use crate::graph::isoform_traverse::TranscriptPath;
 use crate::kmer::rle;
@@ -271,32 +271,99 @@ pub fn transcript_to_gfa_path(transcript: &Transcript) -> String {
 
 /// Calculate statistics for a collection of transcripts
 pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String, f64> {
-    let mut stats = HashMap::new();
+    let mut stats = HashMap::with_capacity(40);
 
     // Basic counts
     stats.insert("count".to_string(), transcripts.len() as f64);
 
     if transcripts.is_empty() {
+        for key in [
+            "total_length",
+            "mean_length",
+            "min_length",
+            "max_length",
+            "n50",
+            "n75",
+            "n90",
+            "n95",
+            "n99",
+            "l50",
+            "l75",
+            "l90",
+            "l95",
+            "l99",
+            "au_n",
+            "contigs_ge_1kb",
+            "contigs_ge_10kb",
+            "contigs_ge_50kb",
+            "contigs_ge_100kb",
+            "bases_ge_1kb",
+            "bases_ge_10kb",
+            "bases_ge_50kb",
+            "bases_ge_100kb",
+            "non_finite_confidence_count",
+            "mean_confidence",
+            "min_confidence",
+            "max_confidence",
+            "gc_content",
+            "gc_content_acgt",
+            "n_content",
+            "ambiguous_content",
+            "acgt_bases",
+            "n_bases",
+            "ambiguous_bases",
+            "mean_rle_ratio",
+        ] {
+            stats.insert(key.to_string(), 0.0);
+        }
         return stats;
     }
 
-    // Length statistics
-    let lengths: Vec<usize> = transcripts.iter().map(|t| t.length).collect();
-    let total_length: usize = lengths.iter().sum();
-    let mean_length = total_length as f64 / transcripts.len() as f64;
+    let mut lengths: Vec<usize> = Vec::with_capacity(transcripts.len());
+    let mut min_length = usize::MAX;
+    let mut max_length = 0usize;
+    let mut finite_confidence_count = 0usize;
+    let mut finite_confidence_sum = 0.0;
+    let mut min_confidence = f64::INFINITY;
+    let mut max_confidence = f64::NEG_INFINITY;
+    let mut composition = BaseComposition::default();
+    let mut total_sequence_bases = 0usize;
+    let mut total_rle_ratio = 0.0;
 
-    stats.insert("total_length".to_string(), total_length as f64);
-    stats.insert("mean_length".to_string(), mean_length);
-    stats.insert(
-        "min_length".to_string(),
-        *lengths.iter().min().unwrap() as f64,
-    );
-    stats.insert(
-        "max_length".to_string(),
-        *lengths.iter().max().unwrap() as f64,
-    );
+    for transcript in transcripts {
+        let length = transcript.length;
+        lengths.push(length);
+        min_length = min_length.min(length);
+        max_length = max_length.max(length);
+
+        let confidence = transcript.confidence;
+        if confidence.is_finite() {
+            finite_confidence_count += 1;
+            finite_confidence_sum += confidence;
+            min_confidence = min_confidence.min(confidence);
+            max_confidence = max_confidence.max(confidence);
+        }
+
+        let sequence = transcript.sequence.as_bytes();
+        composition.add_sequence(sequence);
+        total_sequence_bases = total_sequence_bases.saturating_add(sequence.len());
+
+        let compressed_len = rle::rle_encode(&transcript.sequence).len();
+        total_rle_ratio += if sequence.is_empty() {
+            1.0
+        } else {
+            compressed_len as f64 / sequence.len() as f64
+        };
+    }
 
     let length_metrics = evaluate_lengths(&lengths);
+    stats.insert(
+        "total_length".to_string(),
+        length_metrics.total_bases as f64,
+    );
+    stats.insert("mean_length".to_string(), length_metrics.avg_length);
+    stats.insert("min_length".to_string(), min_length as f64);
+    stats.insert("max_length".to_string(), max_length as f64);
     stats.insert("n50".to_string(), length_metrics.n50 as f64);
     stats.insert("n75".to_string(), length_metrics.n75 as f64);
     stats.insert("n90".to_string(), length_metrics.n90 as f64);
@@ -341,80 +408,45 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
         length_metrics.bases_ge_100kb as f64,
     );
 
-    // Confidence statistics
-    let finite_confidences: Vec<f64> = transcripts
-        .iter()
-        .map(|t| t.confidence)
-        .filter(|c| c.is_finite())
-        .collect();
-    let non_finite_confidence_count = transcripts.len() - finite_confidences.len();
+    let non_finite_confidence_count = transcripts.len() - finite_confidence_count;
     stats.insert(
         "non_finite_confidence_count".to_string(),
         non_finite_confidence_count as f64,
     );
 
-    if finite_confidences.is_empty() {
+    if finite_confidence_count == 0 {
         stats.insert("mean_confidence".to_string(), 0.0);
         stats.insert("min_confidence".to_string(), 0.0);
         stats.insert("max_confidence".to_string(), 0.0);
     } else {
-        let total_confidence: f64 = finite_confidences.iter().sum();
-        let mean_confidence = total_confidence / finite_confidences.len() as f64;
-        let min_confidence = finite_confidences
-            .iter()
-            .copied()
-            .min_by(f64::total_cmp)
-            .unwrap_or(0.0);
-        let max_confidence = finite_confidences
-            .iter()
-            .copied()
-            .max_by(f64::total_cmp)
-            .unwrap_or(0.0);
+        let mean_confidence = finite_confidence_sum / finite_confidence_count as f64;
 
         stats.insert("mean_confidence".to_string(), mean_confidence);
         stats.insert("min_confidence".to_string(), min_confidence);
         stats.insert("max_confidence".to_string(), max_confidence);
     }
 
-    // Calculate GC content
-    let mut gc_count = 0;
-    let mut total_bases = 0;
-
-    for transcript in transcripts {
-        for c in transcript.sequence.chars() {
-            if c == 'G' || c == 'C' || c == 'g' || c == 'c' {
-                gc_count += 1;
-            }
-            total_bases += 1;
-        }
-    }
-
-    let gc_content = if total_bases > 0 {
-        gc_count as f64 / total_bases as f64
+    let gc_content = if total_sequence_bases > 0 {
+        composition.gc_bases as f64 / total_sequence_bases as f64
     } else {
         0.0
     };
-
     stats.insert("gc_content".to_string(), gc_content);
-
-    // RLE compression stats
-    let mut total_rle_ratio = 0.0;
-    let mut rle_ratios = Vec::new();
-
-    for transcript in transcripts {
-        let rle_encoded = rle::rle_encode(&transcript.sequence);
-        let compressed_len = rle_encoded.len();
-        let original_len = transcript.sequence.len();
-
-        let ratio = if original_len > 0 {
-            compressed_len as f64 / original_len as f64
-        } else {
-            1.0
-        };
-
-        total_rle_ratio += ratio;
-        rle_ratios.push(ratio);
-    }
+    stats.insert("gc_content_acgt".to_string(), composition.gc_content());
+    stats.insert(
+        "n_content".to_string(),
+        composition.n_content(total_sequence_bases),
+    );
+    stats.insert(
+        "ambiguous_content".to_string(),
+        composition.ambiguous_content(total_sequence_bases),
+    );
+    stats.insert("acgt_bases".to_string(), composition.acgt_bases as f64);
+    stats.insert("n_bases".to_string(), composition.n_bases as f64);
+    stats.insert(
+        "ambiguous_bases".to_string(),
+        composition.ambiguous_bases as f64,
+    );
 
     let mean_rle_ratio = total_rle_ratio / transcripts.len() as f64;
     stats.insert("mean_rle_ratio".to_string(), mean_rle_ratio);
@@ -632,5 +664,72 @@ mod tests {
         assert_eq!(stats.get("min_confidence").copied(), Some(0.0));
         assert_eq!(stats.get("max_confidence").copied(), Some(0.0));
         assert_eq!(stats.get("mean_confidence").copied(), Some(0.0));
+    }
+
+    #[test]
+    fn test_calculate_transcript_stats_empty_input_has_complete_zero_schema() {
+        let stats = calculate_transcript_stats(&[]);
+
+        for key in [
+            "count",
+            "total_length",
+            "mean_length",
+            "min_length",
+            "max_length",
+            "n50",
+            "n75",
+            "n90",
+            "n95",
+            "n99",
+            "l50",
+            "l75",
+            "l90",
+            "l95",
+            "l99",
+            "au_n",
+            "contigs_ge_1kb",
+            "contigs_ge_10kb",
+            "contigs_ge_50kb",
+            "contigs_ge_100kb",
+            "bases_ge_1kb",
+            "bases_ge_10kb",
+            "bases_ge_50kb",
+            "bases_ge_100kb",
+            "non_finite_confidence_count",
+            "mean_confidence",
+            "min_confidence",
+            "max_confidence",
+            "gc_content",
+            "gc_content_acgt",
+            "n_content",
+            "ambiguous_content",
+            "acgt_bases",
+            "n_bases",
+            "ambiguous_bases",
+            "mean_rle_ratio",
+        ] {
+            assert_eq!(
+                stats.get(key).copied(),
+                Some(0.0),
+                "expected metric `{}` to be present with zero default",
+                key
+            );
+        }
+    }
+
+    #[test]
+    fn test_calculate_transcript_stats_reports_base_composition_breakdown() {
+        let transcripts = vec![Transcript::new(1, "GCNRYat".to_string(), vec![0], 0.5)];
+        let stats = calculate_transcript_stats(&transcripts);
+
+        assert_eq!(stats.get("acgt_bases").copied(), Some(4.0));
+        assert_eq!(stats.get("n_bases").copied(), Some(1.0));
+        assert_eq!(stats.get("ambiguous_bases").copied(), Some(2.0));
+        assert!((stats.get("gc_content").copied().unwrap_or(0.0) - (2.0 / 7.0)).abs() < 1e-12);
+        assert!((stats.get("gc_content_acgt").copied().unwrap_or(0.0) - 0.5).abs() < 1e-12);
+        assert!((stats.get("n_content").copied().unwrap_or(0.0) - (1.0 / 7.0)).abs() < 1e-12);
+        assert!(
+            (stats.get("ambiguous_content").copied().unwrap_or(0.0) - (2.0 / 7.0)).abs() < 1e-12
+        );
     }
 }
