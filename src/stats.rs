@@ -107,25 +107,26 @@ struct NRunSummary {
 
 impl NRunSummary {
     #[inline]
-    fn add_sequence(&mut self, seq: &[u8]) {
-        for &base in seq {
-            if matches!(base, b'N' | b'n') {
-                self.active_run += 1;
-            } else if self.active_run > 0 {
-                self.run_count += 1;
-                self.max_run = self.max_run.max(self.active_run);
-                self.active_run = 0;
-            }
-        }
-    }
-
-    #[inline]
-    fn finish_contig(&mut self) {
+    fn finish_active_run(&mut self) {
         if self.active_run > 0 {
             self.run_count += 1;
             self.max_run = self.max_run.max(self.active_run);
             self.active_run = 0;
         }
+    }
+
+    #[inline]
+    fn add_base(&mut self, base: u8) {
+        if matches!(base, b'N' | b'n') {
+            self.active_run += 1;
+        } else {
+            self.finish_active_run();
+        }
+    }
+
+    #[inline]
+    fn finish_contig(&mut self) {
+        self.finish_active_run();
     }
 }
 
@@ -208,24 +209,33 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
                     format!("contig length overflow while reading {}", path),
                 )
             })?;
-            let mut n_bases_in_line = 0usize;
+            let mut ungapped_bases_in_line = 0usize;
             for &base in seq {
-                if matches!(base, b'N' | b'n') {
-                    n_bases_in_line += 1;
+                match base {
+                    b'A' | b'a' | b'T' | b't' | b'U' | b'u' => {
+                        composition.acgt_bases += 1;
+                        current_contig_composition.acgt_bases += 1;
+                        ungapped_bases_in_line += 1;
+                    }
+                    b'G' | b'g' | b'C' | b'c' => {
+                        composition.gc_bases += 1;
+                        composition.acgt_bases += 1;
+                        current_contig_composition.gc_bases += 1;
+                        current_contig_composition.acgt_bases += 1;
+                        ungapped_bases_in_line += 1;
+                    }
+                    b'N' | b'n' => {
+                        composition.n_bases += 1;
+                        current_contig_composition.n_bases += 1;
+                    }
+                    _ => {
+                        composition.ambiguous_bases += 1;
+                        current_contig_composition.ambiguous_bases += 1;
+                        ungapped_bases_in_line += 1;
+                    }
                 }
-            }
-            current_ungapped_len = current_ungapped_len
-                .checked_add(seq.len().saturating_sub(n_bases_in_line))
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("ungapped contig length overflow while reading {}", path),
-                    )
-                })?;
-            composition.add_sequence(seq);
-            current_contig_composition.add_sequence(seq);
-            n_runs.add_sequence(seq);
-            for &base in seq {
+                n_runs.add_base(base);
+
                 if current_rle_last_base != Some(base) {
                     current_rle_len = current_rle_len.checked_add(1).ok_or_else(|| {
                         std::io::Error::new(
@@ -236,6 +246,14 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
                     current_rle_last_base = Some(base);
                 }
             }
+            current_ungapped_len = current_ungapped_len
+                .checked_add(ungapped_bases_in_line)
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("ungapped contig length overflow while reading {}", path),
+                    )
+                })?;
         }
     }
 
