@@ -10,7 +10,7 @@ pub type IsoformGraph = DiGraphMap<usize, f32>;
 
 /// Build a graph of potential isoforms from contigs and their overlaps
 pub fn build_isoform_graph(
-    contigs: &HashMap<usize, String>,
+    contig_ids: &[usize],
     overlaps: &[(usize, usize, usize)],
     expression_data: &HashMap<usize, f64>,
 ) -> IsoformGraph {
@@ -18,9 +18,11 @@ pub fn build_isoform_graph(
     let mut graph = DiGraphMap::new();
 
     // Add nodes for each contig in sorted order for deterministic traversal.
-    let mut contig_ids: Vec<usize> = contigs.keys().copied().collect();
-    contig_ids.sort_unstable();
-    for contig_id in contig_ids {
+    // Duplicates are ignored to preserve a canonical node set.
+    let mut sorted_contig_ids: Vec<usize> = contig_ids.to_vec();
+    sorted_contig_ids.sort_unstable();
+    sorted_contig_ids.dedup();
+    for contig_id in sorted_contig_ids.iter().copied() {
         graph.add_node(contig_id);
     }
 
@@ -30,9 +32,12 @@ pub fn build_isoform_graph(
     // This makes edge weights deterministic regardless of input record order.
     let mut best_overlaps: HashMap<(usize, usize), usize> = HashMap::new();
     for &(from_id, to_id, overlap_len) in overlaps {
+        let from_present = sorted_contig_ids.binary_search(&from_id).is_ok();
+        let to_present = sorted_contig_ids.binary_search(&to_id).is_ok();
+
         // Ignore overlaps for missing contig IDs to avoid silently introducing
         // disconnected synthetic nodes through GraphMap::add_edge.
-        if !contigs.contains_key(&from_id) || !contigs.contains_key(&to_id) {
+        if !from_present || !to_present {
             continue;
         }
 
@@ -133,11 +138,8 @@ mod tests {
 
     #[test]
     fn test_build_simple_graph() {
-        // Create test contigs
-        let mut contigs = HashMap::new();
-        contigs.insert(1, "ATCGATCG".to_string());
-        contigs.insert(2, "CGATCGAT".to_string());
-        contigs.insert(3, "TCGATCGA".to_string());
+        // Create test contig IDs
+        let contigs = vec![1, 2, 3];
 
         // Create test overlaps
         let overlaps = vec![(1, 2, 5), (2, 3, 6)];
@@ -182,9 +184,7 @@ mod tests {
 
     #[test]
     fn build_graph_deduplicates_overlaps_and_is_order_invariant() {
-        let mut contigs = HashMap::new();
-        contigs.insert(1, "AAAA".to_string());
-        contigs.insert(2, "CCCC".to_string());
+        let contigs = vec![1, 2];
 
         let mut expression = HashMap::new();
         expression.insert(1, 10.0);
@@ -206,9 +206,7 @@ mod tests {
 
     #[test]
     fn build_graph_ignores_unknown_overlap_nodes() {
-        let mut contigs = HashMap::new();
-        contigs.insert(1, "AAAA".to_string());
-        contigs.insert(2, "CCCC".to_string());
+        let contigs = vec![1, 2];
 
         let expression = HashMap::new();
         let overlaps = vec![(1, 2, 8), (1, 99, 5), (42, 2, 5)];
@@ -232,5 +230,20 @@ mod tests {
 
         assert_eq!(starts, vec![2, 10]);
         assert_eq!(ends, vec![7, 10]);
+    }
+
+    #[test]
+    fn build_graph_deduplicates_duplicate_contig_ids() {
+        let contigs = vec![4, 1, 4, 2, 2];
+        let expression = HashMap::new();
+        let overlaps = vec![(4, 1, 9), (1, 2, 7)];
+
+        let graph = build_isoform_graph(&contigs, &overlaps, &expression);
+
+        assert_eq!(graph.node_count(), 3);
+        assert!(graph.contains_node(1));
+        assert!(graph.contains_node(2));
+        assert!(graph.contains_node(4));
+        assert_eq!(graph.edge_count(), 2);
     }
 }

@@ -66,14 +66,10 @@ pub fn process_isoforms(
         .map(|(&contig_id, &count)| (contig_id, count as f64))
         .collect();
 
-    // Convert contigs to a HashMap for easier lookup
-    let mut contig_map = HashMap::new();
-    for contig in contigs {
-        contig_map.insert(contig.id, contig.sequence.clone());
-    }
+    let contig_ids: Vec<usize> = contigs.iter().map(|contig| contig.id).collect();
 
     // Build the isoform graph
-    let graph = build_isoform_graph(&contig_map, links, &expression_map);
+    let graph = build_isoform_graph(&contig_ids, links, &expression_map);
 
     // Determine start/end nodes using graph structure; fall back to all nodes if degenerate.
     let mut all_nodes: Vec<usize> = graph.nodes().collect();
