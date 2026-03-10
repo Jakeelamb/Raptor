@@ -213,7 +213,7 @@ impl<'a> Iterator for NtHashIterator<'a> {
 
         if let Some(ref mut hasher) = self.hasher {
             // Check if new base is valid
-            if NT_HASH[in_base as usize] == 0 && in_base != b'A' && in_base != b'a' {
+            if NT_HASH[in_base as usize] == NT_INVALID {
                 // Invalid base - need to restart from next valid k-mer
                 self.pos += 1;
                 while self.pos + self.k <= self.seq.len() {
@@ -315,11 +315,19 @@ mod tests {
 
         let hashes: Vec<(usize, u64)> = NtHashIterator::new(seq, k).collect();
 
-        // Should skip the k-mers containing N
-        // First hash should be at position 0
-        if !hashes.is_empty() {
-            assert_eq!(hashes[0].0, 0);
-        }
+        // Windows touching N are skipped entirely.
+        let positions: Vec<usize> = hashes.into_iter().map(|(pos, _)| pos).collect();
+        assert_eq!(positions, vec![0, 5]);
+    }
+
+    #[test]
+    fn test_nthash_iterator_restarts_after_invalid_run() {
+        let seq = b"AACNCAA";
+        let k = 3;
+        let positions: Vec<usize> = NtHashIterator::new(seq, k)
+            .map(|(pos, _)| pos)
+            .collect();
+        assert_eq!(positions, vec![0, 4]);
     }
 
     #[test]
