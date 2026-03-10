@@ -7,6 +7,7 @@ use std::io::BufRead;
 pub struct Stats {
     pub total_contigs: usize,
     pub total_length: usize,
+    pub ungapped_total_length: usize,
     pub average_length: f64,
     pub median_length: f64,
     pub n10: usize,
@@ -19,6 +20,10 @@ pub struct Stats {
     pub total_rle_runs: usize,
     pub n_run_count: usize,
     pub max_n_run: usize,
+    pub mean_n_run_length: f64,
+    pub n_runs_per_100kb: f64,
+    pub n_bases_per_100kb: f64,
+    pub ambiguous_bases_per_100kb: f64,
     pub contigs_with_n: usize,
     pub contigs_with_ambiguous: usize,
     pub contigs_all_acgt: usize,
@@ -34,6 +39,8 @@ pub struct Stats {
     pub n90: usize,
     pub n95: usize,
     pub n99: usize,
+    pub ungapped_n50: usize,
+    pub ungapped_au_n: f64,
     pub l10: usize,
     pub l25: usize,
     pub l50: usize,
@@ -135,11 +142,22 @@ fn update_contig_quality(summary: &mut ContigQualitySummary, composition: BaseCo
     }
 }
 
+#[inline]
+fn per_100kb(count: usize, total_bases: usize) -> f64 {
+    if total_bases == 0 {
+        0.0
+    } else {
+        count as f64 * 100_000.0 / total_bases as f64
+    }
+}
+
 pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
     let mut reader = try_open_fasta(path)?;
     let mut lengths = vec![];
+    let mut ungapped_lengths = vec![];
     let mut in_sequence = false;
     let mut current_len = 0usize;
+    let mut current_ungapped_len = 0usize;
     let mut composition = BaseComposition::default();
     let mut current_contig_composition = BaseComposition::default();
     let mut contig_quality = ContigQualitySummary::default();
@@ -161,6 +179,7 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
             // If we were in a sequence, add its final length.
             if in_sequence {
                 lengths.push(current_len);
+                ungapped_lengths.push(current_ungapped_len);
                 update_contig_quality(&mut contig_quality, current_contig_composition);
                 n_runs.finish_contig();
                 total_rle_ratio += if current_len == 0 {
@@ -177,6 +196,7 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
             }
             in_sequence = true;
             current_len = 0;
+            current_ungapped_len = 0;
             current_contig_composition = BaseComposition::default();
             current_rle_len = 0;
             current_rle_last_base = None;
@@ -188,6 +208,20 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
                     format!("contig length overflow while reading {}", path),
                 )
             })?;
+            let mut n_bases_in_line = 0usize;
+            for &base in seq {
+                if matches!(base, b'N' | b'n') {
+                    n_bases_in_line += 1;
+                }
+            }
+            current_ungapped_len = current_ungapped_len
+                .checked_add(seq.len().saturating_sub(n_bases_in_line))
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("ungapped contig length overflow while reading {}", path),
+                    )
+                })?;
             composition.add_sequence(seq);
             current_contig_composition.add_sequence(seq);
             n_runs.add_sequence(seq);
@@ -208,6 +242,7 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
     // Add the last sequence if there is one
     if in_sequence {
         lengths.push(current_len);
+        ungapped_lengths.push(current_ungapped_len);
         update_contig_quality(&mut contig_quality, current_contig_composition);
         n_runs.finish_contig();
         total_rle_ratio += if current_len == 0 {
@@ -224,6 +259,7 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
     }
 
     let length_stats = evaluate_lengths_in_place(&mut lengths);
+    let ungapped_length_stats = evaluate_lengths_in_place(&mut ungapped_lengths);
     let gc_content = composition.gc_content();
     let n_content = composition.n_content(length_stats.total_bases);
     let ambiguous_content = composition.ambiguous_content(length_stats.total_bases);
@@ -248,10 +284,16 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
     } else {
         0.0
     };
+    let mean_n_run_length = if n_runs.run_count > 0 {
+        composition.n_bases as f64 / n_runs.run_count as f64
+    } else {
+        0.0
+    };
 
     Ok(Stats {
         total_contigs: length_stats.total,
         total_length: length_stats.total_bases,
+        ungapped_total_length: ungapped_length_stats.total_bases,
         average_length: length_stats.avg_length,
         median_length: length_stats.median_length,
         n10: length_stats.n10,
@@ -264,6 +306,10 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         total_rle_runs,
         n_run_count: n_runs.run_count,
         max_n_run: n_runs.max_run,
+        mean_n_run_length,
+        n_runs_per_100kb: per_100kb(n_runs.run_count, length_stats.total_bases),
+        n_bases_per_100kb: per_100kb(composition.n_bases, length_stats.total_bases),
+        ambiguous_bases_per_100kb: per_100kb(composition.ambiguous_bases, length_stats.total_bases),
         contigs_with_n: contig_quality.with_n,
         contigs_with_ambiguous: contig_quality.with_ambiguous,
         contigs_all_acgt: contig_quality.all_acgt,
@@ -279,6 +325,8 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         n90: length_stats.n90,
         n95: length_stats.n95,
         n99: length_stats.n99,
+        ungapped_n50: ungapped_length_stats.n50,
+        ungapped_au_n: ungapped_length_stats.au_n,
         l10: length_stats.l10,
         l25: length_stats.l25,
         l50: length_stats.l50,
@@ -397,6 +445,7 @@ mod tests {
 
         assert_eq!(stats.total_contigs, 3);
         assert_eq!(stats.total_length, 48);
+        assert_eq!(stats.ungapped_total_length, 48);
         assert_eq!(stats.average_length, 16.0);
         assert_eq!(stats.median_length, 20.0);
         assert_eq!(stats.gc_bases, 24);
@@ -408,6 +457,10 @@ mod tests {
         assert_eq!(stats.total_rle_runs, 48);
         assert_eq!(stats.n_run_count, 0);
         assert_eq!(stats.max_n_run, 0);
+        assert_eq!(stats.mean_n_run_length, 0.0);
+        assert_eq!(stats.n_runs_per_100kb, 0.0);
+        assert_eq!(stats.n_bases_per_100kb, 0.0);
+        assert_eq!(stats.ambiguous_bases_per_100kb, 0.0);
         assert_eq!(stats.contigs_with_n, 0);
         assert_eq!(stats.contigs_with_ambiguous, 0);
         assert_eq!(stats.contigs_all_acgt, 3);
@@ -424,6 +477,8 @@ mod tests {
         assert_eq!(stats.n90, 20);
         assert_eq!(stats.n95, 4);
         assert_eq!(stats.n99, 4);
+        assert_eq!(stats.ungapped_n50, 24);
+        assert!((stats.ungapped_au_n - 20.6666666667).abs() < 1e-6);
         assert_eq!(stats.l10, 1);
         assert_eq!(stats.l25, 1);
         assert_eq!(stats.l50, 1);
@@ -463,6 +518,7 @@ mod tests {
         let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
         assert_eq!(stats.total_contigs, 2);
         assert_eq!(stats.total_length, 16);
+        assert_eq!(stats.ungapped_total_length, 16);
         assert_eq!(stats.median_length, 8.0);
         assert_eq!(stats.gc_bases, 8);
         assert_eq!(stats.acgt_bases, 16);
@@ -473,6 +529,10 @@ mod tests {
         assert_eq!(stats.total_rle_runs, 16);
         assert_eq!(stats.n_run_count, 0);
         assert_eq!(stats.max_n_run, 0);
+        assert_eq!(stats.mean_n_run_length, 0.0);
+        assert_eq!(stats.n_runs_per_100kb, 0.0);
+        assert_eq!(stats.n_bases_per_100kb, 0.0);
+        assert_eq!(stats.ambiguous_bases_per_100kb, 0.0);
         assert_eq!(stats.contigs_with_n, 0);
         assert_eq!(stats.contigs_with_ambiguous, 0);
         assert_eq!(stats.contigs_all_acgt, 2);
@@ -489,6 +549,8 @@ mod tests {
         assert_eq!(stats.n90, 4);
         assert_eq!(stats.n95, 4);
         assert_eq!(stats.n99, 4);
+        assert_eq!(stats.ungapped_n50, 12);
+        assert!((stats.ungapped_au_n - 10.0).abs() < 1e-6);
         assert_eq!(stats.l10, 1);
         assert_eq!(stats.l25, 1);
         assert_eq!(stats.l50, 1);
@@ -567,6 +629,7 @@ mod tests {
         let mut stats = Stats {
             total_contigs: 0,
             total_length: 0,
+            ungapped_total_length: 0,
             average_length: 0.0,
             median_length: 0.0,
             n10: 0,
@@ -579,6 +642,10 @@ mod tests {
             total_rle_runs: 0,
             n_run_count: 0,
             max_n_run: 0,
+            mean_n_run_length: 0.0,
+            n_runs_per_100kb: 0.0,
+            n_bases_per_100kb: 0.0,
+            ambiguous_bases_per_100kb: 0.0,
             contigs_with_n: 0,
             contigs_with_ambiguous: 0,
             contigs_all_acgt: 0,
@@ -594,6 +661,8 @@ mod tests {
             n90: 0,
             n95: 0,
             n99: 0,
+            ungapped_n50: 0,
+            ungapped_au_n: 0.0,
             l10: 0,
             l25: 0,
             l50: 0,
@@ -703,6 +772,7 @@ mod tests {
 
         let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
         assert_eq!(stats.total_length, 12);
+        assert_eq!(stats.ungapped_total_length, 8);
         assert_eq!(stats.gc_bases, 4);
         assert_eq!(stats.acgt_bases, 7);
         assert_eq!(stats.n_bases, 4);
@@ -712,9 +782,15 @@ mod tests {
         assert_eq!(stats.total_rle_runs, 9);
         assert_eq!(stats.n_run_count, 1);
         assert_eq!(stats.max_n_run, 4);
+        assert!((stats.mean_n_run_length - 4.0).abs() < 1e-12);
+        assert!((stats.n_runs_per_100kb - (1.0 * 100_000.0 / 12.0)).abs() < 1e-12);
+        assert!((stats.n_bases_per_100kb - (4.0 * 100_000.0 / 12.0)).abs() < 1e-12);
+        assert!((stats.ambiguous_bases_per_100kb - (1.0 * 100_000.0 / 12.0)).abs() < 1e-12);
         assert_eq!(stats.contigs_with_n, 1);
         assert_eq!(stats.contigs_with_ambiguous, 1);
         assert_eq!(stats.contigs_all_acgt, 0);
+        assert_eq!(stats.ungapped_n50, 4);
+        assert!((stats.ungapped_au_n - 4.0).abs() < 1e-12);
         assert!((stats.gc_content - (4.0 / 7.0)).abs() < 1e-12);
         assert!((stats.n_content - (4.0 / 12.0)).abs() < 1e-12);
         assert!((stats.ambiguous_content - (1.0 / 12.0)).abs() < 1e-12);
@@ -736,6 +812,7 @@ mod tests {
         let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
         assert_eq!(stats.total_contigs, 4);
         assert_eq!(stats.total_length, 3);
+        assert_eq!(stats.ungapped_total_length, 3);
         assert!((stats.average_length - 0.75).abs() < 1e-12);
         assert_eq!(stats.median_length, 0.5);
         assert_eq!(stats.n10, 2);
@@ -745,6 +822,7 @@ mod tests {
         assert_eq!(stats.n90, 1);
         assert_eq!(stats.n95, 1);
         assert_eq!(stats.n99, 1);
+        assert_eq!(stats.ungapped_n50, 2);
         assert_eq!(stats.l10, 1);
         assert_eq!(stats.l25, 1);
         assert_eq!(stats.l50, 1);
@@ -799,6 +877,9 @@ mod tests {
         let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
         assert_eq!(stats.n_run_count, 3);
         assert_eq!(stats.max_n_run, 4);
+        assert!((stats.mean_n_run_length - 3.0).abs() < 1e-12);
+        assert!((stats.n_runs_per_100kb - (3.0 * 100_000.0 / 18.0)).abs() < 1e-12);
+        assert!((stats.n_bases_per_100kb - (9.0 * 100_000.0 / 18.0)).abs() < 1e-12);
     }
 
     #[test]
@@ -857,6 +938,7 @@ mod tests {
 
             prop_assert_eq!(stats_a.total_contigs, stats_b.total_contigs);
             prop_assert_eq!(stats_a.total_length, stats_b.total_length);
+            prop_assert_eq!(stats_a.ungapped_total_length, stats_b.ungapped_total_length);
             prop_assert_eq!(stats_a.gc_bases, stats_b.gc_bases);
             prop_assert_eq!(stats_a.acgt_bases, stats_b.acgt_bases);
             prop_assert_eq!(stats_a.n_bases, stats_b.n_bases);
@@ -866,6 +948,10 @@ mod tests {
             prop_assert_eq!(stats_a.total_rle_runs, stats_b.total_rle_runs);
             prop_assert_eq!(stats_a.n_run_count, stats_b.n_run_count);
             prop_assert_eq!(stats_a.max_n_run, stats_b.max_n_run);
+            prop_assert!((stats_a.mean_n_run_length - stats_b.mean_n_run_length).abs() < 1e-12);
+            prop_assert!((stats_a.n_runs_per_100kb - stats_b.n_runs_per_100kb).abs() < 1e-12);
+            prop_assert!((stats_a.n_bases_per_100kb - stats_b.n_bases_per_100kb).abs() < 1e-12);
+            prop_assert!((stats_a.ambiguous_bases_per_100kb - stats_b.ambiguous_bases_per_100kb).abs() < 1e-12);
             prop_assert_eq!(stats_a.contigs_with_n, stats_b.contigs_with_n);
             prop_assert_eq!(stats_a.contigs_with_ambiguous, stats_b.contigs_with_ambiguous);
             prop_assert_eq!(stats_a.contigs_all_acgt, stats_b.contigs_all_acgt);
@@ -876,6 +962,8 @@ mod tests {
             prop_assert_eq!(stats_a.n90, stats_b.n90);
             prop_assert_eq!(stats_a.n95, stats_b.n95);
             prop_assert_eq!(stats_a.n99, stats_b.n99);
+            prop_assert_eq!(stats_a.ungapped_n50, stats_b.ungapped_n50);
+            prop_assert!((stats_a.ungapped_au_n - stats_b.ungapped_au_n).abs() < 1e-12);
             prop_assert_eq!(stats_a.l10, stats_b.l10);
             prop_assert_eq!(stats_a.l25, stats_b.l25);
             prop_assert_eq!(stats_a.l50, stats_b.l50);
