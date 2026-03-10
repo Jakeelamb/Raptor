@@ -1,38 +1,55 @@
 use crate::graph::assembler::Contig;
 use crate::kmer::rle::rle_encode;
+use std::cmp::Ordering;
 
 /// Collapse contigs with identical or highly similar RLE-encoded sequences
-pub fn collapse_repeats(contigs: Vec<Contig>, _min_repeat_len: usize) -> Vec<Contig> {
-    let mut collapsed: Vec<Contig> = Vec::new();
-    let mut processed: Vec<bool> = vec![false; contigs.len()];
+pub fn collapse_repeats(contigs: Vec<Contig>, min_repeat_len: usize) -> Vec<Contig> {
+    if contigs.len() <= 1 {
+        return contigs;
+    }
 
-    // Process each contig
+    let signatures: Vec<Vec<(u8, u8)>> = contigs.iter().map(|c| rle_encode(&c.sequence)).collect();
+    let eligible: Vec<bool> = signatures
+        .iter()
+        .map(|sig| min_repeat_len == 0 || sig.len() >= min_repeat_len)
+        .collect();
+
+    let mut groups = DisjointSet::new(contigs.len());
     for i in 0..contigs.len() {
-        if processed[i] {
+        if !eligible[i] {
             continue;
         }
-
-        // Mark current contig as processed
-        processed[i] = true;
-        collapsed.push(contigs[i].clone());
-
-        // Find and mark all similar contigs
-        let seq1 = &contigs[i].sequence;
         for j in (i + 1)..contigs.len() {
-            if processed[j] {
+            if !eligible[j] {
                 continue;
             }
 
-            let seq2 = &contigs[j].sequence;
+            let same_or_similar = contigs[i].sequence == contigs[j].sequence
+                || is_rle_similar_encoded(&signatures[i], &signatures[j], 0.9);
 
-            // Check if sequences are similar
-            // For test consistency, consider identical sequences as similar
-            if seq1 == seq2 || is_rle_similar(seq1, seq2, 0.9) {
-                processed[j] = true; // Mark as processed, don't add to collapsed
+            if same_or_similar {
+                groups.union(i, j);
             }
         }
     }
 
+    let mut members_by_root: Vec<Vec<usize>> = vec![Vec::new(); contigs.len()];
+    for idx in 0..contigs.len() {
+        let root = groups.find(idx);
+        members_by_root[root].push(idx);
+    }
+
+    let mut collapsed = Vec::new();
+    for members in members_by_root.into_iter().filter(|m| !m.is_empty()) {
+        let best_idx = members
+            .into_iter()
+            .min_by(|&a, &b| contig_preference(&contigs[a], &contigs[b]))
+            .expect("non-empty component must have at least one member");
+        collapsed.push(contigs[best_idx].clone());
+    }
+
+    // Keep output deterministic even if caller provides contigs in different orders.
+    collapsed.sort_unstable_by(contig_preference);
     collapsed
 }
 
@@ -41,7 +58,11 @@ pub fn collapse_repeats(contigs: Vec<Contig>, _min_repeat_len: usize) -> Vec<Con
 fn is_rle_similar(seq1: &str, seq2: &str, threshold: f64) -> bool {
     let rle1 = rle_encode(seq1);
     let rle2 = rle_encode(seq2);
+    is_rle_similar_encoded(&rle1, &rle2, threshold)
+}
 
+/// Determine if two pre-encoded RLE signatures are similar.
+fn is_rle_similar_encoded(rle1: &[(u8, u8)], rle2: &[(u8, u8)], threshold: f64) -> bool {
     // If lengths are too different, consider them dissimilar
     if rle1.is_empty()
         || rle2.is_empty()
@@ -63,6 +84,54 @@ fn is_rle_similar(seq1: &str, seq2: &str, threshold: f64) -> bool {
     }
 
     (matches as f64 / total as f64) >= threshold
+}
+
+fn contig_preference(a: &Contig, b: &Contig) -> Ordering {
+    b.sequence
+        .len()
+        .cmp(&a.sequence.len())
+        .then_with(|| a.sequence.cmp(&b.sequence))
+        .then_with(|| a.kmer_path.cmp(&b.kmer_path))
+        .then_with(|| a.id.cmp(&b.id))
+}
+
+#[derive(Debug, Clone)]
+struct DisjointSet {
+    parent: Vec<usize>,
+    rank: Vec<u8>,
+}
+
+impl DisjointSet {
+    fn new(size: usize) -> Self {
+        Self {
+            parent: (0..size).collect(),
+            rank: vec![0; size],
+        }
+    }
+
+    fn find(&mut self, x: usize) -> usize {
+        if self.parent[x] != x {
+            let root = self.find(self.parent[x]);
+            self.parent[x] = root;
+        }
+        self.parent[x]
+    }
+
+    fn union(&mut self, a: usize, b: usize) {
+        let mut root_a = self.find(a);
+        let mut root_b = self.find(b);
+        if root_a == root_b {
+            return;
+        }
+
+        if self.rank[root_a] < self.rank[root_b] {
+            std::mem::swap(&mut root_a, &mut root_b);
+        }
+        self.parent[root_b] = root_a;
+        if self.rank[root_a] == self.rank[root_b] {
+            self.rank[root_a] = self.rank[root_a].saturating_add(1);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -118,5 +187,56 @@ mod tests {
         // Verify that the non-similar contig is still there
         let contains_different = collapsed.iter().any(|c| c.sequence == "GCGCGCGCGCGC");
         assert!(contains_different);
+    }
+
+    #[test]
+    fn test_collapse_repeats_respects_min_repeat_len_threshold() {
+        let contig1 = Contig {
+            id: 1,
+            sequence: "ATATAT".to_string(),
+            kmer_path: vec![encode_kmer("ATA").unwrap()],
+        };
+        let contig2 = Contig {
+            id: 2,
+            sequence: "ATATAT".to_string(),
+            kmer_path: vec![encode_kmer("TAT").unwrap()],
+        };
+
+        // RLE tuple length is 6, so with threshold above 6 no collapse should happen.
+        let no_collapse = collapse_repeats(vec![contig1.clone(), contig2.clone()], 7);
+        assert_eq!(no_collapse.len(), 2);
+
+        let collapsed = collapse_repeats(vec![contig1, contig2], 6);
+        assert_eq!(collapsed.len(), 1);
+    }
+
+    #[test]
+    fn test_collapse_repeats_is_invariant_to_input_order() {
+        let contig_a = Contig {
+            id: 10,
+            sequence: "ATATATATATAT".to_string(),
+            kmer_path: vec![encode_kmer("ATA").unwrap()],
+        };
+        let contig_b = Contig {
+            id: 11,
+            sequence: "ATATATATCTAT".to_string(),
+            kmer_path: vec![encode_kmer("TAT").unwrap()],
+        };
+        let contig_c = Contig {
+            id: 12,
+            sequence: "GCGCGCGCGCGC".to_string(),
+            kmer_path: vec![encode_kmer("GCG").unwrap()],
+        };
+
+        let first = collapse_repeats(
+            vec![contig_a.clone(), contig_b.clone(), contig_c.clone()],
+            0,
+        );
+        let second = collapse_repeats(vec![contig_c, contig_b, contig_a], 0);
+
+        assert_eq!(first.len(), second.len());
+        let first_sequences: Vec<&str> = first.iter().map(|c| c.sequence.as_str()).collect();
+        let second_sequences: Vec<&str> = second.iter().map(|c| c.sequence.as_str()).collect();
+        assert_eq!(first_sequences, second_sequences);
     }
 }
