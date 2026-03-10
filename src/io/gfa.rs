@@ -47,20 +47,30 @@ fn parse_overlap_size(cigar: &str) -> Option<usize> {
         return Some(0);
     }
 
+    let bytes = cigar.as_bytes();
     let mut overlap = 0usize;
-    let mut saw_digit = false;
-    for byte in cigar.bytes() {
+    let mut idx = 0usize;
+
+    while idx < bytes.len() {
+        let byte = bytes[idx];
         if byte.is_ascii_digit() {
-            saw_digit = true;
             overlap = overlap
                 .checked_mul(10)?
                 .checked_add((byte - b'0') as usize)?;
+            idx += 1;
         } else {
             break;
         }
     }
 
-    saw_digit.then_some(overlap)
+    if idx == 0 {
+        return None;
+    }
+
+    match bytes.get(idx).copied() {
+        Some(b'M') | Some(b'=') => Some(overlap),
+        _ => None,
+    }
 }
 
 fn collect_segment_id_map(gfa_path: &str) -> Result<HashMap<String, usize>> {
@@ -223,7 +233,7 @@ pub fn read_gfa_links(gfa_path: &str) -> Result<Vec<(usize, usize, usize)>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_gfa_contigs, read_gfa_links};
+    use super::{parse_overlap_size, read_gfa_contigs, read_gfa_links};
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -285,5 +295,18 @@ mod tests {
         assert_eq!(contigs[0].sequence, "AAAA");
         assert_eq!(contigs[1].id, 1);
         assert_eq!(contigs[1].sequence, "GGGG");
+    }
+
+    #[test]
+    fn parse_overlap_size_requires_match_operator_after_length_prefix() {
+        assert_eq!(parse_overlap_size("*"), Some(0));
+        assert_eq!(parse_overlap_size("12M"), Some(12));
+        assert_eq!(parse_overlap_size("12M1I"), Some(12));
+        assert_eq!(parse_overlap_size("7=2X"), Some(7));
+
+        assert_eq!(parse_overlap_size("12"), None);
+        assert_eq!(parse_overlap_size("12I"), None);
+        assert_eq!(parse_overlap_size("12S10M"), None);
+        assert_eq!(parse_overlap_size("M12"), None);
     }
 }
