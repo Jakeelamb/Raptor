@@ -670,16 +670,19 @@ pub fn cleanup_graph(
         let tips = remove_tips(adjacency, kmer_counts, k, max_tip_len, min_coverage);
         total_tips += tips;
 
-        if tips == 0 {
-            break;
-        }
-
         // Detect and collapse bubbles
         let bubbles = detect_bubbles(adjacency, kmer_counts, k, max_bubble_len);
+        let mut collapsed_this_round = 0usize;
         for bubble in &bubbles {
             if collapse_bubble(adjacency, bubble) {
                 total_bubbles += 1;
+                collapsed_this_round += 1;
             }
+        }
+
+        // Stop early if no cleanup operation made progress.
+        if tips == 0 && collapsed_this_round == 0 {
+            break;
         }
     }
 
@@ -877,5 +880,33 @@ mod tests {
         // Reconvergence node must remain in the graph after collapsing one branch.
         assert!(adjacency.get_predecessors(acc).is_some());
         assert!(!adjacency.get_predecessors(acc).unwrap().is_empty());
+    }
+
+    #[test]
+    fn cleanup_graph_collapses_bubbles_when_no_tips_are_removed() {
+        let k = 3;
+        let aaa = encode_kmer("AAA").unwrap();
+        let aac = encode_kmer("AAC").unwrap();
+        let aag = encode_kmer("AAG").unwrap();
+        let acc = encode_kmer("ACC").unwrap();
+
+        let mut counts = AHashMap::new();
+        counts.insert(aaa, 20);
+        counts.insert(aac, 10);
+        counts.insert(aag, 10);
+        counts.insert(acc, 20);
+
+        let mut adjacency = AdjacencyTableU64::new(k as u8);
+        adjacency.add_edge(aaa, aac, 10);
+        adjacency.add_edge(aaa, aag, 10);
+        adjacency.add_edge(aac, acc, 10);
+        adjacency.add_edge(aag, acc, 10);
+
+        let (tips_removed, bubbles_collapsed) = cleanup_graph(&mut adjacency, &counts, k, 3);
+        assert_eq!(tips_removed, 0);
+        assert_eq!(bubbles_collapsed, 1);
+
+        let predecessors = adjacency.get_predecessors(acc).cloned().unwrap_or_default();
+        assert_eq!(predecessors, vec![(aac, 10)]);
     }
 }
