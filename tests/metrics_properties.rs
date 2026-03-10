@@ -240,6 +240,7 @@ proptest! {
         prop_assert_eq!(observed.get("gc_content_acgt").copied().unwrap_or(-1.0), 0.0);
         prop_assert_eq!(observed.get("n_content").copied().unwrap_or(-1.0), 0.0);
         prop_assert_eq!(observed.get("ambiguous_content").copied().unwrap_or(-1.0), 0.0);
+        prop_assert_eq!(observed.get("length_field_mismatch_count").copied().unwrap_or(-1.0), 0.0);
 
         let mut shuffled = lengths.clone();
         let mut rng = StdRng::seed_from_u64(seed);
@@ -288,6 +289,7 @@ proptest! {
             "acgt_bases",
             "n_bases",
             "ambiguous_bases",
+            "length_field_mismatch_count",
         ] {
             let lhs = observed.get(key).copied().unwrap_or(f64::NAN);
             let rhs = shuffled_stats.get(key).copied().unwrap_or(f64::NAN);

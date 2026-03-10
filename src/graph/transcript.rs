@@ -271,7 +271,7 @@ pub fn transcript_to_gfa_path(transcript: &Transcript) -> String {
 
 /// Calculate statistics for a collection of transcripts
 pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String, f64> {
-    let mut stats = HashMap::with_capacity(40);
+    let mut stats = HashMap::with_capacity(48);
 
     // Basic counts
     stats.insert("count".to_string(), transcripts.len() as f64);
@@ -313,6 +313,7 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
             "bases_ge_50kb_frac",
             "bases_ge_100kb_frac",
             "non_finite_confidence_count",
+            "length_field_mismatch_count",
             "mean_confidence",
             "min_confidence",
             "max_confidence",
@@ -337,15 +338,20 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
     let mut finite_confidence_sum = 0.0;
     let mut min_confidence = f64::INFINITY;
     let mut max_confidence = f64::NEG_INFINITY;
+    let mut length_field_mismatch_count = 0usize;
     let mut composition = BaseComposition::default();
     let mut total_sequence_bases = 0usize;
     let mut total_rle_ratio = 0.0;
 
     for transcript in transcripts {
-        let length = transcript.length;
-        lengths.push(length);
-        min_length = min_length.min(length);
-        max_length = max_length.max(length);
+        let sequence = transcript.sequence.as_bytes();
+        let sequence_len = sequence.len();
+        lengths.push(sequence_len);
+        min_length = min_length.min(sequence_len);
+        max_length = max_length.max(sequence_len);
+        if transcript.length != sequence_len {
+            length_field_mismatch_count += 1;
+        }
 
         let confidence = transcript.confidence;
         if confidence.is_finite() {
@@ -355,7 +361,6 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
             max_confidence = max_confidence.max(confidence);
         }
 
-        let sequence = transcript.sequence.as_bytes();
         composition.add_sequence(sequence);
         total_sequence_bases = total_sequence_bases.saturating_add(sequence.len());
 
@@ -458,6 +463,10 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
     stats.insert(
         "non_finite_confidence_count".to_string(),
         non_finite_confidence_count as f64,
+    );
+    stats.insert(
+        "length_field_mismatch_count".to_string(),
+        length_field_mismatch_count as f64,
     );
 
     if finite_confidence_count == 0 {
@@ -692,6 +701,7 @@ mod tests {
 
         let stats = calculate_transcript_stats(&transcripts);
         assert_eq!(stats.get("non_finite_confidence_count").copied(), Some(1.0));
+        assert_eq!(stats.get("length_field_mismatch_count").copied(), Some(0.0));
         assert_eq!(stats.get("min_confidence").copied(), Some(0.2));
         assert_eq!(stats.get("max_confidence").copied(), Some(0.8));
         assert_eq!(stats.get("mean_confidence").copied(), Some(0.5));
@@ -707,9 +717,43 @@ mod tests {
 
         let stats = calculate_transcript_stats(&transcripts);
         assert_eq!(stats.get("non_finite_confidence_count").copied(), Some(3.0));
+        assert_eq!(stats.get("length_field_mismatch_count").copied(), Some(0.0));
         assert_eq!(stats.get("min_confidence").copied(), Some(0.0));
         assert_eq!(stats.get("max_confidence").copied(), Some(0.0));
         assert_eq!(stats.get("mean_confidence").copied(), Some(0.0));
+    }
+
+    #[test]
+    fn test_calculate_transcript_stats_uses_sequence_length_when_length_field_is_stale() {
+        let transcripts = vec![
+            Transcript {
+                id: 1,
+                sequence: "ACGTAC".to_string(),
+                path: vec![0],
+                confidence: 0.9,
+                length: 2,
+                strand: '+',
+                tpm: None,
+                splicing: "linear".to_string(),
+            },
+            Transcript {
+                id: 2,
+                sequence: "GG".to_string(),
+                path: vec![1],
+                confidence: 0.8,
+                length: 10,
+                strand: '+',
+                tpm: None,
+                splicing: "linear".to_string(),
+            },
+        ];
+
+        let stats = calculate_transcript_stats(&transcripts);
+        assert_eq!(stats.get("total_length").copied(), Some(8.0));
+        assert_eq!(stats.get("mean_length").copied(), Some(4.0));
+        assert_eq!(stats.get("min_length").copied(), Some(2.0));
+        assert_eq!(stats.get("max_length").copied(), Some(6.0));
+        assert_eq!(stats.get("length_field_mismatch_count").copied(), Some(2.0));
     }
 
     #[test]
@@ -753,6 +797,7 @@ mod tests {
             "bases_ge_50kb_frac",
             "bases_ge_100kb_frac",
             "non_finite_confidence_count",
+            "length_field_mismatch_count",
             "mean_confidence",
             "min_confidence",
             "max_confidence",
