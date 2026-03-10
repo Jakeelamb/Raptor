@@ -8,10 +8,36 @@ pub struct Stats {
     pub total_length: usize,
     pub average_length: f64,
     pub n50: usize,
+    pub n90: usize,
+    pub l50: usize,
+    pub longest_contig: usize,
     // Graph-related stats
     pub path_count: Option<usize>,
     pub avg_path_length: Option<f64>,
     pub branch_count: Option<usize>,
+}
+
+#[inline]
+fn nx_lx(
+    sorted_desc_lengths: &[usize],
+    total_len: usize,
+    numerator: usize,
+    denominator: usize,
+) -> (usize, usize) {
+    if sorted_desc_lengths.is_empty() || total_len == 0 {
+        return (0, 0);
+    }
+
+    let threshold = (total_len * numerator).div_ceil(denominator);
+    let mut acc = 0usize;
+    for (idx, &len) in sorted_desc_lengths.iter().enumerate() {
+        acc += len;
+        if acc >= threshold {
+            return (len, idx + 1);
+        }
+    }
+
+    (0, sorted_desc_lengths.len())
 }
 
 pub fn calculate_stats(path: &str) -> Stats {
@@ -19,32 +45,31 @@ pub fn calculate_stats(path: &str) -> Stats {
     let mut lengths = vec![];
     let mut total = 0;
     let mut in_sequence = false;
-    let mut current_sequence = String::new();
+    let mut current_len = 0usize;
 
-    for line in reader.lines().flatten() {
+    for line in reader.lines().map_while(Result::ok) {
         if line.starts_with('>') {
-            // If we were in a sequence, add the complete sequence to lengths
-            if in_sequence && !current_sequence.is_empty() {
-                let len = current_sequence.len();
+            // If we were in a sequence, add its final length.
+            if in_sequence && current_len > 0 {
+                let len = current_len;
                 total += len;
                 lengths.push(len);
-                current_sequence.clear();
             }
             in_sequence = true;
+            current_len = 0;
         } else if in_sequence {
-            // Add this line to the current sequence
-            current_sequence.push_str(line.trim());
+            current_len += line.trim().len();
         }
     }
 
     // Add the last sequence if there is one
-    if in_sequence && !current_sequence.is_empty() {
-        let len = current_sequence.len();
+    if in_sequence && current_len > 0 {
+        let len = current_len;
         total += len;
         lengths.push(len);
     }
 
-    lengths.sort_unstable();
+    lengths.sort_unstable_by(|a, b| b.cmp(a));
     let total_contigs = lengths.len();
     let avg = if total_contigs > 0 {
         total as f64 / total_contigs as f64
@@ -52,24 +77,18 @@ pub fn calculate_stats(path: &str) -> Stats {
         0.0
     };
 
-    // Calculate N50
-    let mut acc = 0;
-    let half_total = total / 2;
-    let n50 = lengths
-        .iter()
-        .rev()
-        .find(|&&len| {
-            acc += len;
-            acc >= half_total
-        })
-        .copied()
-        .unwrap_or(0);
+    let (n50, l50) = nx_lx(&lengths, total, 1, 2);
+    let (n90, _) = nx_lx(&lengths, total, 9, 10);
+    let longest_contig = lengths.first().copied().unwrap_or(0);
 
     Stats {
         total_contigs,
         total_length: total,
         average_length: avg,
         n50,
+        n90,
+        l50,
+        longest_contig,
         path_count: None,
         avg_path_length: None,
         branch_count: None,
@@ -125,6 +144,27 @@ mod tests {
         assert_eq!(stats.total_contigs, 3);
         assert_eq!(stats.total_length, 48);
         assert_eq!(stats.average_length, 16.0);
-        assert_eq!(stats.n50, 24); // N50 should be 24
+        assert_eq!(stats.n50, 24);
+        assert_eq!(stats.n90, 20);
+        assert_eq!(stats.l50, 1);
+        assert_eq!(stats.longest_contig, 24);
+    }
+
+    #[test]
+    fn test_calculate_stats_multiline_sequences() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, ">contig_1").unwrap();
+        writeln!(file, "ATCGATCG").unwrap();
+        writeln!(file, "ATCG").unwrap(); // 12 bp total
+        writeln!(file, ">contig_2").unwrap();
+        writeln!(file, "GCTA").unwrap(); // 4 bp
+
+        let stats = calculate_stats(file.path().to_str().unwrap());
+        assert_eq!(stats.total_contigs, 2);
+        assert_eq!(stats.total_length, 16);
+        assert_eq!(stats.n50, 12);
+        assert_eq!(stats.n90, 4);
+        assert_eq!(stats.l50, 1);
+        assert_eq!(stats.longest_contig, 12);
     }
 }

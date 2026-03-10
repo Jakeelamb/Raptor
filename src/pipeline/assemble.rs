@@ -568,8 +568,8 @@ pub fn assemble_reads_with_gpu(
                 transcripts.iter().map(|t| t.sequence.len()).collect();
             let stats = evaluate_lengths(&transcript_lengths);
             info!(
-                "Transcript statistics: {} transcripts, Avg length: {:.1} bp, N50: {} bp",
-                stats.total, stats.avg_length, stats.n50
+                "Transcript statistics: {} transcripts, {} bp total, Avg: {:.1} bp, N50/N90: {}/{} bp, L50: {}",
+                stats.total, stats.total_bases, stats.avg_length, stats.n50, stats.n90, stats.l50
             );
         }
         // Output GFA if requested

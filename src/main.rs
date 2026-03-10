@@ -208,10 +208,16 @@ fn main() {
                     println!("{}", serde_json::to_string_pretty(&stats).unwrap());
                 }
                 "tsv" => {
-                    println!("contigs\ttotal_len\tavg_len\tn50");
+                    println!("contigs\ttotal_len\tavg_len\tn50\tn90\tl50\tlongest");
                     println!(
-                        "{}\t{}\t{:.2}\t{}",
-                        stats.total_contigs, stats.total_length, stats.average_length, stats.n50
+                        "{}\t{}\t{:.2}\t{}\t{}\t{}\t{}",
+                        stats.total_contigs,
+                        stats.total_length,
+                        stats.average_length,
+                        stats.n50,
+                        stats.n90,
+                        stats.l50,
+                        stats.longest_contig
                     );
                 }
                 _ => eprintln!("Unsupported format: {}", format),
