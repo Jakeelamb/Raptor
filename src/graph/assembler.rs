@@ -547,8 +547,8 @@ fn find_bubble_from_branch(
                     return Some(Bubble {
                         start,
                         end: next,
-                        path1,
-                        path2: path2.into_iter().take_while(|k| *k != next).collect(),
+                        path1: path_without_end(&path1, next),
+                        path2: path_without_end(&path2, next),
                         coverage1: cov1,
                         coverage2: cov2,
                     });
@@ -568,8 +568,8 @@ fn find_bubble_from_branch(
                     return Some(Bubble {
                         start,
                         end: next,
-                        path1: path1.into_iter().take_while(|k| *k != next).collect(),
-                        path2,
+                        path1: path_without_end(&path1, next),
+                        path2: path_without_end(&path2, next),
                         coverage1: cov1,
                         coverage2: cov2,
                     });
@@ -615,6 +615,11 @@ fn best_unvisited_neighbor(
         .copied()
         .filter(|(kmer, _)| !visited.contains(kmer))
         .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+}
+
+#[inline]
+fn path_without_end(path: &[u64], end: u64) -> Vec<u64> {
+    path.iter().copied().take_while(|k| *k != end).collect()
 }
 
 fn remove_kmer_from_graph(adjacency: &mut AdjacencyTableU64, kmer: u64) {
@@ -840,5 +845,37 @@ mod tests {
         assert_eq!(bubbles_a[0].path2, bubbles_b[0].path2);
         assert_eq!(bubbles_a[0].path1.first().copied(), Some(aac));
         assert_eq!(bubbles_a[0].path2.first().copied(), Some(aag));
+    }
+
+    #[test]
+    fn collapse_bubble_keeps_reconvergence_node() {
+        let k = 3;
+        let aaa = encode_kmer("AAA").unwrap();
+        let aac = encode_kmer("AAC").unwrap();
+        let aag = encode_kmer("AAG").unwrap();
+        let acc = encode_kmer("ACC").unwrap();
+
+        let mut counts = AHashMap::new();
+        counts.insert(aaa, 12);
+        counts.insert(aac, 8);
+        counts.insert(aag, 8);
+        counts.insert(acc, 10);
+
+        let mut adjacency = AdjacencyTableU64::new(k as u8);
+        adjacency.add_edge(aaa, aac, 8);
+        adjacency.add_edge(aaa, aag, 8);
+        adjacency.add_edge(aac, acc, 8);
+        adjacency.add_edge(aag, acc, 8);
+
+        let bubbles = detect_bubbles(&adjacency, &counts, k, 8);
+        assert_eq!(bubbles.len(), 1);
+        assert_eq!(bubbles[0].end, acc);
+
+        let collapsed = collapse_bubble(&mut adjacency, &bubbles[0]);
+        assert!(collapsed);
+
+        // Reconvergence node must remain in the graph after collapsing one branch.
+        assert!(adjacency.get_predecessors(acc).is_some());
+        assert!(adjacency.get_predecessors(acc).unwrap().len() >= 1);
     }
 }

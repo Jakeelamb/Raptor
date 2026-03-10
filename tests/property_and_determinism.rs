@@ -5,7 +5,7 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use raptor::accel::backend::AdjacencyTableU64;
-use raptor::graph::assembler::greedy_assembly_u64;
+use raptor::graph::assembler::{cleanup_graph, greedy_assembly_u64};
 use raptor::graph::isoform_traverse::find_directed_paths;
 use raptor::kmer::kmer::{encode_kmer, reverse_complement, KmerU64};
 
@@ -131,5 +131,81 @@ fn isoform_path_enumeration_is_stable_under_randomized_edge_order() {
             .map(|p| p.nodes)
             .collect();
         assert_eq!(observed, baseline_paths);
+    }
+}
+
+fn canonicalize_adjacency(adjacency: &AdjacencyTableU64) -> Vec<(u64, Vec<(u64, u32)>)> {
+    let mut entries: Vec<(u64, Vec<(u64, u32)>)> = adjacency
+        .forward
+        .iter()
+        .filter_map(|(&node, neighbors)| {
+            let mut sorted_neighbors = neighbors.clone();
+            sorted_neighbors.sort_unstable();
+            if sorted_neighbors.is_empty() {
+                None
+            } else {
+                Some((node, sorted_neighbors))
+            }
+        })
+        .collect();
+    entries.sort_unstable_by_key(|(node, _)| *node);
+    entries
+}
+
+#[test]
+fn cleanup_graph_is_stable_under_randomized_kmer_and_edge_insertion_order() {
+    let k = 3;
+    let kmers = vec![
+        ("TAA", 1),
+        ("AAA", 1),
+        ("AAT", 1),
+        ("ATC", 10),
+        ("GTC", 10),
+        ("TCA", 6),
+        ("TCG", 6),
+        ("CGA", 8),
+    ];
+    let edges = vec![
+        ("TAA", "AAA", 1),
+        ("AAA", "AAT", 1),
+        ("AAT", "ATC", 1),
+        ("GTC", "ATC", 10),
+        ("ATC", "TCA", 6),
+        ("ATC", "TCG", 6),
+        ("TCA", "CGA", 6),
+        ("TCG", "CGA", 6),
+    ];
+
+    let mut baseline_counts = AHashMap::new();
+    for (seq, count) in &kmers {
+        baseline_counts.insert(encode_kmer(seq).unwrap(), *count);
+    }
+    let mut baseline_adjacency = AdjacencyTableU64::new(k as u8);
+    for (from, to, count) in &edges {
+        baseline_adjacency.add_edge(encode_kmer(from).unwrap(), encode_kmer(to).unwrap(), *count);
+    }
+    let baseline_summary = cleanup_graph(&mut baseline_adjacency, &baseline_counts, k, 3);
+    let baseline_graph = canonicalize_adjacency(&baseline_adjacency);
+
+    let mut rng = StdRng::seed_from_u64(0xC1EA_D00D_u64);
+    for _ in 0..128 {
+        let mut shuffled_kmers = kmers.clone();
+        shuffled_kmers.shuffle(&mut rng);
+        let mut counts = AHashMap::new();
+        for (seq, count) in &shuffled_kmers {
+            counts.insert(encode_kmer(seq).unwrap(), *count);
+        }
+
+        let mut shuffled_edges = edges.clone();
+        shuffled_edges.shuffle(&mut rng);
+        let mut adjacency = AdjacencyTableU64::new(k as u8);
+        for (from, to, count) in &shuffled_edges {
+            adjacency.add_edge(encode_kmer(from).unwrap(), encode_kmer(to).unwrap(), *count);
+        }
+
+        let observed_summary = cleanup_graph(&mut adjacency, &counts, k, 3);
+        let observed_graph = canonicalize_adjacency(&adjacency);
+        assert_eq!(observed_summary, baseline_summary);
+        assert_eq!(observed_graph, baseline_graph);
     }
 }
