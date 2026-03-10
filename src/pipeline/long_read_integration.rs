@@ -7,7 +7,7 @@
 //! 4. Anchor long reads to extend/connect contigs
 
 use crate::io::fasta::{open_fasta, FastaWriter};
-use crate::io::fastq::{open_fastq, stream_fastq_records};
+use crate::io::fastq::{stream_fastq_records_checked, try_open_fastq};
 use ahash::{AHashMap, AHashSet};
 use std::cmp::Ordering;
 use std::io::{BufRead, Result};
@@ -323,8 +323,9 @@ pub fn integrate_long_reads(
     let mut links: AHashMap<(usize, usize), ContigLink> = AHashMap::new();
     let mut extensions: AHashMap<usize, Vec<(bool, Vec<u8>)>> = AHashMap::new(); // contig_id -> [(is_right, extension_seq)]
 
-    let reader = open_fastq(long_reads_path);
-    for record in stream_fastq_records(reader) {
+    let reader = try_open_fastq(long_reads_path)?;
+    for record in stream_fastq_records_checked(reader) {
+        let record = record?;
         stats.long_reads_processed += 1;
 
         if record.sequence.len() < config.min_read_length {
@@ -505,7 +506,7 @@ pub fn integrate_long_reads(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::io::{self, Write};
     use tempfile::{NamedTempFile, TempDir};
 
     #[test]
@@ -711,5 +712,29 @@ mod tests {
             LongReadConfig::default(),
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn integrate_long_reads_rejects_truncated_fastq() {
+        let mut contigs = NamedTempFile::new().expect("temp contig fasta");
+        writeln!(contigs, ">contig_1").expect("write header");
+        writeln!(contigs, "ACGTACGTACGT").expect("write sequence");
+
+        let mut reads = NamedTempFile::new().expect("temp long-read fastq");
+        writeln!(reads, "@read_1").expect("write read id");
+        writeln!(reads, "ACGTACGT").expect("write read seq");
+        writeln!(reads, "+").expect("write plus line");
+        reads.flush().expect("flush reads");
+
+        let output = NamedTempFile::new().expect("temp output fasta");
+        let err = integrate_long_reads(
+            contigs.path().to_str().expect("utf8 contigs path"),
+            reads.path().to_str().expect("utf8 reads path"),
+            output.path().to_str().expect("utf8 output path"),
+            LongReadConfig::default(),
+        )
+        .expect_err("truncated FASTQ must return an error");
+
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 }

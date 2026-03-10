@@ -13,13 +13,18 @@ use flate2::Compression;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 
-pub fn open_fastq(path: &str) -> Box<dyn BufRead> {
-    let file = File::open(path).expect("Unable to open FASTQ file");
+pub fn try_open_fastq(path: &str) -> io::Result<Box<dyn BufRead>> {
+    let file = File::open(path)?;
     if path.ends_with(".gz") {
-        Box::new(BufReader::new(MultiGzDecoder::new(file)))
+        Ok(Box::new(BufReader::new(MultiGzDecoder::new(file))))
     } else {
-        Box::new(BufReader::new(file))
+        Ok(Box::new(BufReader::new(file)))
     }
+}
+
+pub fn open_fastq(path: &str) -> Box<dyn BufRead> {
+    try_open_fastq(path)
+        .unwrap_or_else(|err| panic!("Unable to open FASTQ file '{}': {}", path, err))
 }
 
 /// DEPRECATED: Use stream_fastq_records() instead for memory efficiency.
@@ -372,7 +377,7 @@ impl FastqWriter {
 /// # Returns
 /// * Result containing a vector of FastqRecord on success, or an io::Error on failure
 pub fn read_long_reads(path: &str) -> io::Result<Vec<FastqRecord>> {
-    let reader = open_fastq(path);
+    let reader = try_open_fastq(path)?;
     let mut records = Vec::new();
     for record in stream_fastq_records_checked(reader) {
         records.push(record?);
@@ -393,7 +398,17 @@ mod tests {
     use super::*;
     use std::io::Cursor;
     use std::io::Write;
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, TempDir};
+
+    #[test]
+    fn try_open_fastq_returns_not_found_error_for_missing_path() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let missing = temp_dir.path().join("missing.fastq");
+        match try_open_fastq(missing.to_str().expect("utf8 path")) {
+            Ok(_) => panic!("missing file should return io::Error"),
+            Err(err) => assert_eq!(err.kind(), io::ErrorKind::NotFound),
+        }
+    }
 
     #[test]
     fn checked_fastq_parser_reports_truncated_record() {

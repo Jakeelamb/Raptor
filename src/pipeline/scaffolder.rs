@@ -10,7 +10,7 @@
 
 use crate::eval::metrics::evaluate_lengths_sorted_desc;
 use crate::io::fasta::{open_fasta, FastaWriter};
-use crate::io::fastq::{open_fastq, stream_paired_fastq_records};
+use crate::io::fastq::{stream_paired_fastq_records_checked, try_open_fastq};
 use ahash::{AHashMap, AHashSet};
 use std::cmp::Ordering;
 use std::io::{BufRead, Result};
@@ -382,8 +382,8 @@ pub fn scaffold_contigs(
     info!("Mapping paired-end reads...");
     let mut links: AHashMap<(usize, usize), ContigLink> = AHashMap::new();
 
-    let reader1 = open_fastq(reads1_path);
-    let reader2 = open_fastq(reads2_path);
+    let reader1 = try_open_fastq(reads1_path)?;
+    let reader2 = try_open_fastq(reads2_path)?;
 
     // Estimate insert size from first batch of reads
     let mut insert_sizes: Vec<i32> = Vec::new();
@@ -391,7 +391,8 @@ pub fn scaffold_contigs(
     const INSERT_MEDIAN_REFRESH: usize = 256;
     let mut estimated_insert = 500i32;
 
-    for (r1, r2) in stream_paired_fastq_records(reader1, reader2) {
+    for pair in stream_paired_fastq_records_checked(reader1, reader2) {
+        let (r1, r2) = pair?;
         stats.reads_processed += 2;
 
         let hits1 = index.query(r1.sequence.as_bytes());

@@ -14,7 +14,7 @@ use crate::accel::CpuBackend;
 use crate::eval::metrics::{evaluate_lengths_sorted_desc, TranscriptStats};
 use crate::graph::assembler::{greedy_assembly_u64, Contig};
 use crate::io::fasta::FastaWriter;
-use crate::io::fastq::{open_fastq, stream_fastq_records_checked};
+use crate::io::fastq::{stream_fastq_records_checked, try_open_fastq};
 use crate::kmer::disk_counting_v2::{DiskCounterConfig, DiskKmerCounterV2};
 use ahash::AHashMap;
 use std::fs;
@@ -258,7 +258,7 @@ impl StreamingAssembler {
         input_path: &str,
         counter: &mut DiskKmerCounterV2,
     ) -> std::io::Result<(u64, u64)> {
-        let reader = open_fastq(input_path);
+        let reader = try_open_fastq(input_path)?;
         let mut total_reads = 0u64;
         let mut total_bases = 0u64;
 

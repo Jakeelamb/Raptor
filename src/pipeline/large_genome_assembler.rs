@@ -14,7 +14,7 @@
 use crate::eval::metrics::{evaluate_lengths_sorted_desc, BaseComposition};
 use crate::io::fasta::FastaWriter;
 use crate::io::fastq::{
-    open_fastq, stream_fastq_records_checked, stream_paired_fastq_records_checked,
+    stream_fastq_records_checked, stream_paired_fastq_records_checked, try_open_fastq,
 };
 use crate::kmer::disk_counting_v2::{
     decode_kmer, extend_left, extend_right, DiskCounterConfig, DiskKmerCounterV2,
@@ -587,7 +587,7 @@ impl LargeGenomeAssembler {
         path: &str,
         counter: &mut DiskKmerCounterV2,
     ) -> std::io::Result<(u64, u64)> {
-        let reader = open_fastq(path);
+        let reader = try_open_fastq(path)?;
         let mut reads = 0u64;
         let mut bases = 0u64;
 
@@ -625,8 +625,8 @@ impl LargeGenomeAssembler {
         path2: &str,
         counter: &mut DiskKmerCounterV2,
     ) -> std::io::Result<(u64, u64, InsertSizeStats)> {
-        let reader1 = open_fastq(path1);
-        let reader2 = open_fastq(path2);
+        let reader1 = try_open_fastq(path1)?;
+        let reader2 = try_open_fastq(path2)?;
         let mut reads = 0u64;
         let mut bases = 0u64;
         let mut insert_sizes: Vec<usize> = Vec::new();
@@ -1518,7 +1518,7 @@ impl LargeGenomeAssembler {
             return Ok((edge_support, stats));
         }
 
-        let reader = open_fastq(path);
+        let reader = try_open_fastq(path)?;
         for record in stream_fastq_records_checked(reader) {
             let record = record?;
             stats.edge_observations += Self::thread_branch_edges_in_sequence(
@@ -1552,8 +1552,8 @@ impl LargeGenomeAssembler {
             return Ok((edge_support, stats));
         }
 
-        let reader1 = open_fastq(path1);
-        let reader2 = open_fastq(path2);
+        let reader1 = try_open_fastq(path1)?;
+        let reader2 = try_open_fastq(path2)?;
         for pair in stream_paired_fastq_records_checked(reader1, reader2) {
             let (r1, r2) = pair?;
             stats.edge_observations += Self::thread_branch_edges_in_sequence(

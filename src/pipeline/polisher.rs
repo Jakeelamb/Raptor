@@ -8,7 +8,7 @@
 //! 5. Output polished contigs
 
 use crate::io::fasta::{open_fasta, FastaWriter};
-use crate::io::fastq::{open_fastq, stream_fastq_records};
+use crate::io::fastq::{stream_fastq_records_checked, try_open_fastq};
 use ahash::AHashMap;
 use std::io::{BufRead, Result};
 use tracing::info;
@@ -262,8 +262,9 @@ pub fn polish_contigs(
 
         // Process reads from first file
         info!("  Mapping reads from {}...", reads1_path);
-        let reader1 = open_fastq(reads1_path);
-        for record in stream_fastq_records(reader1) {
+        let reader1 = try_open_fastq(reads1_path)?;
+        for record in stream_fastq_records_checked(reader1) {
+            let record = record?;
             stats.reads_processed += 1;
             if let Some((contig_id, start, is_reverse)) = index.map_read(record.sequence.as_bytes())
             {
@@ -280,8 +281,9 @@ pub fn polish_contigs(
         // Process reads from second file if provided
         if let Some(reads2) = reads2_path {
             info!("  Mapping reads from {}...", reads2);
-            let reader2 = open_fastq(reads2);
-            for record in stream_fastq_records(reader2) {
+            let reader2 = try_open_fastq(reads2)?;
+            for record in stream_fastq_records_checked(reader2) {
+                let record = record?;
                 stats.reads_processed += 1;
                 if let Some((contig_id, start, is_reverse)) =
                     index.map_read(record.sequence.as_bytes())

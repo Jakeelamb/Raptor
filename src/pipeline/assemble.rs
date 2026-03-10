@@ -4,7 +4,7 @@ use crate::graph::assembler::{greedy_assembly_u64, Contig};
 use crate::graph::overlap::find_overlaps;
 use crate::graph::stitch::OverlapGraphBuilder;
 use crate::io::fasta::FastaWriter;
-use crate::io::fastq::{open_fastq, stream_fastq_records, FastqRecord};
+use crate::io::fastq::{stream_fastq_records_checked, try_open_fastq, FastqRecord};
 use crate::io::gfa::GfaWriter;
 use crate::io::gfa2::Gfa2Writer;
 use crate::kmer::variable_k::{kmer_coverage_histogram, optimal_k, select_best_k};
@@ -162,7 +162,7 @@ pub fn assemble_reads_with_gpu(
 
     // Stream sequences and count k-mers in chunks for memory efficiency
     info!("Streaming FASTQ records for k-mer counting...");
-    let reader = open_fastq(input_path);
+    let reader = try_open_fastq(input_path)?;
 
     // Pre-size sequences vector based on estimated count
     // Estimate: assume average 4 lines per record, ~200 bytes per line for typical FASTQ
@@ -175,8 +175,8 @@ pub fn assemble_reads_with_gpu(
 
     let mut sequences: Vec<String> = Vec::with_capacity(estimated_count);
     // First pass: collect sequences for k optimization (sample if large)
-    for record in stream_fastq_records(reader) {
-        sequences.push(record.sequence);
+    for record in stream_fastq_records_checked(reader) {
+        sequences.push(record?.sequence);
     }
 
     let num_sequences = sequences.len();
@@ -252,8 +252,8 @@ pub fn assemble_reads_with_gpu(
 
     // Keep records for polishing if needed
     if polish || (isoforms && (polish_isoforms || compute_tpm)) {
-        let reader = open_fastq(input_path);
-        records = stream_fastq_records(reader).collect();
+        let reader = try_open_fastq(input_path)?;
+        records = stream_fastq_records_checked(reader).collect::<io::Result<Vec<_>>>()?;
     }
 
     // Perform greedy assembly using u64 k-mers
@@ -744,9 +744,13 @@ fn derive_contig_expression_map(
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_contig_expression_map, summarize_assembly_quality};
+    use super::{
+        assemble_reads_with_gpu, derive_contig_expression_map, summarize_assembly_quality,
+    };
     use crate::graph::assembler::Contig;
     use ahash::AHashMap;
+    use std::io::{self, Write};
+    use tempfile::NamedTempFile;
 
     #[test]
     fn derive_contig_expression_map_averages_observed_kmer_support() {
@@ -836,5 +840,47 @@ mod tests {
         assert_eq!(summary.contigs_ge_1kb, 1);
         assert!((summary.contigs_ge_1kb_frac - 0.5).abs() < 1e-12);
         assert!((summary.bases_ge_1kb_frac - 0.6).abs() < 1e-12);
+    }
+
+    #[test]
+    fn assemble_reads_with_gpu_rejects_truncated_fastq_input() {
+        let mut input = NamedTempFile::new().expect("create input fastq");
+        writeln!(input, "@read_1").expect("write header");
+        writeln!(input, "ACGTACGT").expect("write sequence");
+        writeln!(input, "+").expect("write plus line");
+        input.flush().expect("flush input");
+
+        let output = NamedTempFile::new().expect("create output path");
+        let err = assemble_reads_with_gpu(
+            input.path().to_str().expect("utf8 input path"),
+            output.path().to_str().expect("utf8 output path"),
+            1,     // min_len
+            false, // output_gfa
+            false, // output_gfa2
+            false, // adaptive_k
+            false, // use_rle
+            false, // collapse_repeats
+            0,     // min_repeat_len
+            false, // polish
+            21,    // polish_window
+            false, // streaming
+            false, // export_metadata
+            None,  // json_metadata
+            None,  // tsv_metadata
+            false, // isoforms
+            None,  // gtf_path
+            None,  // gff3_path
+            100,   // max_path_depth
+            0.0,   // min_confidence
+            false, // compute_tpm
+            false, // polish_isoforms
+            None,  // samples_path
+            0.0,   // min_tpm
+            None,  // long_reads
+            false, // counts_matrix
+            false, // use_gpu
+        )
+        .expect_err("truncated FASTQ must return an error");
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 }
