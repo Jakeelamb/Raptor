@@ -133,6 +133,28 @@ pub struct DiskKmerCounterV2 {
 
 impl DiskKmerCounterV2 {
     pub fn new(config: DiskCounterConfig) -> std::io::Result<Self> {
+        if config.k == 0 || config.k > 32 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "invalid k-mer size {}: supported range is 1..=32 for u64 encoding",
+                    config.k
+                ),
+            ));
+        }
+        if config.num_buckets == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "num_buckets must be greater than zero",
+            ));
+        }
+        if config.write_buffer_size == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "write_buffer_size must be greater than zero",
+            ));
+        }
+
         fs::create_dir_all(&config.temp_dir)?;
         Ok(Self {
             config,
@@ -228,6 +250,16 @@ impl DiskKmerCounterV2 {
     fn count_bucket(path: &Path, min_count: u32) -> std::io::Result<AHashMap<u64, u32>> {
         let file = File::open(path)?;
         let file_size = file.metadata()?.len() as usize;
+        if file_size % 8 != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "bucket file '{}' has invalid byte length {} (not divisible by 8)",
+                    path.display(),
+                    file_size
+                ),
+            ));
+        }
         let num_kmers = file_size / 8;
 
         if num_kmers == 0 {
@@ -239,7 +271,8 @@ impl DiskKmerCounterV2 {
         let mut kmers = Vec::with_capacity(num_kmers);
         let mut buf = [0u8; 8];
 
-        while reader.read_exact(&mut buf).is_ok() {
+        for _ in 0..num_kmers {
+            reader.read_exact(&mut buf)?;
             kmers.push(u64::from_le_bytes(buf));
         }
 
@@ -427,5 +460,53 @@ mod tests {
             assert_eq!(seq.len(), 11);
             assert!(count >= 1);
         }
+    }
+
+    #[test]
+    fn disk_counter_rejects_invalid_config() {
+        let temp_base = std::env::temp_dir();
+
+        let invalid_k = DiskCounterConfig {
+            k: 0,
+            temp_dir: temp_base.join("raptor_test_invalid_k"),
+            ..Default::default()
+        };
+        assert!(DiskKmerCounterV2::new(invalid_k).is_err());
+
+        let invalid_bucket_count = DiskCounterConfig {
+            num_buckets: 0,
+            temp_dir: temp_base.join("raptor_test_invalid_bucket_count"),
+            ..Default::default()
+        };
+        assert!(DiskKmerCounterV2::new(invalid_bucket_count).is_err());
+
+        let invalid_buffer = DiskCounterConfig {
+            write_buffer_size: 0,
+            temp_dir: temp_base.join("raptor_test_invalid_buffer"),
+            ..Default::default()
+        };
+        assert!(DiskKmerCounterV2::new(invalid_buffer).is_err());
+    }
+
+    #[test]
+    fn count_all_rejects_truncated_bucket_files() {
+        let config = DiskCounterConfig {
+            k: 11,
+            num_buckets: 1,
+            min_count: 1,
+            temp_dir: std::env::temp_dir().join("raptor_test_v2_truncated_bucket"),
+            ..Default::default()
+        };
+        let mut counter = DiskKmerCounterV2::new(config).expect("counter should construct");
+        let path = counter.config.temp_dir.join("bucket_00000.bin");
+        fs::create_dir_all(&counter.config.temp_dir).expect("temp dir should exist");
+        fs::write(&path, [1u8, 2, 3]).expect("write truncated bucket payload");
+        counter.bucket_paths = vec![path];
+        counter.bucket_counts = vec![1];
+
+        let err = counter
+            .count_all()
+            .expect_err("truncated bucket must return an error");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 }

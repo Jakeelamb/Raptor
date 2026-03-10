@@ -98,6 +98,28 @@ pub struct OptimizedDiskCounter {
 
 impl OptimizedDiskCounter {
     pub fn new(config: OptimizedDiskConfig) -> std::io::Result<Self> {
+        if config.k == 0 || config.k > 32 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "invalid k-mer size {}: supported range is 1..=32 for u64 encoding",
+                    config.k
+                ),
+            ));
+        }
+        if config.num_buckets == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "num_buckets must be greater than zero",
+            ));
+        }
+        if config.chunk_size == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "chunk_size must be greater than zero",
+            ));
+        }
+
         fs::create_dir_all(&config.temp_dir)?;
         Ok(Self {
             config,
@@ -221,15 +243,15 @@ impl OptimizedDiskCounter {
         let results: Vec<(PathBuf, u64, u64)> = bucket_data
             .into_par_iter()
             .enumerate()
-            .map(|(i, data)| {
+            .map(|(i, data)| -> std::io::Result<(PathBuf, u64, u64)> {
                 let count = data.len() as u64;
                 let ext = if compress { "lz4" } else { "bin" };
                 let path = temp_dir.join(format!("bucket_{:05}.{}", i, ext));
 
                 if count == 0 {
                     // Create empty file
-                    File::create(&path).ok();
-                    return (path, 0, 0);
+                    File::create(&path)?;
+                    return Ok((path, 0, 0));
                 }
 
                 // Convert to bytes
@@ -237,18 +259,20 @@ impl OptimizedDiskCounter {
 
                 let compressed_size = if compress {
                     let compressed = compress_prepend_size(&raw_bytes);
-                    let mut file = BufWriter::new(File::create(&path).unwrap());
-                    file.write_all(&compressed).unwrap();
+                    let mut file = BufWriter::new(File::create(&path)?);
+                    file.write_all(&compressed)?;
+                    file.flush()?;
                     compressed.len() as u64
                 } else {
-                    let mut file = BufWriter::new(File::create(&path).unwrap());
-                    file.write_all(&raw_bytes).unwrap();
+                    let mut file = BufWriter::new(File::create(&path)?);
+                    file.write_all(&raw_bytes)?;
+                    file.flush()?;
                     raw_bytes.len() as u64
                 };
 
-                (path, count, compressed_size)
+                Ok((path, count, compressed_size))
             })
-            .collect();
+            .collect::<std::io::Result<Vec<_>>>()?;
 
         self.bucket_paths = results.iter().map(|(p, _, _)| p.clone()).collect();
         self.bucket_counts = results.iter().map(|(_, c, _)| *c).collect();
@@ -294,6 +318,16 @@ impl OptimizedDiskCounter {
         if mmap.is_empty() {
             return Ok(AHashMap::new());
         }
+        if mmap.len() % 8 != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "bucket file '{}' has invalid byte length {} (not divisible by 8)",
+                    path.display(),
+                    mmap.len()
+                ),
+            ));
+        }
 
         let num_kmers = mmap.len() / 8;
         let mut kmers: Vec<u64> = Vec::with_capacity(num_kmers);
@@ -317,6 +351,16 @@ impl OptimizedDiskCounter {
         // Decompress
         let decompressed = decompress_size_prepended(&mmap)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        if decompressed.len() % 8 != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "compressed bucket '{}' decoded to invalid byte length {} (not divisible by 8)",
+                    path.display(),
+                    decompressed.len()
+                ),
+            ));
+        }
 
         let num_kmers = decompressed.len() / 8;
         let mut kmers: Vec<u64> = Vec::with_capacity(num_kmers);
@@ -483,5 +527,55 @@ mod tests {
 
         let counts = counter.count_all().unwrap();
         assert!(!counts.is_empty());
+    }
+
+    #[test]
+    fn optimized_counter_rejects_invalid_config() {
+        let temp_base = std::env::temp_dir();
+
+        let invalid_k = OptimizedDiskConfig {
+            k: 0,
+            temp_dir: temp_base.join("raptor_test_opt_invalid_k"),
+            ..Default::default()
+        };
+        assert!(OptimizedDiskCounter::new(invalid_k).is_err());
+
+        let invalid_bucket_count = OptimizedDiskConfig {
+            num_buckets: 0,
+            temp_dir: temp_base.join("raptor_test_opt_invalid_bucket_count"),
+            ..Default::default()
+        };
+        assert!(OptimizedDiskCounter::new(invalid_bucket_count).is_err());
+
+        let invalid_chunk_size = OptimizedDiskConfig {
+            chunk_size: 0,
+            temp_dir: temp_base.join("raptor_test_opt_invalid_chunk_size"),
+            ..Default::default()
+        };
+        assert!(OptimizedDiskCounter::new(invalid_chunk_size).is_err());
+    }
+
+    #[test]
+    fn optimized_counter_rejects_truncated_bucket_file() {
+        let config = OptimizedDiskConfig {
+            k: 11,
+            num_buckets: 1,
+            min_count: 1,
+            temp_dir: std::env::temp_dir().join("raptor_test_opt_truncated_bucket"),
+            compression_enabled: false,
+            parallel_distribution: false,
+            ..Default::default()
+        };
+        let mut counter = OptimizedDiskCounter::new(config).expect("counter should construct");
+        let path = counter.config.temp_dir.join("bucket_00000.bin");
+        fs::create_dir_all(&counter.config.temp_dir).expect("temp dir should exist");
+        fs::write(&path, [1u8, 2, 3]).expect("write truncated bucket payload");
+        counter.bucket_paths = vec![path];
+        counter.bucket_counts = vec![1];
+
+        let err = counter
+            .count_all()
+            .expect_err("truncated bucket must return an error");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 }
