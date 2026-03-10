@@ -43,6 +43,12 @@ struct AssemblyQualitySummary {
     acgt_bases: usize,
     n_bases: usize,
     ambiguous_bases: usize,
+    contigs_with_n: usize,
+    contigs_with_ambiguous: usize,
+    contigs_all_acgt: usize,
+    contigs_with_n_frac: f64,
+    contigs_with_ambiguous_frac: f64,
+    contigs_all_acgt_frac: f64,
     mean_rle_ratio: f64,
     length_weighted_rle_ratio: f64,
     total_rle_runs: usize,
@@ -80,9 +86,18 @@ struct NRunSummary {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+struct ContigQualitySummary {
+    with_n: usize,
+    with_ambiguous: usize,
+    all_acgt: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
 struct SequenceAnalysis {
     ungapped_len: usize,
     rle_runs: usize,
+    has_n: bool,
+    has_ambiguous: bool,
 }
 
 #[inline]
@@ -104,6 +119,8 @@ fn analyze_sequence(
     let mut rle_runs = 0usize;
     let mut previous_base = None;
     let mut run_len = 0usize;
+    let mut has_n = false;
+    let mut has_ambiguous = false;
 
     for &base in sequence {
         if previous_base != Some(base) {
@@ -133,9 +150,11 @@ fn analyze_sequence(
                 composition.n_bases += 1;
                 ungapped_len = ungapped_len.saturating_sub(1);
                 run_len += 1;
+                has_n = true;
             }
             _ => {
                 composition.ambiguous_bases += 1;
+                has_ambiguous = true;
                 if run_len > 0 {
                     n_runs.count += 1;
                     n_runs.longest = n_runs.longest.max(run_len);
@@ -153,6 +172,8 @@ fn analyze_sequence(
     SequenceAnalysis {
         ungapped_len,
         rle_runs,
+        has_n,
+        has_ambiguous,
     }
 }
 
@@ -162,6 +183,7 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
     let mut ungapped_lengths = Vec::with_capacity(contigs.len());
     let mut composition = BaseComposition::default();
     let mut n_runs = NRunSummary::default();
+    let mut contig_quality = ContigQualitySummary::default();
     let mut total_rle_ratio_scaled = 0u128;
     let mut total_rle_runs = 0usize;
 
@@ -172,6 +194,15 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
         let analysis = analyze_sequence(sequence, &mut composition, &mut n_runs);
         ungapped_lengths.push(analysis.ungapped_len);
         total_rle_runs = total_rle_runs.saturating_add(analysis.rle_runs);
+        if analysis.has_n {
+            contig_quality.with_n += 1;
+        }
+        if analysis.has_ambiguous {
+            contig_quality.with_ambiguous += 1;
+        }
+        if !analysis.has_n && !analysis.has_ambiguous {
+            contig_quality.all_acgt += 1;
+        }
         if contig_len == 0 {
             total_rle_ratio_scaled = total_rle_ratio_scaled.saturating_add(RLE_RATIO_SCALE);
         } else {
@@ -205,6 +236,17 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
     } else {
         0.0
     };
+    let total_contigs = length_stats.total as f64;
+    let (contigs_with_n_frac, contigs_with_ambiguous_frac, contigs_all_acgt_frac) =
+        if total_contigs > 0.0 {
+            (
+                contig_quality.with_n as f64 / total_contigs,
+                contig_quality.with_ambiguous as f64 / total_contigs,
+                contig_quality.all_acgt as f64 / total_contigs,
+            )
+        } else {
+            (0.0, 0.0, 0.0)
+        };
     AssemblyQualitySummary {
         total_contigs: length_stats.total,
         total_bases: length_stats.total_bases,
@@ -234,6 +276,12 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
         acgt_bases: composition.acgt_bases,
         n_bases: composition.n_bases,
         ambiguous_bases: composition.ambiguous_bases,
+        contigs_with_n: contig_quality.with_n,
+        contigs_with_ambiguous: contig_quality.with_ambiguous,
+        contigs_all_acgt: contig_quality.all_acgt,
+        contigs_with_n_frac,
+        contigs_with_ambiguous_frac,
+        contigs_all_acgt_frac,
         mean_rle_ratio,
         length_weighted_rle_ratio,
         total_rle_runs,
@@ -315,6 +363,24 @@ fn write_assembly_quality_reports(
         ("acgt_bases", quality.acgt_bases.to_string()),
         ("n_bases", quality.n_bases.to_string()),
         ("ambiguous_bases", quality.ambiguous_bases.to_string()),
+        ("contigs_with_n", quality.contigs_with_n.to_string()),
+        (
+            "contigs_with_ambiguous",
+            quality.contigs_with_ambiguous.to_string(),
+        ),
+        ("contigs_all_acgt", quality.contigs_all_acgt.to_string()),
+        (
+            "contigs_with_n_frac",
+            format!("{:.12}", quality.contigs_with_n_frac),
+        ),
+        (
+            "contigs_with_ambiguous_frac",
+            format!("{:.12}", quality.contigs_with_ambiguous_frac),
+        ),
+        (
+            "contigs_all_acgt_frac",
+            format!("{:.12}", quality.contigs_all_acgt_frac),
+        ),
         ("mean_rle_ratio", format!("{:.12}", quality.mean_rle_ratio)),
         (
             "length_weighted_rle_ratio",
@@ -659,7 +725,7 @@ pub fn assemble_reads_with_gpu(
 
     let quality = summarize_assembly_quality(&contigs);
     info!(
-        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN: {:.1}, Ungapped bases/N50/auN: {}/{}/{:.1}, Longest: {} bp ({:.2}%), GC/N/Ambiguous bases: {}/{}/{} (fractions {:.2}%/{:.2}%/{:.2}%), RLE mean/weighted runs ratio: {:.4}/{:.4} ({} runs), N-runs: count {}, max {}, mean {:.1} bp ({:.1} per 100kb), N/Ambiguous bases per 100kb: {:.1}/{:.1}, >=1kb/10kb/50kb/100kb contigs: {}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%)",
+        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN: {:.1}, Ungapped bases/N50/auN: {}/{}/{:.1}, Longest: {} bp ({:.2}%), GC/N/Ambiguous bases: {}/{}/{} (fractions {:.2}%/{:.2}%/{:.2}%), Contigs with N/Ambiguous/All-ACGT: {}/{}/{} ({:.2}%/{:.2}%/{:.2}%), RLE mean/weighted runs ratio: {:.4}/{:.4} ({} runs), N-runs: count {}, max {}, mean {:.1} bp ({:.1} per 100kb), N/Ambiguous bases per 100kb: {:.1}/{:.1}, >=1kb/10kb/50kb/100kb contigs: {}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%)",
         quality.total_contigs,
         quality.total_bases,
         quality.avg_length,
@@ -690,6 +756,12 @@ pub fn assemble_reads_with_gpu(
         quality.gc_content * 100.0,
         quality.n_content * 100.0,
         quality.ambiguous_content * 100.0,
+        quality.contigs_with_n,
+        quality.contigs_with_ambiguous,
+        quality.contigs_all_acgt,
+        quality.contigs_with_n_frac * 100.0,
+        quality.contigs_with_ambiguous_frac * 100.0,
+        quality.contigs_all_acgt_frac * 100.0,
         quality.mean_rle_ratio,
         quality.length_weighted_rle_ratio,
         quality.total_rle_runs,
@@ -1332,6 +1404,12 @@ mod tests {
         assert_eq!(summary.acgt_bases, 9);
         assert_eq!(summary.n_bases, 1);
         assert_eq!(summary.ambiguous_bases, 2);
+        assert_eq!(summary.contigs_with_n, 1);
+        assert_eq!(summary.contigs_with_ambiguous, 1);
+        assert_eq!(summary.contigs_all_acgt, 1);
+        assert!((summary.contigs_with_n_frac - (1.0 / 3.0)).abs() < 1e-12);
+        assert!((summary.contigs_with_ambiguous_frac - (1.0 / 3.0)).abs() < 1e-12);
+        assert!((summary.contigs_all_acgt_frac - (1.0 / 3.0)).abs() < 1e-12);
         assert!((summary.mean_rle_ratio - 0.75).abs() < 1e-12);
         assert!((summary.length_weighted_rle_ratio - 0.75).abs() < 1e-12);
         assert_eq!(summary.total_rle_runs, 9);
@@ -1446,6 +1524,12 @@ mod tests {
         assert!((summary.bases_ge_10kb_frac - (160_000.0 / 161_999.0)).abs() < 1e-12);
         assert!((summary.bases_ge_50kb_frac - (150_000.0 / 161_999.0)).abs() < 1e-12);
         assert!((summary.bases_ge_100kb_frac - (100_000.0 / 161_999.0)).abs() < 1e-12);
+        assert_eq!(summary.contigs_with_n, 1);
+        assert_eq!(summary.contigs_with_ambiguous, 0);
+        assert_eq!(summary.contigs_all_acgt, 4);
+        assert!((summary.contigs_with_n_frac - 0.2).abs() < 1e-12);
+        assert_eq!(summary.contigs_with_ambiguous_frac, 0.0);
+        assert!((summary.contigs_all_acgt_frac - 0.8).abs() < 1e-12);
         assert_eq!(summary.n_runs, 1);
         assert_eq!(summary.longest_n_run, 999);
         assert!((summary.mean_n_run_length - 999.0).abs() < 1e-12);
@@ -1479,6 +1563,12 @@ mod tests {
         let summary = summarize_assembly_quality(&contigs);
         assert_eq!(summary.n_bases, 6);
         assert_eq!(summary.ungapped_total_bases, 10);
+        assert_eq!(summary.contigs_with_n, 2);
+        assert_eq!(summary.contigs_with_ambiguous, 0);
+        assert_eq!(summary.contigs_all_acgt, 1);
+        assert!((summary.contigs_with_n_frac - (2.0 / 3.0)).abs() < 1e-12);
+        assert_eq!(summary.contigs_with_ambiguous_frac, 0.0);
+        assert!((summary.contigs_all_acgt_frac - (1.0 / 3.0)).abs() < 1e-12);
         assert_eq!(summary.n_runs, 3);
         assert_eq!(summary.longest_n_run, 3);
         assert!((summary.mean_n_run_length - 2.0).abs() < 1e-12);
@@ -1605,6 +1695,12 @@ mod tests {
             acgt_bases: 1100,
             n_bases: 90,
             ambiguous_bases: 44,
+            contigs_with_n: 2,
+            contigs_with_ambiguous: 1,
+            contigs_all_acgt: 2,
+            contigs_with_n_frac: 0.4,
+            contigs_with_ambiguous_frac: 0.2,
+            contigs_all_acgt_frac: 0.4,
             mean_rle_ratio: 0.75,
             length_weighted_rle_ratio: 0.8,
             total_rle_runs: 987,
@@ -1669,6 +1765,12 @@ mod tests {
             parsed["ambiguous_bases_per_100kb"],
             44.0 * 100_000.0 / 1234.0
         );
+        assert_eq!(parsed["contigs_with_n"], 2);
+        assert_eq!(parsed["contigs_with_ambiguous"], 1);
+        assert_eq!(parsed["contigs_all_acgt"], 2);
+        assert_eq!(parsed["contigs_with_n_frac"], 0.4);
+        assert_eq!(parsed["contigs_with_ambiguous_frac"], 0.2);
+        assert_eq!(parsed["contigs_all_acgt_frac"], 0.4);
 
         let tsv = std::fs::read_to_string(&tsv_path).expect("read tsv report");
         let mut lines = tsv.lines();
@@ -1692,6 +1794,12 @@ mod tests {
         assert!(tsv.contains("n_runs_per_100kb\t324.149108589951"));
         assert!(tsv.contains("n_bases_per_100kb\t7293.354943273906"));
         assert!(tsv.contains("ambiguous_bases_per_100kb\t3565.640194489465"));
+        assert!(tsv.contains("contigs_with_n\t2"));
+        assert!(tsv.contains("contigs_with_ambiguous\t1"));
+        assert!(tsv.contains("contigs_all_acgt\t2"));
+        assert!(tsv.contains("contigs_with_n_frac\t0.400000000000"));
+        assert!(tsv.contains("contigs_with_ambiguous_frac\t0.200000000000"));
+        assert!(tsv.contains("contigs_all_acgt_frac\t0.400000000000"));
         assert!(tsv.contains("bases_ge_1kb_frac\t0.810000000000"));
     }
 }
