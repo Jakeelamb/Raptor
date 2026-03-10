@@ -208,15 +208,18 @@ fn main() {
                     println!("{}", serde_json::to_string_pretty(&stats).unwrap());
                 }
                 "tsv" => {
-                    println!("contigs\ttotal_len\tavg_len\tn50\tn90\tl50\tlongest");
+                    println!("contigs\ttotal_len\tavg_len\tn50\tn75\tn90\tl50\tl90\taun\tlongest");
                     println!(
-                        "{}\t{}\t{:.2}\t{}\t{}\t{}\t{}",
+                        "{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}",
                         stats.total_contigs,
                         stats.total_length,
                         stats.average_length,
                         stats.n50,
+                        stats.n75,
                         stats.n90,
                         stats.l50,
+                        stats.l90,
+                        stats.au_n,
                         stats.longest_contig
                     );
                 }
