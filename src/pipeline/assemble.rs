@@ -127,33 +127,28 @@ pub fn assemble_reads_with_gpu(
         .max(10_000); // At least 10k capacity
 
     let mut sequences: Vec<String> = Vec::with_capacity(estimated_count);
-    let mut num_sequences = 0;
-
-    // Chunk size for streaming processing (adjust based on available memory)
-    const CHUNK_SIZE: usize = 100_000;
-
     // First pass: collect sequences for k optimization (sample if large)
     for record in stream_fastq_records(reader) {
         sequences.push(record.sequence);
-        num_sequences += 1;
     }
 
+    let num_sequences = sequences.len();
     info!("Loaded {} sequences", num_sequences);
 
     // Create the appropriate compute backend
     let backend = create_backend(use_gpu, num_sequences, num_sequences / 10 + 100);
     info!("Using compute backend: {}", backend.name());
 
-    // Determine k-mer size from sample
+    // Determine k-mer size from a bounded prefix sample without cloning.
     let sample_size = sequences.len().min(10_000);
-    let sample: Vec<String> = sequences.iter().take(sample_size).cloned().collect();
+    let sample = &sequences[..sample_size];
 
     if _adaptive_k {
-        let hist = kmer_coverage_histogram(&sample, max_k);
+        let hist = kmer_coverage_histogram(sample, max_k);
         k = select_best_k(&hist);
         info!("Using adaptive k-mer: {}", k);
     } else {
-        k = optimal_k(&sample, max_k);
+        k = optimal_k(sample, max_k);
         info!("Using optimal k-mer size: {}", k);
     }
 
