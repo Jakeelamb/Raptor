@@ -76,7 +76,23 @@ impl CpuBackend {
             std::mem::swap(&mut left, &mut right);
         }
         for (kmer, count) in right {
-            *left.entry(kmer).or_insert(0) += count;
+            let entry = left.entry(kmer).or_insert(0u32);
+            *entry = entry.saturating_add(count);
+        }
+        left
+    }
+
+    #[inline]
+    fn merge_string_count_maps(
+        mut left: HashMap<String, u32>,
+        mut right: HashMap<String, u32>,
+    ) -> HashMap<String, u32> {
+        if left.len() < right.len() {
+            std::mem::swap(&mut left, &mut right);
+        }
+        for (kmer, count) in right {
+            let entry = left.entry(kmer).or_insert(0u32);
+            *entry = entry.saturating_add(count);
         }
         left
     }
@@ -96,7 +112,8 @@ impl CpuBackend {
                 || AHashMap::with_capacity(1024),
                 |mut counts, seq| {
                     Self::for_each_canonical_kmer_u64(seq.as_bytes(), k, |canonical| {
-                        *counts.entry(canonical).or_insert(0) += 1;
+                        let entry = counts.entry(canonical).or_insert(0u32);
+                        *entry = entry.saturating_add(1);
                     });
                     counts
                 },
@@ -205,7 +222,8 @@ impl CpuBackend {
                 |mut counts, seq| {
                     Self::for_each_canonical_kmer_u64(seq.as_bytes(), k, |canonical| {
                         if bloom.count_at_least(canonical, min_count as u8) {
-                            *counts.entry(canonical).or_insert(0) += 1;
+                            let entry = counts.entry(canonical).or_insert(0u32);
+                            *entry = entry.saturating_add(1);
                         }
                     });
                     counts
@@ -257,8 +275,8 @@ impl CpuBackend {
 impl ComputeBackend for CpuBackend {
     #[allow(deprecated)]
     fn count_kmers(&self, sequences: &[String], k: usize) -> HashMap<String, u32> {
-        // Parallel k-mer counting with thread-local hashmaps
-        let thread_counts: Vec<HashMap<String, u32>> = sequences
+        // Parallel k-mer counting with thread-local hashmaps reduced in place.
+        sequences
             .par_iter()
             .fold(
                 || HashMap::new(),
@@ -266,24 +284,15 @@ impl ComputeBackend for CpuBackend {
                     if seq.len() >= k {
                         for i in 0..=seq.len() - k {
                             if let Some(kmer) = canonical_kmer(&seq[i..i + k]) {
-                                *counts.entry(kmer).or_insert(0) += 1;
+                                let entry = counts.entry(kmer).or_insert(0u32);
+                                *entry = entry.saturating_add(1);
                             }
                         }
                     }
                     counts
                 },
             )
-            .collect();
-
-        // Merge thread-local counts
-        let mut merged = HashMap::new();
-        for local in thread_counts {
-            for (kmer, count) in local {
-                *merged.entry(kmer).or_insert(0) += count;
-            }
-        }
-
-        merged
+            .reduce(HashMap::new, Self::merge_string_count_maps)
     }
 
     /// Optimized overlap detection using minimizer indexing.
@@ -373,7 +382,7 @@ impl ComputeBackend for CpuBackend {
         // Deduplicate (keep longest overlap per pair)
         let mut best_overlaps: AHashMap<(usize, usize), usize> = AHashMap::new();
         for (from, to, len) in results {
-            let entry = best_overlaps.entry((from, to)).or_insert(0);
+            let entry = best_overlaps.entry((from, to)).or_insert(0usize);
             if len > *entry {
                 *entry = len;
             }
@@ -611,5 +620,27 @@ mod tests {
             .collect();
 
         assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn merge_u64_count_maps_saturates_on_overflow() {
+        let mut left = AHashMap::new();
+        left.insert(42_u64, u32::MAX - 1);
+        let mut right = AHashMap::new();
+        right.insert(42_u64, 10);
+
+        let merged = CpuBackend::merge_u64_count_maps(left, right);
+        assert_eq!(merged.get(&42_u64).copied(), Some(u32::MAX));
+    }
+
+    #[test]
+    fn count_kmers_string_path_saturates_extreme_counts() {
+        let mut left = HashMap::new();
+        left.insert("AAA".to_string(), u32::MAX);
+        let mut right = HashMap::new();
+        right.insert("AAA".to_string(), 7u32);
+
+        let merged = CpuBackend::merge_string_count_maps(left, right);
+        assert_eq!(merged.get("AAA").copied(), Some(u32::MAX));
     }
 }
