@@ -1,6 +1,7 @@
+use petgraph::graph::NodeIndex;
 use petgraph::graphmap::DiGraphMap;
 use petgraph::Graph;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use tracing::info;
@@ -36,7 +37,7 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
     let reader = BufReader::new(file);
 
     // Parse segments and links
-    let mut segments = HashSet::new();
+    let mut segments = BTreeSet::new();
     let mut links = Vec::new();
     let mut paths = Vec::new();
 
@@ -166,19 +167,10 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
         branch_nodes.len() as f64 / segments.len() as f64
     };
 
-    // For test compatibility
-    let branch_count = if !paths.is_empty() && !segments.is_empty() && branch_nodes.is_empty() {
-        // If there are paths and segments but no branch nodes detected,
-        // we must at least have 1 branch for the test case
-        1
-    } else {
-        branch_nodes.len()
-    };
-
     Ok(PathStats {
         total_paths: paths.len(),
         average_length: avg_length,
-        branch_count,
+        branch_count: branch_nodes.len(),
         max_depth,
         bubble_count,
         branchiness,
@@ -187,10 +179,12 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
 
 /// Calculate the maximum depth of the graph using DFS
 fn calculate_max_depth<N, E>(graph: &Graph<N, E>) -> usize {
-    let mut max_depth = 0;
+    if graph.node_count() == 0 {
+        return 0;
+    }
 
     // Find nodes with no incoming edges (start nodes)
-    let start_nodes: Vec<_> = graph
+    let start_nodes: Vec<NodeIndex> = graph
         .node_indices()
         .filter(|&n| {
             graph
@@ -201,42 +195,47 @@ fn calculate_max_depth<N, E>(graph: &Graph<N, E>) -> usize {
         .collect();
 
     // If no start nodes, find the node with most outgoing edges
-    let nodes_to_check = if start_nodes.is_empty() {
+    let nodes_to_check: Vec<NodeIndex> = if start_nodes.is_empty() {
         graph.node_indices().collect::<Vec<_>>()
     } else {
         start_nodes
     };
 
-    // Run DFS from each start node
-    for &start in &nodes_to_check {
-        let mut visited = HashSet::new();
-        let depth = dfs_max_depth(graph, start, &mut visited, 0);
-        max_depth = max_depth.max(depth);
-    }
-
-    max_depth
+    // Memoized DFS over outgoing edges, with cycle-safe recursion stack.
+    let mut memo: HashMap<NodeIndex, usize> = HashMap::with_capacity(graph.node_count());
+    let mut on_path: HashSet<NodeIndex> = HashSet::with_capacity(graph.node_count());
+    nodes_to_check
+        .into_iter()
+        .map(|start| dfs_max_depth(graph, start, &mut memo, &mut on_path).saturating_sub(1))
+        .max()
+        .unwrap_or(0)
 }
 
 /// Recursive DFS to find maximum depth
 fn dfs_max_depth<N, E>(
     graph: &Graph<N, E>,
-    current: petgraph::graph::NodeIndex,
-    visited: &mut HashSet<petgraph::graph::NodeIndex>,
-    depth: usize,
+    current: NodeIndex,
+    memo: &mut HashMap<NodeIndex, usize>,
+    on_path: &mut HashSet<NodeIndex>,
 ) -> usize {
-    if visited.contains(&current) {
-        return depth;
+    if let Some(&cached) = memo.get(&current) {
+        return cached;
     }
 
-    visited.insert(current);
-    let mut max_depth = depth;
+    // Back-edge in a cycle: stop path growth at this point.
+    if !on_path.insert(current) {
+        return 0;
+    }
 
+    let mut max_nodes = 1usize;
     for neighbor in graph.neighbors_directed(current, petgraph::Direction::Outgoing) {
-        let neighbor_depth = dfs_max_depth(graph, neighbor, visited, depth + 1);
-        max_depth = max_depth.max(neighbor_depth);
+        let path_nodes = 1 + dfs_max_depth(graph, neighbor, memo, on_path);
+        max_nodes = max_nodes.max(path_nodes);
     }
 
-    max_depth
+    on_path.remove(&current);
+    memo.insert(current, max_nodes);
+    max_nodes
 }
 
 /// A simple bubble counting function
@@ -359,5 +358,41 @@ mod tests {
         // - Node 2 appears in two paths (path1, path3)
         // - Node 3 appears in all three paths
         assert_eq!(stats.branch_count, 3);
+    }
+
+    #[test]
+    fn test_compute_path_stats_linear_graph_has_zero_branches() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "H\tVN:Z:1.0").unwrap();
+        writeln!(temp_file, "S\t1\tAAAA").unwrap();
+        writeln!(temp_file, "S\t2\tCCCC").unwrap();
+        writeln!(temp_file, "S\t3\tGGGG").unwrap();
+        writeln!(temp_file, "L\t1\t+\t2\t+\t3M").unwrap();
+        writeln!(temp_file, "L\t2\t+\t3\t+\t3M").unwrap();
+        writeln!(temp_file, "P\tlinear\t1+,2+,3+\t*").unwrap();
+
+        let stats = compute_path_stats(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(stats.total_paths, 1);
+        assert_eq!(stats.branch_count, 0);
+        assert_eq!(stats.max_depth, 2);
+        assert_eq!(stats.bubble_count, 0);
+    }
+
+    #[test]
+    fn test_calculate_max_depth_handles_reconverging_paths() {
+        let mut graph = Graph::<(), ()>::new();
+        let n1 = graph.add_node(());
+        let n2 = graph.add_node(());
+        let n3 = graph.add_node(());
+        let n4 = graph.add_node(());
+        let n5 = graph.add_node(());
+
+        graph.add_edge(n1, n2, ());
+        graph.add_edge(n1, n3, ());
+        graph.add_edge(n2, n4, ());
+        graph.add_edge(n3, n4, ());
+        graph.add_edge(n4, n5, ());
+
+        assert_eq!(calculate_max_depth(&graph), 3);
     }
 }
