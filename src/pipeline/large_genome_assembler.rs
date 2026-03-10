@@ -79,6 +79,9 @@ pub struct AssemblyStats {
     pub gc_content: f64,
     pub n_content: f64,
     pub ambiguous_content: f64,
+    pub n_run_count: usize,
+    pub max_n_run: usize,
+    pub mean_n_run_length: f64,
     pub n10: usize,
     pub n25: usize,
     pub n50: usize,
@@ -155,6 +158,11 @@ impl std::fmt::Display for AssemblyStats {
             f,
             "Ambiguous content: {:.2}%",
             self.ambiguous_content * 100.0
+        )?;
+        writeln!(
+            f,
+            "N runs: {} (max {}, mean {:.2} bp)",
+            self.n_run_count, self.max_n_run, self.mean_n_run_length
         )?;
         writeln!(f, "Mean contig: {:.2} bp", self.avg_contig_len)?;
         writeln!(f, "Median contig: {:.2} bp", self.median_contig_len)?;
@@ -253,6 +261,42 @@ struct ReadThreadingStats {
     ambiguous_edges: usize,
     supported_edges: usize,
     edge_observations: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct NRunSummary {
+    run_count: usize,
+    max_run: usize,
+}
+
+impl NRunSummary {
+    #[inline]
+    fn add_sequence(&mut self, sequence: &[u8]) {
+        let mut run_len = 0usize;
+        for &base in sequence {
+            if matches!(base, b'N' | b'n') {
+                run_len += 1;
+            } else if run_len > 0 {
+                self.run_count += 1;
+                self.max_run = self.max_run.max(run_len);
+                run_len = 0;
+            }
+        }
+
+        if run_len > 0 {
+            self.run_count += 1;
+            self.max_run = self.max_run.max(run_len);
+        }
+    }
+
+    #[inline]
+    fn mean_run_length(self, total_n_bases: usize) -> f64 {
+        if self.run_count == 0 {
+            0.0
+        } else {
+            total_n_bases as f64 / self.run_count as f64
+        }
+    }
 }
 
 impl InsertSizeStats {
@@ -2384,11 +2428,14 @@ impl LargeGenomeAssembler {
 
         let mut lengths: Vec<usize> = Vec::with_capacity(valid.len());
         let mut composition = BaseComposition::default();
+        let mut n_runs = NRunSummary::default();
 
         for (i, contig) in valid.iter().enumerate() {
             writer.write_record(&format!("contig_{} len={}", i + 1, contig.len()), contig)?;
             lengths.push(contig.len());
-            composition.add_sequence(contig.as_bytes());
+            let sequence = contig.as_bytes();
+            composition.add_sequence(sequence);
+            n_runs.add_sequence(sequence);
         }
 
         let contig_stats = evaluate_lengths_sorted_desc(&lengths);
@@ -2403,6 +2450,9 @@ impl LargeGenomeAssembler {
         stats.gc_content = composition.gc_content();
         stats.n_content = composition.n_content(total_bases);
         stats.ambiguous_content = composition.ambiguous_content(total_bases);
+        stats.n_run_count = n_runs.run_count;
+        stats.max_n_run = n_runs.max_run;
+        stats.mean_n_run_length = n_runs.mean_run_length(composition.n_bases);
         stats.n10 = contig_stats.n10;
         stats.n25 = contig_stats.n25;
         stats.n50 = contig_stats.n50;
@@ -2968,6 +3018,9 @@ mod tests {
         assert!((stats.gc_content - (75.0 / 175.0)).abs() < 1e-12);
         assert_eq!(stats.n_content, 0.0);
         assert_eq!(stats.ambiguous_content, 0.0);
+        assert_eq!(stats.n_run_count, 0);
+        assert_eq!(stats.max_n_run, 0);
+        assert_eq!(stats.mean_n_run_length, 0.0);
         assert!((stats.avg_contig_len - (175.0 / 3.0)).abs() < 1e-12);
         assert!((stats.au_n - 75.0).abs() < 1e-12);
     }
@@ -2997,6 +3050,36 @@ mod tests {
         assert!((stats.gc_content - (4.0 / 6.0)).abs() < 1e-12);
         assert!((stats.n_content - 0.2).abs() < 1e-12);
         assert!((stats.ambiguous_content - 0.2).abs() < 1e-12);
+        assert_eq!(stats.n_run_count, 1);
+        assert_eq!(stats.max_n_run, 2);
+        assert!((stats.mean_n_run_length - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_write_output_reports_n_run_metrics() {
+        let output = NamedTempFile::new().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            min_contig_len: 1,
+            num_buckets: Some(4),
+            temp_dir: Some(temp_dir.path().to_str().unwrap().to_string()),
+            ..Default::default()
+        });
+
+        let contigs = vec![
+            "AANNNNCC".to_string(), // run len 4
+            "NNA".to_string(),      // run len 2
+            "NNN".to_string(),      // run len 3
+        ];
+        let mut stats = AssemblyStats::default();
+        assembler
+            .write_output(&contigs, output.path().to_str().unwrap(), &mut stats)
+            .unwrap();
+
+        assert_eq!(stats.n_bases, 9);
+        assert_eq!(stats.n_run_count, 3);
+        assert_eq!(stats.max_n_run, 4);
+        assert!((stats.mean_n_run_length - 3.0).abs() < 1e-12);
     }
 
     #[test]
