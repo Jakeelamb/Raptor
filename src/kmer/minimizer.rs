@@ -34,9 +34,12 @@ pub struct Minimizer {
 /// Vector of (hash, position) minimizers
 ///
 /// # Example
-/// ```ignore
+/// ```
+/// use raptor::kmer::minimizer::get_minimizers;
+///
 /// let minimizers = get_minimizers(b"ACGTACGTACGT", 4, 3);
 /// // Returns minimizers for each window of 3 consecutive 4-mers
+/// assert!(!minimizers.is_empty());
 /// ```
 pub fn get_minimizers(seq: &[u8], k: usize, w: usize) -> Vec<Minimizer> {
     if seq.len() < k || w == 0 {

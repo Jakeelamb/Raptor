@@ -36,9 +36,11 @@ impl BloomFilter {
     /// * `fp_rate` - Desired false positive rate (e.g., 0.01 for 1%)
     ///
     /// # Example
-    /// ```ignore
-    /// // Create filter for 10 million k-mers with 1% FP rate
-    /// let bloom = BloomFilter::with_fp_rate(10_000_000, 0.01);
+    /// ```
+    /// use raptor::kmer::bloom::BloomFilter;
+    ///
+    /// let bloom = BloomFilter::with_fp_rate(10_000, 0.01);
+    /// assert!(bloom.num_bits() > 0);
     /// ```
     pub fn with_fp_rate(expected_items: usize, fp_rate: f64) -> Self {
         // Optimal number of bits: m = -n * ln(p) / (ln(2)^2)

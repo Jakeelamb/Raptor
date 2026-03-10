@@ -67,8 +67,11 @@ impl NtHasher {
     /// * `k` - K-mer size (must equal seq.len())
     ///
     /// # Example
-    /// ```ignore
+    /// ```
+    /// use raptor::kmer::nthash::NtHasher;
+    ///
     /// let hasher = NtHasher::new(b"ACGT", 4).unwrap();
+    /// assert_eq!(hasher.k(), 4);
     /// ```
     #[inline]
     pub fn new(seq: &[u8], k: usize) -> Option<Self> {
