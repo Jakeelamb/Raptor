@@ -48,15 +48,9 @@ pub fn greedy_assembly(
         }
     }
 
-    // Sort by descending count
+    // Sort by descending count, then lexicographically by k-mer for deterministic ties.
     let mut sorted_kmers: Vec<_> = kmer_info.iter().collect();
-    sorted_kmers.sort_unstable_by(|a, b| b.1 .1.cmp(&a.1 .1));
-
-    // Debug information
-    println!("Number of kmers: {}", sorted_kmers.len());
-    for (kmer, (canon, count)) in &sorted_kmers {
-        println!("Kmer: {}, Canonical: {}, Count: {}", kmer, canon, count);
-    }
+    sorted_kmers.sort_unstable_by(|a, b| b.1 .1.cmp(&a.1 .1).then_with(|| a.0.cmp(b.0)));
 
     // Collect adjacent kmers that can be stitched together
     let mut adjacency: HashMap<String, Vec<(String, u32)>> = HashMap::new();
@@ -95,11 +89,9 @@ pub fn greedy_assembly(
     // Build contigs greedily
     for (seed_kmer, _) in sorted_kmers {
         if used.contains(seed_kmer) {
-            println!("Skipping already used kmer: {}", seed_kmer);
             continue;
         }
 
-        println!("Starting with seed: {}", seed_kmer);
         let mut contig = seed_kmer.clone();
         let mut path: Vec<u64> = vec![encode_kmer(seed_kmer).unwrap_or(0)];
         used.insert(seed_kmer.clone());
@@ -111,14 +103,19 @@ pub fn greedy_assembly(
             let mut best_next: Option<(String, u32)> = None;
             for (next, count) in neighbors {
                 if !used.contains(next) {
-                    if best_next.is_none() || count > &best_next.as_ref().unwrap().1 {
-                        best_next = Some((next.clone(), *count));
-                    }
+                    match &best_next {
+                        None => best_next = Some((next.clone(), *count)),
+                        Some((best_kmer, best_count)) => {
+                            if *count > *best_count || (*count == *best_count && next < best_kmer)
+                            {
+                                best_next = Some((next.clone(), *count));
+                            }
+                        }
+                    };
                 }
             }
 
             if let Some((next, _)) = best_next {
-                println!("  Extending right with: {}", next);
                 let overlap = k - 1;
                 let extension = &next[overlap..];
                 contig.push_str(extension);
@@ -131,19 +128,11 @@ pub fn greedy_assembly(
         }
 
         if contig.len() >= min_len {
-            println!("Adding contig: {} (length: {})", contig, contig.len());
             contigs.push(Contig {
                 id: contigs.len(),
                 sequence: contig,
                 kmer_path: path,
             });
-        } else {
-            println!(
-                "Contig too short: {} (length: {}, min: {})",
-                contig,
-                contig.len(),
-                min_len
-            );
         }
     }
 
@@ -769,6 +758,7 @@ pub fn cleanup_graph(
 mod tests {
     use super::*;
     use crate::kmer::kmer::encode_kmer;
+    use std::collections::HashMap;
 
     #[test]
     fn greedy_u64_uses_deterministic_seed_order_when_counts_tie() {
@@ -816,6 +806,29 @@ mod tests {
 
         let contigs = greedy_assembly_u64(k, &counts, &adjacency, k);
         assert_eq!(contigs.first().map(|c| c.sequence.as_str()), Some("AAAC"));
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn greedy_string_tie_breaks_seed_and_neighbor_order_deterministically() {
+        let mut counts_a = HashMap::new();
+        counts_a.insert("AAG".to_string(), 5);
+        counts_a.insert("AAA".to_string(), 10);
+        counts_a.insert("AAC".to_string(), 5);
+
+        let mut counts_b = HashMap::new();
+        counts_b.insert("AAC".to_string(), 5);
+        counts_b.insert("AAA".to_string(), 10);
+        counts_b.insert("AAG".to_string(), 5);
+
+        let contigs_a = greedy_assembly(3, &counts_a, 3);
+        let contigs_b = greedy_assembly(3, &counts_b, 3);
+
+        let seqs_a: Vec<String> = contigs_a.into_iter().map(|c| c.sequence).collect();
+        let seqs_b: Vec<String> = contigs_b.into_iter().map(|c| c.sequence).collect();
+
+        assert_eq!(seqs_a, vec!["AAAC".to_string(), "AAG".to_string()]);
+        assert_eq!(seqs_b, seqs_a);
     }
 
     #[test]
