@@ -307,6 +307,30 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
     stats.insert("l95".to_string(), length_metrics.l95 as f64);
     stats.insert("l99".to_string(), length_metrics.l99 as f64);
     stats.insert("au_n".to_string(), length_metrics.au_n);
+    stats.insert(
+        "contigs_ge_1kb".to_string(),
+        length_metrics.contigs_ge_1kb as f64,
+    );
+    stats.insert(
+        "contigs_ge_10kb".to_string(),
+        length_metrics.contigs_ge_10kb as f64,
+    );
+    stats.insert(
+        "contigs_ge_50kb".to_string(),
+        length_metrics.contigs_ge_50kb as f64,
+    );
+    stats.insert(
+        "bases_ge_1kb".to_string(),
+        length_metrics.bases_ge_1kb as f64,
+    );
+    stats.insert(
+        "bases_ge_10kb".to_string(),
+        length_metrics.bases_ge_10kb as f64,
+    );
+    stats.insert(
+        "bases_ge_50kb".to_string(),
+        length_metrics.bases_ge_50kb as f64,
+    );
 
     // Confidence statistics
     let finite_confidences: Vec<f64> = transcripts

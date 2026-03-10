@@ -11,7 +11,7 @@
 //!
 //! Memory: O(bucket_size + adjacency_cache) ≈ 2-4 GB
 
-use crate::eval::metrics::evaluate_lengths;
+use crate::eval::metrics::{evaluate_lengths, BaseComposition};
 use crate::io::fasta::FastaWriter;
 use crate::io::fastq::{
     open_fastq, stream_fastq_records_checked, stream_paired_fastq_records_checked,
@@ -87,6 +87,12 @@ pub struct AssemblyStats {
     pub avg_contig_len: f64,
     pub au_n: f64,
     pub largest: usize,
+    pub contigs_ge_1kb: usize,
+    pub contigs_ge_10kb: usize,
+    pub contigs_ge_50kb: usize,
+    pub bases_ge_1kb: usize,
+    pub bases_ge_10kb: usize,
+    pub bases_ge_50kb: usize,
     pub disk_bytes: u64,
 }
 
@@ -136,6 +142,16 @@ impl std::fmt::Display for AssemblyStats {
         writeln!(f, "L95: {}", self.l95)?;
         writeln!(f, "L99: {}", self.l99)?;
         writeln!(f, "auN: {:.2} bp", self.au_n)?;
+        writeln!(
+            f,
+            "Contigs >=1kb/10kb/50kb: {}/{}/{}",
+            self.contigs_ge_1kb, self.contigs_ge_10kb, self.contigs_ge_50kb
+        )?;
+        writeln!(
+            f,
+            "Span >=1kb/10kb/50kb: {}/{}/{} bp",
+            self.bases_ge_1kb, self.bases_ge_10kb, self.bases_ge_50kb
+        )?;
         writeln!(f, "Largest: {} bp", self.largest)?;
         writeln!(f, "Disk used: {:.2} GB", self.disk_bytes as f64 / 1e9)?;
         Ok(())
@@ -2185,49 +2201,22 @@ impl LargeGenomeAssembler {
         valid.sort_unstable_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
 
         let mut lengths: Vec<usize> = Vec::with_capacity(valid.len());
-        let mut total_len = 0usize;
-        let mut gc_bases = 0usize;
-        let mut acgt_bases = 0usize;
-        let mut n_bases = 0usize;
-        let mut ambiguous_bases = 0usize;
+        let mut composition = BaseComposition::default();
 
         for (i, contig) in valid.iter().enumerate() {
             writer.write_record(&format!("contig_{} len={}", i + 1, contig.len()), contig)?;
             lengths.push(contig.len());
-            total_len += contig.len();
-            for &base in contig.as_bytes() {
-                match base.to_ascii_uppercase() {
-                    b'A' | b'T' => acgt_bases += 1,
-                    b'G' | b'C' => {
-                        gc_bases += 1;
-                        acgt_bases += 1;
-                    }
-                    b'N' => n_bases += 1,
-                    _ => ambiguous_bases += 1,
-                }
-            }
+            composition.add_sequence(contig.as_bytes());
         }
 
         let contig_stats = evaluate_lengths(&lengths);
         let total_bases = contig_stats.total_bases;
 
         stats.contigs = valid.len();
-        stats.total_length = total_len;
-        stats.gc_content = if acgt_bases > 0 {
-            gc_bases as f64 / acgt_bases as f64
-        } else {
-            0.0
-        };
-        stats.n_content = if total_bases > 0 {
-            n_bases as f64 / total_bases as f64
-        } else {
-            0.0
-        };
-        stats.ambiguous_content = if total_bases > 0 {
-            ambiguous_bases as f64 / total_bases as f64
-        } else {
-            0.0
-        };
+        stats.total_length = contig_stats.total_bases;
+        stats.gc_content = composition.gc_content();
+        stats.n_content = composition.n_content(total_bases);
+        stats.ambiguous_content = composition.ambiguous_content(total_bases);
         stats.n50 = contig_stats.n50;
         stats.n75 = contig_stats.n75;
         stats.n90 = contig_stats.n90;
@@ -2240,6 +2229,12 @@ impl LargeGenomeAssembler {
         stats.avg_contig_len = contig_stats.avg_length;
         stats.au_n = contig_stats.au_n;
         stats.largest = contig_stats.longest;
+        stats.contigs_ge_1kb = contig_stats.contigs_ge_1kb;
+        stats.contigs_ge_10kb = contig_stats.contigs_ge_10kb;
+        stats.contigs_ge_50kb = contig_stats.contigs_ge_50kb;
+        stats.bases_ge_1kb = contig_stats.bases_ge_1kb;
+        stats.bases_ge_10kb = contig_stats.bases_ge_10kb;
+        stats.bases_ge_50kb = contig_stats.bases_ge_50kb;
 
         Ok(())
     }
@@ -2733,6 +2728,12 @@ mod tests {
         assert_eq!(stats.l95, 3);
         assert_eq!(stats.l99, 3);
         assert_eq!(stats.largest, 100);
+        assert_eq!(stats.contigs_ge_1kb, 0);
+        assert_eq!(stats.contigs_ge_10kb, 0);
+        assert_eq!(stats.contigs_ge_50kb, 0);
+        assert_eq!(stats.bases_ge_1kb, 0);
+        assert_eq!(stats.bases_ge_10kb, 0);
+        assert_eq!(stats.bases_ge_50kb, 0);
         assert!((stats.gc_content - (75.0 / 175.0)).abs() < 1e-12);
         assert_eq!(stats.n_content, 0.0);
         assert_eq!(stats.ambiguous_content, 0.0);
@@ -2787,6 +2788,36 @@ mod tests {
             .collect();
 
         assert_eq!(sequences, vec!["AA", "CC", "TT"]);
+    }
+
+    #[test]
+    fn test_write_output_reports_length_bucket_metrics() {
+        let output = NamedTempFile::new().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            min_contig_len: 1,
+            num_buckets: Some(4),
+            temp_dir: Some(temp_dir.path().to_str().unwrap().to_string()),
+            ..Default::default()
+        });
+
+        let contigs = vec![
+            "A".repeat(50_000),
+            "C".repeat(10_000),
+            "G".repeat(1_000),
+            "T".repeat(999),
+        ];
+        let mut stats = AssemblyStats::default();
+        assembler
+            .write_output(&contigs, output.path().to_str().unwrap(), &mut stats)
+            .unwrap();
+
+        assert_eq!(stats.contigs_ge_1kb, 3);
+        assert_eq!(stats.contigs_ge_10kb, 2);
+        assert_eq!(stats.contigs_ge_50kb, 1);
+        assert_eq!(stats.bases_ge_1kb, 61_000);
+        assert_eq!(stats.bases_ge_10kb, 60_000);
+        assert_eq!(stats.bases_ge_50kb, 50_000);
     }
 
     /// Test repeat detection and resolution

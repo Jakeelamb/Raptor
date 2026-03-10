@@ -1,4 +1,4 @@
-use crate::eval::metrics::evaluate_lengths;
+use crate::eval::metrics::{evaluate_lengths, BaseComposition};
 use crate::io::fasta::open_fasta;
 use serde::Serialize;
 use std::io::BufRead;
@@ -22,6 +22,12 @@ pub struct Stats {
     pub l99: usize,
     pub au_n: f64,
     pub longest_contig: usize,
+    pub contigs_ge_1kb: usize,
+    pub contigs_ge_10kb: usize,
+    pub contigs_ge_50kb: usize,
+    pub bases_ge_1kb: usize,
+    pub bases_ge_10kb: usize,
+    pub bases_ge_50kb: usize,
     // Graph-related stats
     pub path_count: Option<usize>,
     pub avg_path_length: Option<f64>,
@@ -36,10 +42,7 @@ pub fn calculate_stats(path: &str) -> Stats {
     let mut lengths = vec![];
     let mut in_sequence = false;
     let mut current_len = 0usize;
-    let mut gc_bases = 0usize;
-    let mut acgt_bases = 0usize;
-    let mut n_bases = 0usize;
-    let mut ambiguous_bases = 0usize;
+    let mut composition = BaseComposition::default();
 
     for line in reader.lines().map_while(Result::ok) {
         if line.starts_with('>') {
@@ -52,24 +55,7 @@ pub fn calculate_stats(path: &str) -> Stats {
         } else if in_sequence {
             let seq = line.trim().as_bytes();
             current_len += seq.len();
-
-            for &base in seq {
-                match base.to_ascii_uppercase() {
-                    b'A' | b'T' => {
-                        acgt_bases += 1;
-                    }
-                    b'G' | b'C' => {
-                        gc_bases += 1;
-                        acgt_bases += 1;
-                    }
-                    b'N' => {
-                        n_bases += 1;
-                    }
-                    _ => {
-                        ambiguous_bases += 1;
-                    }
-                }
-            }
+            composition.add_sequence(seq);
         }
     }
 
@@ -79,21 +65,9 @@ pub fn calculate_stats(path: &str) -> Stats {
     }
 
     let length_stats = evaluate_lengths(&lengths);
-    let gc_content = if acgt_bases > 0 {
-        gc_bases as f64 / acgt_bases as f64
-    } else {
-        0.0
-    };
-    let n_content = if length_stats.total_bases > 0 {
-        n_bases as f64 / length_stats.total_bases as f64
-    } else {
-        0.0
-    };
-    let ambiguous_content = if length_stats.total_bases > 0 {
-        ambiguous_bases as f64 / length_stats.total_bases as f64
-    } else {
-        0.0
-    };
+    let gc_content = composition.gc_content();
+    let n_content = composition.n_content(length_stats.total_bases);
+    let ambiguous_content = composition.ambiguous_content(length_stats.total_bases);
 
     Stats {
         total_contigs: length_stats.total,
@@ -113,6 +87,12 @@ pub fn calculate_stats(path: &str) -> Stats {
         l99: length_stats.l99,
         au_n: length_stats.au_n,
         longest_contig: length_stats.longest,
+        contigs_ge_1kb: length_stats.contigs_ge_1kb,
+        contigs_ge_10kb: length_stats.contigs_ge_10kb,
+        contigs_ge_50kb: length_stats.contigs_ge_50kb,
+        bases_ge_1kb: length_stats.bases_ge_1kb,
+        bases_ge_10kb: length_stats.bases_ge_10kb,
+        bases_ge_50kb: length_stats.bases_ge_50kb,
         path_count: None,
         avg_path_length: None,
         branch_count: None,
@@ -188,6 +168,12 @@ mod tests {
         assert_eq!(stats.l99, 3);
         assert!((stats.au_n - 20.6666666667).abs() < 1e-6);
         assert_eq!(stats.longest_contig, 24);
+        assert_eq!(stats.contigs_ge_1kb, 0);
+        assert_eq!(stats.contigs_ge_10kb, 0);
+        assert_eq!(stats.contigs_ge_50kb, 0);
+        assert_eq!(stats.bases_ge_1kb, 0);
+        assert_eq!(stats.bases_ge_10kb, 0);
+        assert_eq!(stats.bases_ge_50kb, 0);
     }
 
     #[test]
@@ -216,6 +202,33 @@ mod tests {
         assert_eq!(stats.l99, 2);
         assert!((stats.au_n - 10.0).abs() < 1e-6);
         assert_eq!(stats.longest_contig, 12);
+        assert_eq!(stats.contigs_ge_1kb, 0);
+        assert_eq!(stats.contigs_ge_10kb, 0);
+        assert_eq!(stats.contigs_ge_50kb, 0);
+        assert_eq!(stats.bases_ge_1kb, 0);
+        assert_eq!(stats.bases_ge_10kb, 0);
+        assert_eq!(stats.bases_ge_50kb, 0);
+    }
+
+    #[test]
+    fn test_calculate_stats_reports_length_bucket_metrics() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, ">contig_1").unwrap();
+        writeln!(file, "{}", "A".repeat(50_000)).unwrap();
+        writeln!(file, ">contig_2").unwrap();
+        writeln!(file, "{}", "C".repeat(10_000)).unwrap();
+        writeln!(file, ">contig_3").unwrap();
+        writeln!(file, "{}", "G".repeat(1_000)).unwrap();
+        writeln!(file, ">contig_4").unwrap();
+        writeln!(file, "{}", "T".repeat(999)).unwrap();
+
+        let stats = calculate_stats(file.path().to_str().unwrap());
+        assert_eq!(stats.contigs_ge_1kb, 3);
+        assert_eq!(stats.contigs_ge_10kb, 2);
+        assert_eq!(stats.contigs_ge_50kb, 1);
+        assert_eq!(stats.bases_ge_1kb, 61_000);
+        assert_eq!(stats.bases_ge_10kb, 60_000);
+        assert_eq!(stats.bases_ge_50kb, 50_000);
     }
 
     #[test]
@@ -238,6 +251,12 @@ mod tests {
             l99: 0,
             au_n: 0.0,
             longest_contig: 0,
+            contigs_ge_1kb: 0,
+            contigs_ge_10kb: 0,
+            contigs_ge_50kb: 0,
+            bases_ge_1kb: 0,
+            bases_ge_10kb: 0,
+            bases_ge_50kb: 0,
             path_count: None,
             avg_path_length: None,
             branch_count: None,

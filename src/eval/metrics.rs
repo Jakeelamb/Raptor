@@ -13,6 +13,64 @@ pub struct TranscriptStats {
     pub l99: usize,
     pub au_n: f64,
     pub longest: usize,
+    pub contigs_ge_1kb: usize,
+    pub contigs_ge_10kb: usize,
+    pub contigs_ge_50kb: usize,
+    pub bases_ge_1kb: usize,
+    pub bases_ge_10kb: usize,
+    pub bases_ge_50kb: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub struct BaseComposition {
+    pub gc_bases: usize,
+    pub acgt_bases: usize,
+    pub n_bases: usize,
+    pub ambiguous_bases: usize,
+}
+
+impl BaseComposition {
+    #[inline]
+    pub fn add_sequence(&mut self, seq: &[u8]) {
+        for &base in seq {
+            match base {
+                b'A' | b'a' | b'T' | b't' => self.acgt_bases += 1,
+                b'G' | b'g' | b'C' | b'c' => {
+                    self.gc_bases += 1;
+                    self.acgt_bases += 1;
+                }
+                b'N' | b'n' => self.n_bases += 1,
+                _ => self.ambiguous_bases += 1,
+            }
+        }
+    }
+
+    #[inline]
+    pub fn gc_content(self) -> f64 {
+        if self.acgt_bases > 0 {
+            self.gc_bases as f64 / self.acgt_bases as f64
+        } else {
+            0.0
+        }
+    }
+
+    #[inline]
+    pub fn n_content(self, total_bases: usize) -> f64 {
+        if total_bases > 0 {
+            self.n_bases as f64 / total_bases as f64
+        } else {
+            0.0
+        }
+    }
+
+    #[inline]
+    pub fn ambiguous_content(self, total_bases: usize) -> f64 {
+        if total_bases > 0 {
+            self.ambiguous_bases as f64 / total_bases as f64
+        } else {
+            0.0
+        }
+    }
 }
 
 #[inline]
@@ -55,6 +113,19 @@ fn compute_au_n(lengths: &[usize], total_len: usize) -> f64 {
     sum_squares as f64 / total_len as f64
 }
 
+#[inline]
+fn count_and_span_at_or_above(lengths: &[usize], threshold: usize) -> (usize, usize) {
+    let mut count = 0usize;
+    let mut span = 0usize;
+    for &len in lengths {
+        if len >= threshold {
+            count += 1;
+            span = span.saturating_add(len);
+        }
+    }
+    (count, span)
+}
+
 pub fn evaluate_lengths(lengths: &[usize]) -> TranscriptStats {
     if lengths.is_empty() {
         return TranscriptStats {
@@ -72,6 +143,12 @@ pub fn evaluate_lengths(lengths: &[usize]) -> TranscriptStats {
             l99: 0,
             au_n: 0.0,
             longest: 0,
+            contigs_ge_1kb: 0,
+            contigs_ge_10kb: 0,
+            contigs_ge_50kb: 0,
+            bases_ge_1kb: 0,
+            bases_ge_10kb: 0,
+            bases_ge_50kb: 0,
         };
     }
 
@@ -89,6 +166,9 @@ pub fn evaluate_lengths(lengths: &[usize]) -> TranscriptStats {
     let (n99, l99) = nx_lx(&sorted_lengths, total_len, 99, 100);
     let au_n = compute_au_n(&sorted_lengths, total_len);
     let longest = sorted_lengths.first().copied().unwrap_or(0);
+    let (contigs_ge_1kb, bases_ge_1kb) = count_and_span_at_or_above(&sorted_lengths, 1_000);
+    let (contigs_ge_10kb, bases_ge_10kb) = count_and_span_at_or_above(&sorted_lengths, 10_000);
+    let (contigs_ge_50kb, bases_ge_50kb) = count_and_span_at_or_above(&sorted_lengths, 50_000);
 
     TranscriptStats {
         total: sorted_lengths.len(),
@@ -105,12 +185,18 @@ pub fn evaluate_lengths(lengths: &[usize]) -> TranscriptStats {
         l99,
         au_n,
         longest,
+        contigs_ge_1kb,
+        contigs_ge_10kb,
+        contigs_ge_50kb,
+        bases_ge_1kb,
+        bases_ge_10kb,
+        bases_ge_50kb,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{evaluate_lengths, nx_lx};
+    use super::{evaluate_lengths, nx_lx, BaseComposition};
 
     #[test]
     fn evaluate_lengths_reports_nx_metrics() {
@@ -129,6 +215,12 @@ mod tests {
         assert_eq!(stats.l99, 3);
         assert!((stats.au_n - 20.6666666667).abs() < 1e-6);
         assert_eq!(stats.longest, 24);
+        assert_eq!(stats.contigs_ge_1kb, 0);
+        assert_eq!(stats.contigs_ge_10kb, 0);
+        assert_eq!(stats.contigs_ge_50kb, 0);
+        assert_eq!(stats.bases_ge_1kb, 0);
+        assert_eq!(stats.bases_ge_10kb, 0);
+        assert_eq!(stats.bases_ge_50kb, 0);
     }
 
     #[test]
@@ -138,5 +230,30 @@ mod tests {
         let (n90, l90) = nx_lx(&lengths, very_large, 9, 10);
         assert_eq!(n90, very_large);
         assert_eq!(l90, 1);
+    }
+
+    #[test]
+    fn evaluate_lengths_reports_length_bucket_counts_and_spans() {
+        let stats = evaluate_lengths(&[50_000, 10_000, 1_000, 999]);
+        assert_eq!(stats.contigs_ge_1kb, 3);
+        assert_eq!(stats.contigs_ge_10kb, 2);
+        assert_eq!(stats.contigs_ge_50kb, 1);
+        assert_eq!(stats.bases_ge_1kb, 61_000);
+        assert_eq!(stats.bases_ge_10kb, 60_000);
+        assert_eq!(stats.bases_ge_50kb, 50_000);
+    }
+
+    #[test]
+    fn base_composition_classifies_bases_consistently() {
+        let mut composition = BaseComposition::default();
+        composition.add_sequence(b"GgCcAaTtNnRY");
+
+        assert_eq!(composition.gc_bases, 4);
+        assert_eq!(composition.acgt_bases, 8);
+        assert_eq!(composition.n_bases, 2);
+        assert_eq!(composition.ambiguous_bases, 2);
+        assert!((composition.gc_content() - 0.5).abs() < 1e-12);
+        assert!((composition.n_content(12) - (2.0 / 12.0)).abs() < 1e-12);
+        assert!((composition.ambiguous_content(12) - (2.0 / 12.0)).abs() < 1e-12);
     }
 }
