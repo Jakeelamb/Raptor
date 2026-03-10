@@ -399,7 +399,9 @@ fn is_similar(a: &Transcript, b: &Transcript, threshold: f64) -> bool {
         return false; // Too short to compare meaningfully
     }
 
-    // Count shared k-mers
+    // Count shared unique k-mers (Jaccard-style).
+    // Using unique sets avoids over-counting repeated k-mers in one sequence,
+    // which could otherwise inflate similarity above 1.0.
     let shorter = if len_a <= len_b {
         &a.sequence
     } else {
@@ -419,16 +421,20 @@ fn is_similar(a: &Transcript, b: &Transcript, threshold: f64) -> bool {
         shorter_kmers.insert(&shorter_bytes[i..i + k]);
     }
 
-    let mut shared_kmers = 0;
+    let mut longer_unique: AHashSet<&[u8]> = AHashSet::with_capacity(longer_bytes.len() - k + 1);
+    let mut shared_unique_kmers = 0usize;
     for i in 0..=longer_bytes.len() - k {
-        if shorter_kmers.contains(&longer_bytes[i..i + k]) {
-            shared_kmers += 1;
+        let kmer = &longer_bytes[i..i + k];
+        if longer_unique.insert(kmer) && shorter_kmers.contains(kmer) {
+            shared_unique_kmers += 1;
         }
     }
 
-    // Calculate similarity as proportion of shared k-mers
-    let max_possible_shared = (shorter.len() - k + 1).min(longer.len() - k + 1);
-    let similarity = shared_kmers as f64 / max_possible_shared as f64;
+    let union_size = shorter_kmers.len() + longer_unique.len() - shared_unique_kmers;
+    if union_size == 0 {
+        return true;
+    }
+    let similarity = shared_unique_kmers as f64 / union_size as f64;
 
     similarity >= threshold
 }
@@ -736,5 +742,34 @@ mod tests {
 
         assert!(is_similar(&empty_a, &empty_b, 0.99));
         assert!(!is_similar(&empty_a, &non_empty, 0.99));
+    }
+
+    #[test]
+    fn test_is_similar_length_mismatch_uses_unique_kmers_for_similarity() {
+        let repetitive_short = Transcript {
+            id: 1,
+            sequence: format!("{}C", "A".repeat(49)),
+            path: vec![1, 2],
+            confidence: 1.0,
+            length: 50,
+            strand: '+',
+            tpm: None,
+            splicing: "linear".to_string(),
+        };
+        let repetitive_long = Transcript {
+            id: 2,
+            sequence: "A".repeat(75),
+            path: vec![1, 3],
+            confidence: 1.0,
+            length: 75,
+            strand: '+',
+            tpm: None,
+            splicing: "linear".to_string(),
+        };
+
+        // With k=25 this pair shares only one unique k-mer ("A"*25), so
+        // similarity should be low (1 / 26), not inflated by repeated windows.
+        assert!(!is_similar(&repetitive_short, &repetitive_long, 0.9));
+        assert!(is_similar(&repetitive_short, &repetitive_long, 0.03));
     }
 }
