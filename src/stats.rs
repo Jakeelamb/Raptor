@@ -3,6 +3,8 @@ use crate::io::fasta::try_open_fasta;
 use serde::Serialize;
 use std::io::BufRead;
 
+const TSV_HEADER: &str = "contigs\ttotal_len\tavg_len\tmedian_len\tgc_bases\tacgt_bases\tn_bases\tambiguous_bases\tmean_rle_ratio\tlength_weighted_rle_ratio\ttotal_rle_runs\tgc_content\tn_content\tambiguous_content\tn10\tn25\tn50\tn75\tn90\tn95\tn99\tl10\tl25\tl50\tl75\tl90\tl95\tl99\taun\teffective_contig_count\tungapped_effective_contig_count\tlongest\tcontigs_ge_1kb\tcontigs_ge_10kb\tcontigs_ge_50kb\tcontigs_ge_100kb\tcontigs_ge_1mb\tbases_ge_1kb\tbases_ge_10kb\tbases_ge_50kb\tbases_ge_100kb\tbases_ge_1mb\tcontigs_ge_1kb_frac\tcontigs_ge_10kb_frac\tcontigs_ge_50kb_frac\tcontigs_ge_100kb_frac\tcontigs_ge_1mb_frac\tbases_ge_1kb_frac\tbases_ge_10kb_frac\tbases_ge_50kb_frac\tbases_ge_100kb_frac\tbases_ge_1mb_frac\tn_run_count\tmax_n_run\tcontigs_with_n\tcontigs_with_ambiguous\tcontigs_all_acgt\tcontigs_with_n_frac\tcontigs_with_ambiguous_frac\tcontigs_all_acgt_frac";
+
 #[derive(Serialize)]
 pub struct Stats {
     pub total_contigs: usize,
@@ -157,6 +159,77 @@ fn per_100kb(count: usize, total_bases: usize) -> f64 {
     } else {
         count as f64 * 100_000.0 / total_bases as f64
     }
+}
+
+#[inline]
+pub fn tsv_header() -> &'static str {
+    TSV_HEADER
+}
+
+pub fn tsv_row(stats: &Stats) -> String {
+    [
+        stats.total_contigs.to_string(),
+        stats.total_length.to_string(),
+        format!("{:.2}", stats.average_length),
+        format!("{:.2}", stats.median_length),
+        stats.gc_bases.to_string(),
+        stats.acgt_bases.to_string(),
+        stats.n_bases.to_string(),
+        stats.ambiguous_bases.to_string(),
+        format!("{:.6}", stats.mean_rle_ratio),
+        format!("{:.6}", stats.length_weighted_rle_ratio),
+        stats.total_rle_runs.to_string(),
+        format!("{:.6}", stats.gc_content),
+        format!("{:.6}", stats.n_content),
+        format!("{:.6}", stats.ambiguous_content),
+        stats.n10.to_string(),
+        stats.n25.to_string(),
+        stats.n50.to_string(),
+        stats.n75.to_string(),
+        stats.n90.to_string(),
+        stats.n95.to_string(),
+        stats.n99.to_string(),
+        stats.l10.to_string(),
+        stats.l25.to_string(),
+        stats.l50.to_string(),
+        stats.l75.to_string(),
+        stats.l90.to_string(),
+        stats.l95.to_string(),
+        stats.l99.to_string(),
+        format!("{:.2}", stats.au_n),
+        format!("{:.6}", stats.effective_contig_count),
+        format!("{:.6}", stats.ungapped_effective_contig_count),
+        stats.longest_contig.to_string(),
+        stats.contigs_ge_1kb.to_string(),
+        stats.contigs_ge_10kb.to_string(),
+        stats.contigs_ge_50kb.to_string(),
+        stats.contigs_ge_100kb.to_string(),
+        stats.contigs_ge_1mb.to_string(),
+        stats.bases_ge_1kb.to_string(),
+        stats.bases_ge_10kb.to_string(),
+        stats.bases_ge_50kb.to_string(),
+        stats.bases_ge_100kb.to_string(),
+        stats.bases_ge_1mb.to_string(),
+        format!("{:.6}", stats.contigs_ge_1kb_frac),
+        format!("{:.6}", stats.contigs_ge_10kb_frac),
+        format!("{:.6}", stats.contigs_ge_50kb_frac),
+        format!("{:.6}", stats.contigs_ge_100kb_frac),
+        format!("{:.6}", stats.contigs_ge_1mb_frac),
+        format!("{:.6}", stats.bases_ge_1kb_frac),
+        format!("{:.6}", stats.bases_ge_10kb_frac),
+        format!("{:.6}", stats.bases_ge_50kb_frac),
+        format!("{:.6}", stats.bases_ge_100kb_frac),
+        format!("{:.6}", stats.bases_ge_1mb_frac),
+        stats.n_run_count.to_string(),
+        stats.max_n_run.to_string(),
+        stats.contigs_with_n.to_string(),
+        stats.contigs_with_ambiguous.to_string(),
+        stats.contigs_all_acgt.to_string(),
+        format!("{:.6}", stats.contigs_with_n_frac),
+        format!("{:.6}", stats.contigs_with_ambiguous_frac),
+        format!("{:.6}", stats.contigs_all_acgt_frac),
+    ]
+    .join("\t")
 }
 
 pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
@@ -469,6 +542,7 @@ pub fn update_with_graph_stats(
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use std::collections::HashMap;
     use std::io::Write;
     use tempfile::{NamedTempFile, TempDir};
 
@@ -552,6 +626,38 @@ mod tests {
         assert_eq!(stats.bases_ge_50kb_frac, 0.0);
         assert_eq!(stats.bases_ge_100kb_frac, 0.0);
         assert_eq!(stats.bases_ge_1mb_frac, 0.0);
+    }
+
+    #[test]
+    fn stats_tsv_row_matches_header_and_l_metrics() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, ">contig_1").unwrap();
+        writeln!(file, "ATCGATCGATCGATCGATCG").unwrap(); // 20 bp
+        writeln!(file, ">contig_2").unwrap();
+        writeln!(file, "GCTAGCTAGCTAGCTAGCTAGCTA").unwrap(); // 24 bp
+        writeln!(file, ">contig_3").unwrap();
+        writeln!(file, "ATCG").unwrap(); // 4 bp
+
+        let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
+        let header_cols: Vec<&str> = tsv_header().split('\t').collect();
+        let row = tsv_row(&stats);
+        let row_cols: Vec<&str> = row.split('\t').collect();
+
+        assert_eq!(header_cols.len(), row_cols.len());
+
+        let row_by_name: HashMap<&str, &str> = header_cols
+            .iter()
+            .copied()
+            .zip(row_cols.iter().copied())
+            .collect();
+
+        assert_eq!(row_by_name.get("l10").copied(), Some("1"));
+        assert_eq!(row_by_name.get("l25").copied(), Some("1"));
+        assert_eq!(row_by_name.get("l50").copied(), Some("1"));
+        assert_eq!(row_by_name.get("l75").copied(), Some("2"));
+        assert_eq!(row_by_name.get("l90").copied(), Some("2"));
+        assert_eq!(row_by_name.get("l95").copied(), Some("3"));
+        assert_eq!(row_by_name.get("l99").copied(), Some("3"));
     }
 
     #[test]
