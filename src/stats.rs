@@ -13,9 +13,15 @@ pub struct Stats {
     pub acgt_bases: usize,
     pub n_bases: usize,
     pub ambiguous_bases: usize,
+    pub contigs_with_n: usize,
+    pub contigs_with_ambiguous: usize,
+    pub contigs_all_acgt: usize,
     pub gc_content: f64,
     pub n_content: f64,
     pub ambiguous_content: f64,
+    pub contigs_with_n_frac: f64,
+    pub contigs_with_ambiguous_frac: f64,
+    pub contigs_all_acgt_frac: f64,
     pub n25: usize,
     pub n50: usize,
     pub n75: usize,
@@ -59,12 +65,34 @@ pub struct Stats {
     pub graph_path_au_n: Option<f64>,
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+struct ContigQualitySummary {
+    with_n: usize,
+    with_ambiguous: usize,
+    all_acgt: usize,
+}
+
+#[inline]
+fn update_contig_quality(summary: &mut ContigQualitySummary, composition: BaseComposition) {
+    if composition.n_bases > 0 {
+        summary.with_n += 1;
+    }
+    if composition.ambiguous_bases > 0 {
+        summary.with_ambiguous += 1;
+    }
+    if composition.n_bases == 0 && composition.ambiguous_bases == 0 {
+        summary.all_acgt += 1;
+    }
+}
+
 pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
     let mut reader = try_open_fasta(path)?;
     let mut lengths = vec![];
     let mut in_sequence = false;
     let mut current_len = 0usize;
     let mut composition = BaseComposition::default();
+    let mut current_contig_composition = BaseComposition::default();
+    let mut contig_quality = ContigQualitySummary::default();
     let mut line = String::new();
 
     loop {
@@ -78,9 +106,11 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
             // If we were in a sequence, add its final length.
             if in_sequence {
                 lengths.push(current_len);
+                update_contig_quality(&mut contig_quality, current_contig_composition);
             }
             in_sequence = true;
             current_len = 0;
+            current_contig_composition = BaseComposition::default();
         } else if in_sequence {
             let seq = trimmed_line.trim().as_bytes();
             current_len = current_len.checked_add(seq.len()).ok_or_else(|| {
@@ -90,18 +120,31 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
                 )
             })?;
             composition.add_sequence(seq);
+            current_contig_composition.add_sequence(seq);
         }
     }
 
     // Add the last sequence if there is one
     if in_sequence {
         lengths.push(current_len);
+        update_contig_quality(&mut contig_quality, current_contig_composition);
     }
 
     let length_stats = evaluate_lengths_in_place(&mut lengths);
     let gc_content = composition.gc_content();
     let n_content = composition.n_content(length_stats.total_bases);
     let ambiguous_content = composition.ambiguous_content(length_stats.total_bases);
+    let total_contigs = length_stats.total as f64;
+    let (contigs_with_n_frac, contigs_with_ambiguous_frac, contigs_all_acgt_frac) =
+        if total_contigs > 0.0 {
+            (
+                contig_quality.with_n as f64 / total_contigs,
+                contig_quality.with_ambiguous as f64 / total_contigs,
+                contig_quality.all_acgt as f64 / total_contigs,
+            )
+        } else {
+            (0.0, 0.0, 0.0)
+        };
 
     Ok(Stats {
         total_contigs: length_stats.total,
@@ -112,9 +155,15 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         acgt_bases: composition.acgt_bases,
         n_bases: composition.n_bases,
         ambiguous_bases: composition.ambiguous_bases,
+        contigs_with_n: contig_quality.with_n,
+        contigs_with_ambiguous: contig_quality.with_ambiguous,
+        contigs_all_acgt: contig_quality.all_acgt,
         gc_content,
         n_content,
         ambiguous_content,
+        contigs_with_n_frac,
+        contigs_with_ambiguous_frac,
+        contigs_all_acgt_frac,
         n25: length_stats.n25,
         n50: length_stats.n50,
         n75: length_stats.n75,
@@ -220,9 +269,15 @@ mod tests {
         assert_eq!(stats.acgt_bases, 48);
         assert_eq!(stats.n_bases, 0);
         assert_eq!(stats.ambiguous_bases, 0);
+        assert_eq!(stats.contigs_with_n, 0);
+        assert_eq!(stats.contigs_with_ambiguous, 0);
+        assert_eq!(stats.contigs_all_acgt, 3);
         assert!((stats.gc_content - 0.5).abs() < 1e-12);
         assert_eq!(stats.n_content, 0.0);
         assert_eq!(stats.ambiguous_content, 0.0);
+        assert_eq!(stats.contigs_with_n_frac, 0.0);
+        assert_eq!(stats.contigs_with_ambiguous_frac, 0.0);
+        assert_eq!(stats.contigs_all_acgt_frac, 1.0);
         assert_eq!(stats.n25, 24);
         assert_eq!(stats.n50, 24);
         assert_eq!(stats.n75, 20);
@@ -272,9 +327,15 @@ mod tests {
         assert_eq!(stats.acgt_bases, 16);
         assert_eq!(stats.n_bases, 0);
         assert_eq!(stats.ambiguous_bases, 0);
+        assert_eq!(stats.contigs_with_n, 0);
+        assert_eq!(stats.contigs_with_ambiguous, 0);
+        assert_eq!(stats.contigs_all_acgt, 2);
         assert!((stats.gc_content - 0.5).abs() < 1e-12);
         assert_eq!(stats.n_content, 0.0);
         assert_eq!(stats.ambiguous_content, 0.0);
+        assert_eq!(stats.contigs_with_n_frac, 0.0);
+        assert_eq!(stats.contigs_with_ambiguous_frac, 0.0);
+        assert_eq!(stats.contigs_all_acgt_frac, 1.0);
         assert_eq!(stats.n25, 12);
         assert_eq!(stats.n50, 12);
         assert_eq!(stats.n75, 12);
@@ -364,9 +425,15 @@ mod tests {
             acgt_bases: 0,
             n_bases: 0,
             ambiguous_bases: 0,
+            contigs_with_n: 0,
+            contigs_with_ambiguous: 0,
+            contigs_all_acgt: 0,
             gc_content: 0.0,
             n_content: 0.0,
             ambiguous_content: 0.0,
+            contigs_with_n_frac: 0.0,
+            contigs_with_ambiguous_frac: 0.0,
+            contigs_all_acgt_frac: 0.0,
             n25: 0,
             n50: 0,
             n75: 0,
@@ -449,9 +516,15 @@ mod tests {
         assert_eq!(stats.acgt_bases, 7);
         assert_eq!(stats.n_bases, 4);
         assert_eq!(stats.ambiguous_bases, 1);
+        assert_eq!(stats.contigs_with_n, 1);
+        assert_eq!(stats.contigs_with_ambiguous, 1);
+        assert_eq!(stats.contigs_all_acgt, 0);
         assert!((stats.gc_content - (4.0 / 7.0)).abs() < 1e-12);
         assert!((stats.n_content - (4.0 / 12.0)).abs() < 1e-12);
         assert!((stats.ambiguous_content - (1.0 / 12.0)).abs() < 1e-12);
+        assert!((stats.contigs_with_n_frac - 0.5).abs() < 1e-12);
+        assert!((stats.contigs_with_ambiguous_frac - 0.5).abs() < 1e-12);
+        assert_eq!(stats.contigs_all_acgt_frac, 0.0);
     }
 
     #[test]
@@ -481,6 +554,32 @@ mod tests {
         assert_eq!(stats.l90, 2);
         assert_eq!(stats.l95, 2);
         assert_eq!(stats.l99, 2);
+        assert_eq!(stats.contigs_with_n, 0);
+        assert_eq!(stats.contigs_with_ambiguous, 0);
+        assert_eq!(stats.contigs_all_acgt, 4);
+        assert_eq!(stats.contigs_with_n_frac, 0.0);
+        assert_eq!(stats.contigs_with_ambiguous_frac, 0.0);
+        assert_eq!(stats.contigs_all_acgt_frac, 1.0);
+    }
+
+    #[test]
+    fn test_calculate_stats_reports_contig_ambiguity_metrics() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, ">contig_1").unwrap();
+        writeln!(file, "ACGT").unwrap();
+        writeln!(file, ">contig_2").unwrap();
+        writeln!(file, "NN").unwrap();
+        writeln!(file, ">contig_3").unwrap();
+        writeln!(file, "ARY").unwrap();
+
+        let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(stats.total_contigs, 3);
+        assert_eq!(stats.contigs_with_n, 1);
+        assert_eq!(stats.contigs_with_ambiguous, 1);
+        assert_eq!(stats.contigs_all_acgt, 1);
+        assert!((stats.contigs_with_n_frac - (1.0 / 3.0)).abs() < 1e-12);
+        assert!((stats.contigs_with_ambiguous_frac - (1.0 / 3.0)).abs() < 1e-12);
+        assert!((stats.contigs_all_acgt_frac - (1.0 / 3.0)).abs() < 1e-12);
     }
 
     #[test]
@@ -528,6 +627,9 @@ mod tests {
             prop_assert_eq!(stats_a.acgt_bases, stats_b.acgt_bases);
             prop_assert_eq!(stats_a.n_bases, stats_b.n_bases);
             prop_assert_eq!(stats_a.ambiguous_bases, stats_b.ambiguous_bases);
+            prop_assert_eq!(stats_a.contigs_with_n, stats_b.contigs_with_n);
+            prop_assert_eq!(stats_a.contigs_with_ambiguous, stats_b.contigs_with_ambiguous);
+            prop_assert_eq!(stats_a.contigs_all_acgt, stats_b.contigs_all_acgt);
             prop_assert_eq!(stats_a.n25, stats_b.n25);
             prop_assert_eq!(stats_a.n50, stats_b.n50);
             prop_assert_eq!(stats_a.n75, stats_b.n75);
@@ -545,6 +647,9 @@ mod tests {
             prop_assert!((stats_a.gc_content - stats_b.gc_content).abs() < 1e-12);
             prop_assert!((stats_a.n_content - stats_b.n_content).abs() < 1e-12);
             prop_assert!((stats_a.ambiguous_content - stats_b.ambiguous_content).abs() < 1e-12);
+            prop_assert!((stats_a.contigs_with_n_frac - stats_b.contigs_with_n_frac).abs() < 1e-12);
+            prop_assert!((stats_a.contigs_with_ambiguous_frac - stats_b.contigs_with_ambiguous_frac).abs() < 1e-12);
+            prop_assert!((stats_a.contigs_all_acgt_frac - stats_b.contigs_all_acgt_frac).abs() < 1e-12);
             prop_assert!((stats_a.au_n - stats_b.au_n).abs() < 1e-12);
         }
     }
