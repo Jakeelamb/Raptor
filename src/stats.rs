@@ -8,6 +8,9 @@ pub struct Stats {
     pub total_contigs: usize,
     pub total_length: usize,
     pub average_length: f64,
+    pub gc_content: f64,
+    pub n_content: f64,
+    pub ambiguous_content: f64,
     pub n50: usize,
     pub n75: usize,
     pub n90: usize,
@@ -33,6 +36,10 @@ pub fn calculate_stats(path: &str) -> Stats {
     let mut lengths = vec![];
     let mut in_sequence = false;
     let mut current_len = 0usize;
+    let mut gc_bases = 0usize;
+    let mut acgt_bases = 0usize;
+    let mut n_bases = 0usize;
+    let mut ambiguous_bases = 0usize;
 
     for line in reader.lines().map_while(Result::ok) {
         if line.starts_with('>') {
@@ -43,7 +50,26 @@ pub fn calculate_stats(path: &str) -> Stats {
             in_sequence = true;
             current_len = 0;
         } else if in_sequence {
-            current_len += line.trim().len();
+            let seq = line.trim().as_bytes();
+            current_len += seq.len();
+
+            for &base in seq {
+                match base.to_ascii_uppercase() {
+                    b'A' | b'T' => {
+                        acgt_bases += 1;
+                    }
+                    b'G' | b'C' => {
+                        gc_bases += 1;
+                        acgt_bases += 1;
+                    }
+                    b'N' => {
+                        n_bases += 1;
+                    }
+                    _ => {
+                        ambiguous_bases += 1;
+                    }
+                }
+            }
         }
     }
 
@@ -53,11 +79,29 @@ pub fn calculate_stats(path: &str) -> Stats {
     }
 
     let length_stats = evaluate_lengths(&lengths);
+    let gc_content = if acgt_bases > 0 {
+        gc_bases as f64 / acgt_bases as f64
+    } else {
+        0.0
+    };
+    let n_content = if length_stats.total_bases > 0 {
+        n_bases as f64 / length_stats.total_bases as f64
+    } else {
+        0.0
+    };
+    let ambiguous_content = if length_stats.total_bases > 0 {
+        ambiguous_bases as f64 / length_stats.total_bases as f64
+    } else {
+        0.0
+    };
 
     Stats {
         total_contigs: length_stats.total,
         total_length: length_stats.total_bases,
         average_length: length_stats.avg_length,
+        gc_content,
+        n_content,
+        ambiguous_content,
         n50: length_stats.n50,
         n75: length_stats.n75,
         n90: length_stats.n90,
@@ -130,6 +174,9 @@ mod tests {
         assert_eq!(stats.total_contigs, 3);
         assert_eq!(stats.total_length, 48);
         assert_eq!(stats.average_length, 16.0);
+        assert!((stats.gc_content - 0.5).abs() < 1e-12);
+        assert_eq!(stats.n_content, 0.0);
+        assert_eq!(stats.ambiguous_content, 0.0);
         assert_eq!(stats.n50, 24);
         assert_eq!(stats.n75, 20);
         assert_eq!(stats.n90, 20);
@@ -155,6 +202,9 @@ mod tests {
         let stats = calculate_stats(file.path().to_str().unwrap());
         assert_eq!(stats.total_contigs, 2);
         assert_eq!(stats.total_length, 16);
+        assert!((stats.gc_content - 0.5).abs() < 1e-12);
+        assert_eq!(stats.n_content, 0.0);
+        assert_eq!(stats.ambiguous_content, 0.0);
         assert_eq!(stats.n50, 12);
         assert_eq!(stats.n75, 12);
         assert_eq!(stats.n90, 4);
@@ -174,6 +224,9 @@ mod tests {
             total_contigs: 0,
             total_length: 0,
             average_length: 0.0,
+            gc_content: 0.0,
+            n_content: 0.0,
+            ambiguous_content: 0.0,
             n50: 0,
             n75: 0,
             n90: 0,
@@ -209,5 +262,20 @@ mod tests {
         assert_eq!(stats.graph_max_depth, Some(5));
         assert_eq!(stats.graph_bubble_count, Some(1));
         assert_eq!(stats.graph_branchiness, Some(0.4));
+    }
+
+    #[test]
+    fn test_calculate_stats_reports_base_composition_metrics() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, ">contig_1").unwrap();
+        writeln!(file, "GCGCNNNN").unwrap(); // 4 GC, 4 N
+        writeln!(file, ">contig_2").unwrap();
+        writeln!(file, "atry").unwrap(); // 1 A, 1 T, 2 ambiguous
+
+        let stats = calculate_stats(file.path().to_str().unwrap());
+        assert_eq!(stats.total_length, 12);
+        assert!((stats.gc_content - (4.0 / 6.0)).abs() < 1e-12);
+        assert!((stats.n_content - (4.0 / 12.0)).abs() < 1e-12);
+        assert!((stats.ambiguous_content - (2.0 / 12.0)).abs() < 1e-12);
     }
 }
