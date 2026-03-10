@@ -13,7 +13,7 @@ use std::fs;
 use std::io::{self, Write};
 use tracing::{info, warn};
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 struct AssemblyQualitySummary {
     total_contigs: usize,
     total_bases: usize,
@@ -86,16 +86,46 @@ fn per_100kb(count: usize, total_bases: usize) -> f64 {
 }
 
 #[inline]
-fn update_n_runs(sequence: &[u8], n_runs: &mut NRunSummary) {
+fn analyze_sequence(
+    sequence: &[u8],
+    composition: &mut BaseComposition,
+    n_runs: &mut NRunSummary,
+) -> usize {
+    let mut ungapped_len = sequence.len();
     let mut run_len = 0usize;
 
     for &base in sequence {
-        if matches!(base, b'N' | b'n') {
-            run_len += 1;
-        } else if run_len > 0 {
-            n_runs.count += 1;
-            n_runs.longest = n_runs.longest.max(run_len);
-            run_len = 0;
+        match base {
+            b'A' | b'a' | b'T' | b't' | b'U' | b'u' => {
+                composition.acgt_bases += 1;
+                if run_len > 0 {
+                    n_runs.count += 1;
+                    n_runs.longest = n_runs.longest.max(run_len);
+                    run_len = 0;
+                }
+            }
+            b'G' | b'g' | b'C' | b'c' => {
+                composition.gc_bases += 1;
+                composition.acgt_bases += 1;
+                if run_len > 0 {
+                    n_runs.count += 1;
+                    n_runs.longest = n_runs.longest.max(run_len);
+                    run_len = 0;
+                }
+            }
+            b'N' | b'n' => {
+                composition.n_bases += 1;
+                ungapped_len = ungapped_len.saturating_sub(1);
+                run_len += 1;
+            }
+            _ => {
+                composition.ambiguous_bases += 1;
+                if run_len > 0 {
+                    n_runs.count += 1;
+                    n_runs.longest = n_runs.longest.max(run_len);
+                    run_len = 0;
+                }
+            }
         }
     }
 
@@ -103,6 +133,8 @@ fn update_n_runs(sequence: &[u8], n_runs: &mut NRunSummary) {
         n_runs.count += 1;
         n_runs.longest = n_runs.longest.max(run_len);
     }
+
+    ungapped_len
 }
 
 #[inline]
@@ -115,13 +147,7 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
     for contig in contigs {
         lengths.push(contig.sequence.len());
         let sequence = contig.sequence.as_bytes();
-        let n_bases = sequence
-            .iter()
-            .filter(|&&base| matches!(base, b'N' | b'n'))
-            .count();
-        ungapped_lengths.push(sequence.len().saturating_sub(n_bases));
-        composition.add_sequence(sequence);
-        update_n_runs(sequence, &mut n_runs);
+        ungapped_lengths.push(analyze_sequence(sequence, &mut composition, &mut n_runs));
     }
 
     let length_stats = evaluate_lengths_in_place(&mut lengths);
@@ -1085,6 +1111,9 @@ mod tests {
     use crate::graph::assembler::Contig;
     use crate::io::fastq::FastqRecord;
     use ahash::AHashMap;
+    use rand::rngs::StdRng;
+    use rand::seq::SliceRandom;
+    use rand::SeedableRng;
     use std::io::{self, Write};
     use tempfile::{NamedTempFile, TempDir};
 
@@ -1344,6 +1373,47 @@ mod tests {
         assert!((summary.mean_n_run_length - 2.0).abs() < 1e-12);
         assert!((summary.n_runs_per_100kb - (3.0 * 100_000.0 / 16.0)).abs() < 1e-12);
         assert_eq!(summary.ungapped_n50, 3);
+    }
+
+    #[test]
+    fn summarize_assembly_quality_is_invariant_to_contig_order() {
+        let base_contigs = vec![
+            Contig {
+                id: 0,
+                sequence: "AANNNCC".to_string(),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 1,
+                sequence: "NNAAAN".to_string(),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 2,
+                sequence: "CGTARY".to_string(),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 3,
+                sequence: "GGCC".to_string(),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 4,
+                sequence: "N".repeat(1000),
+                kmer_path: vec![],
+            },
+        ];
+
+        let expected = summarize_assembly_quality(&base_contigs);
+        let mut permuted = base_contigs.clone();
+        let mut rng = StdRng::seed_from_u64(0xA55E_4B1E);
+
+        for _ in 0..128 {
+            permuted.shuffle(&mut rng);
+            let observed = summarize_assembly_quality(&permuted);
+            assert_eq!(observed, expected);
+        }
     }
 
     #[test]
