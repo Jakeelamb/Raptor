@@ -135,9 +135,11 @@ proptest! {
         prop_assert_eq!(stats_a.path_n50, stats_b.path_n50);
         prop_assert_eq!(stats_a.path_n90, stats_b.path_n90);
         prop_assert_eq!(stats_a.path_n95, stats_b.path_n95);
+        prop_assert_eq!(stats_a.path_n99, stats_b.path_n99);
         prop_assert_eq!(stats_a.path_l50, stats_b.path_l50);
         prop_assert_eq!(stats_a.path_l90, stats_b.path_l90);
         prop_assert_eq!(stats_a.path_l95, stats_b.path_l95);
+        prop_assert_eq!(stats_a.path_l99, stats_b.path_l99);
         prop_assert!((stats_a.path_au_n - stats_b.path_au_n).abs() < 1e-12);
         prop_assert!((stats_a.branchiness - stats_b.branchiness).abs() < 1e-12);
     }
@@ -197,9 +199,11 @@ proptest! {
         prop_assert_eq!(stats_with_duplicates.path_n50, stats_deduped.path_n50);
         prop_assert_eq!(stats_with_duplicates.path_n90, stats_deduped.path_n90);
         prop_assert_eq!(stats_with_duplicates.path_n95, stats_deduped.path_n95);
+        prop_assert_eq!(stats_with_duplicates.path_n99, stats_deduped.path_n99);
         prop_assert_eq!(stats_with_duplicates.path_l50, stats_deduped.path_l50);
         prop_assert_eq!(stats_with_duplicates.path_l90, stats_deduped.path_l90);
         prop_assert_eq!(stats_with_duplicates.path_l95, stats_deduped.path_l95);
+        prop_assert_eq!(stats_with_duplicates.path_l99, stats_deduped.path_l99);
         prop_assert!((stats_with_duplicates.path_au_n - stats_deduped.path_au_n).abs() < 1e-12);
         prop_assert!((stats_with_duplicates.branchiness - stats_deduped.branchiness).abs() < 1e-12);
     }
@@ -252,9 +256,11 @@ proptest! {
         prop_assert_eq!(stats_p.path_n50, stats_w.path_n50);
         prop_assert_eq!(stats_p.path_n90, stats_w.path_n90);
         prop_assert_eq!(stats_p.path_n95, stats_w.path_n95);
+        prop_assert_eq!(stats_p.path_n99, stats_w.path_n99);
         prop_assert_eq!(stats_p.path_l50, stats_w.path_l50);
         prop_assert_eq!(stats_p.path_l90, stats_w.path_l90);
         prop_assert_eq!(stats_p.path_l95, stats_w.path_l95);
+        prop_assert_eq!(stats_p.path_l99, stats_w.path_l99);
         prop_assert!((stats_p.path_au_n - stats_w.path_au_n).abs() < 1e-12);
         prop_assert!((stats_p.branchiness - stats_w.branchiness).abs() < 1e-12);
     }

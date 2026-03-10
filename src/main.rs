@@ -198,9 +198,11 @@ fn main() {
                     println!("  Path N50: {}", graph_stats.path_n50);
                     println!("  Path N90: {}", graph_stats.path_n90);
                     println!("  Path N95: {}", graph_stats.path_n95);
+                    println!("  Path N99: {}", graph_stats.path_n99);
                     println!("  Path L50: {}", graph_stats.path_l50);
                     println!("  Path L90: {}", graph_stats.path_l90);
                     println!("  Path L95: {}", graph_stats.path_l95);
+                    println!("  Path L99: {}", graph_stats.path_l99);
                     println!("  Path auN: {:.2}", graph_stats.path_au_n);
                     println!("  Shared segments (branches): {}", graph_stats.branch_count);
                     println!("  Max graph depth: {}", graph_stats.max_depth);
