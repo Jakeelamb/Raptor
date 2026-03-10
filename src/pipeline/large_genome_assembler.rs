@@ -11,7 +11,7 @@
 //!
 //! Memory: O(bucket_size + adjacency_cache) ≈ 2-4 GB
 
-use crate::eval::metrics::{evaluate_lengths, BaseComposition};
+use crate::eval::metrics::{evaluate_lengths_sorted_desc, BaseComposition};
 use crate::io::fasta::FastaWriter;
 use crate::io::fastq::{
     open_fastq, stream_fastq_records_checked, stream_paired_fastq_records_checked,
@@ -2209,7 +2209,7 @@ impl LargeGenomeAssembler {
             composition.add_sequence(contig.as_bytes());
         }
 
-        let contig_stats = evaluate_lengths(&lengths);
+        let contig_stats = evaluate_lengths_sorted_desc(&lengths);
         let total_bases = contig_stats.total_bases;
 
         stats.contigs = valid.len();

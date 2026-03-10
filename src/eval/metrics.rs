@@ -21,6 +21,32 @@ pub struct TranscriptStats {
     pub bases_ge_50kb: usize,
 }
 
+#[inline]
+fn empty_transcript_stats() -> TranscriptStats {
+    TranscriptStats {
+        total: 0,
+        total_bases: 0,
+        avg_length: 0.0,
+        n50: 0,
+        n75: 0,
+        n90: 0,
+        n95: 0,
+        n99: 0,
+        l50: 0,
+        l90: 0,
+        l95: 0,
+        l99: 0,
+        au_n: 0.0,
+        longest: 0,
+        contigs_ge_1kb: 0,
+        contigs_ge_10kb: 0,
+        contigs_ge_50kb: 0,
+        bases_ge_1kb: 0,
+        bases_ge_10kb: 0,
+        bases_ge_50kb: 0,
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub struct BaseComposition {
     pub gc_bases: usize,
@@ -126,49 +152,29 @@ fn count_and_span_at_or_above(lengths: &[usize], threshold: usize) -> (usize, us
     (count, span)
 }
 
-pub fn evaluate_lengths(lengths: &[usize]) -> TranscriptStats {
-    if lengths.is_empty() {
-        return TranscriptStats {
-            total: 0,
-            total_bases: 0,
-            avg_length: 0.0,
-            n50: 0,
-            n75: 0,
-            n90: 0,
-            n95: 0,
-            n99: 0,
-            l50: 0,
-            l90: 0,
-            l95: 0,
-            l99: 0,
-            au_n: 0.0,
-            longest: 0,
-            contigs_ge_1kb: 0,
-            contigs_ge_10kb: 0,
-            contigs_ge_50kb: 0,
-            bases_ge_1kb: 0,
-            bases_ge_10kb: 0,
-            bases_ge_50kb: 0,
-        };
+/// Evaluate contig/transcript lengths that are already sorted descending.
+///
+/// This avoids an internal sort and is preferred for hot paths that already
+/// maintain descending length order.
+pub fn evaluate_lengths_sorted_desc(sorted_lengths: &[usize]) -> TranscriptStats {
+    if sorted_lengths.is_empty() {
+        return empty_transcript_stats();
     }
-
-    let mut sorted_lengths = lengths.to_vec();
-    sorted_lengths.sort_unstable_by(|a, b| b.cmp(a));
 
     let total_len = sorted_lengths
         .iter()
         .fold(0usize, |acc, &len| acc.saturating_add(len));
     let avg = total_len as f64 / sorted_lengths.len() as f64;
-    let (n50, l50) = nx_lx(&sorted_lengths, total_len, 1, 2);
-    let (n75, _) = nx_lx(&sorted_lengths, total_len, 3, 4);
-    let (n90, l90) = nx_lx(&sorted_lengths, total_len, 9, 10);
-    let (n95, l95) = nx_lx(&sorted_lengths, total_len, 19, 20);
-    let (n99, l99) = nx_lx(&sorted_lengths, total_len, 99, 100);
-    let au_n = compute_au_n(&sorted_lengths, total_len);
+    let (n50, l50) = nx_lx(sorted_lengths, total_len, 1, 2);
+    let (n75, _) = nx_lx(sorted_lengths, total_len, 3, 4);
+    let (n90, l90) = nx_lx(sorted_lengths, total_len, 9, 10);
+    let (n95, l95) = nx_lx(sorted_lengths, total_len, 19, 20);
+    let (n99, l99) = nx_lx(sorted_lengths, total_len, 99, 100);
+    let au_n = compute_au_n(sorted_lengths, total_len);
     let longest = sorted_lengths.first().copied().unwrap_or(0);
-    let (contigs_ge_1kb, bases_ge_1kb) = count_and_span_at_or_above(&sorted_lengths, 1_000);
-    let (contigs_ge_10kb, bases_ge_10kb) = count_and_span_at_or_above(&sorted_lengths, 10_000);
-    let (contigs_ge_50kb, bases_ge_50kb) = count_and_span_at_or_above(&sorted_lengths, 50_000);
+    let (contigs_ge_1kb, bases_ge_1kb) = count_and_span_at_or_above(sorted_lengths, 1_000);
+    let (contigs_ge_10kb, bases_ge_10kb) = count_and_span_at_or_above(sorted_lengths, 10_000);
+    let (contigs_ge_50kb, bases_ge_50kb) = count_and_span_at_or_above(sorted_lengths, 50_000);
 
     TranscriptStats {
         total: sorted_lengths.len(),
@@ -194,9 +200,19 @@ pub fn evaluate_lengths(lengths: &[usize]) -> TranscriptStats {
     }
 }
 
+pub fn evaluate_lengths(lengths: &[usize]) -> TranscriptStats {
+    if lengths.is_empty() {
+        return empty_transcript_stats();
+    }
+
+    let mut sorted_lengths = lengths.to_vec();
+    sorted_lengths.sort_unstable_by(|a, b| b.cmp(a));
+    evaluate_lengths_sorted_desc(&sorted_lengths)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{evaluate_lengths, nx_lx, BaseComposition};
+    use super::{evaluate_lengths, evaluate_lengths_sorted_desc, nx_lx, BaseComposition};
 
     #[test]
     fn evaluate_lengths_reports_nx_metrics() {
@@ -255,5 +271,35 @@ mod tests {
         assert!((composition.gc_content() - 0.5).abs() < 1e-12);
         assert!((composition.n_content(12) - (2.0 / 12.0)).abs() < 1e-12);
         assert!((composition.ambiguous_content(12) - (2.0 / 12.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn evaluate_lengths_sorted_desc_matches_unsorted_entrypoint() {
+        let input = vec![999, 50_000, 1_000, 10_000];
+        let expected = evaluate_lengths(&input);
+
+        let mut sorted = input.clone();
+        sorted.sort_unstable_by(|a, b| b.cmp(a));
+        let observed = evaluate_lengths_sorted_desc(&sorted);
+
+        assert_eq!(observed.total, expected.total);
+        assert_eq!(observed.total_bases, expected.total_bases);
+        assert_eq!(observed.n50, expected.n50);
+        assert_eq!(observed.n75, expected.n75);
+        assert_eq!(observed.n90, expected.n90);
+        assert_eq!(observed.n95, expected.n95);
+        assert_eq!(observed.n99, expected.n99);
+        assert_eq!(observed.l50, expected.l50);
+        assert_eq!(observed.l90, expected.l90);
+        assert_eq!(observed.l95, expected.l95);
+        assert_eq!(observed.l99, expected.l99);
+        assert!((observed.au_n - expected.au_n).abs() < 1e-12);
+        assert_eq!(observed.longest, expected.longest);
+        assert_eq!(observed.contigs_ge_1kb, expected.contigs_ge_1kb);
+        assert_eq!(observed.contigs_ge_10kb, expected.contigs_ge_10kb);
+        assert_eq!(observed.contigs_ge_50kb, expected.contigs_ge_50kb);
+        assert_eq!(observed.bases_ge_1kb, expected.bases_ge_1kb);
+        assert_eq!(observed.bases_ge_10kb, expected.bases_ge_10kb);
+        assert_eq!(observed.bases_ge_50kb, expected.bases_ge_50kb);
     }
 }
