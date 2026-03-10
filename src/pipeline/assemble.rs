@@ -171,6 +171,16 @@ pub fn assemble_reads_with_gpu(
         kmer_counts_u64.len()
     );
 
+    // Sequence strings are no longer needed after k-mer counting.
+    // Releasing this buffer early reduces peak RSS during graph cleanup/polishing.
+    let released_records = sequences.len();
+    sequences.clear();
+    sequences.shrink_to_fit();
+    info!(
+        "Released {} input sequences from memory after k-mer counting",
+        released_records
+    );
+
     // Build adjacency table for assembly
     info!("Building adjacency table...");
     let mut adjacency = cpu_backend.build_adjacency_u64(&kmer_counts_u64, k);
