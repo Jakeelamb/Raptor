@@ -212,7 +212,13 @@ fn add_path_record_from_p(
         unique_nodes_in_path.insert(segment.to_string());
     }
 
-    finalize_path_record(path_len, unique_nodes_in_path, path_count, path_lengths, node_path_count);
+    finalize_path_record(
+        path_len,
+        unique_nodes_in_path,
+        path_count,
+        path_lengths,
+        node_path_count,
+    );
 }
 
 #[inline]
@@ -243,7 +249,13 @@ fn add_path_record_from_w(
         }
     }
 
-    finalize_path_record(path_len, unique_nodes_in_path, path_count, path_lengths, node_path_count);
+    finalize_path_record(
+        path_len,
+        unique_nodes_in_path,
+        path_count,
+        path_lengths,
+        node_path_count,
+    );
 }
 
 #[inline]

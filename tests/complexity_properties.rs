@@ -65,7 +65,12 @@ fn write_gfa_with_walks(
             .map(|&node| format!(">{}", segments[node]))
             .collect::<Vec<_>>()
             .join("");
-        records.push(format!("W\tsample\t{}\tchr1\t0\t{}\t{}", idx, path.len(), walk));
+        records.push(format!(
+            "W\tsample\t{}\tchr1\t0\t{}\t{}",
+            idx,
+            path.len(),
+            walk
+        ));
     }
 
     let mut rng = StdRng::seed_from_u64(seed);
