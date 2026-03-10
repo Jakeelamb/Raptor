@@ -17,6 +17,7 @@ use tracing::{info, warn};
 struct AssemblyQualitySummary {
     total_contigs: usize,
     total_bases: usize,
+    ungapped_total_bases: usize,
     avg_length: f64,
     median_length: f64,
     n10: usize,
@@ -34,6 +35,8 @@ struct AssemblyQualitySummary {
     l95: usize,
     l99: usize,
     au_n: f64,
+    ungapped_n50: usize,
+    ungapped_au_n: f64,
     longest: usize,
     longest_frac: f64,
     gc_bases: usize,
@@ -105,17 +108,24 @@ fn update_n_runs(sequence: &[u8], n_runs: &mut NRunSummary) {
 #[inline]
 fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
     let mut lengths = Vec::with_capacity(contigs.len());
+    let mut ungapped_lengths = Vec::with_capacity(contigs.len());
     let mut composition = BaseComposition::default();
     let mut n_runs = NRunSummary::default();
 
     for contig in contigs {
         lengths.push(contig.sequence.len());
         let sequence = contig.sequence.as_bytes();
+        let n_bases = sequence
+            .iter()
+            .filter(|&&base| matches!(base, b'N' | b'n'))
+            .count();
+        ungapped_lengths.push(sequence.len().saturating_sub(n_bases));
         composition.add_sequence(sequence);
         update_n_runs(sequence, &mut n_runs);
     }
 
     let length_stats = evaluate_lengths_in_place(&mut lengths);
+    let ungapped_length_stats = evaluate_lengths_in_place(&mut ungapped_lengths);
     let longest_frac = if length_stats.total_bases > 0 {
         length_stats.longest as f64 / length_stats.total_bases as f64
     } else {
@@ -129,6 +139,7 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
     AssemblyQualitySummary {
         total_contigs: length_stats.total,
         total_bases: length_stats.total_bases,
+        ungapped_total_bases: ungapped_length_stats.total_bases,
         avg_length: length_stats.avg_length,
         median_length: length_stats.median_length,
         n10: length_stats.n10,
@@ -146,6 +157,8 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
         l95: length_stats.l95,
         l99: length_stats.l99,
         au_n: length_stats.au_n,
+        ungapped_n50: ungapped_length_stats.n50,
+        ungapped_au_n: ungapped_length_stats.au_n,
         longest: length_stats.longest,
         longest_frac,
         gc_bases: composition.gc_bases,
@@ -201,6 +214,10 @@ fn write_assembly_quality_reports(
     let rows = [
         ("total_contigs", quality.total_contigs.to_string()),
         ("total_bases", quality.total_bases.to_string()),
+        (
+            "ungapped_total_bases",
+            quality.ungapped_total_bases.to_string(),
+        ),
         ("avg_length", format!("{:.12}", quality.avg_length)),
         ("median_length", format!("{:.12}", quality.median_length)),
         ("n10", quality.n10.to_string()),
@@ -218,6 +235,8 @@ fn write_assembly_quality_reports(
         ("l95", quality.l95.to_string()),
         ("l99", quality.l99.to_string()),
         ("au_n", format!("{:.12}", quality.au_n)),
+        ("ungapped_n50", quality.ungapped_n50.to_string()),
+        ("ungapped_au_n", format!("{:.12}", quality.ungapped_au_n)),
         ("longest", quality.longest.to_string()),
         ("longest_frac", format!("{:.12}", quality.longest_frac)),
         ("gc_bases", quality.gc_bases.to_string()),
@@ -559,7 +578,7 @@ pub fn assemble_reads_with_gpu(
 
     let quality = summarize_assembly_quality(&contigs);
     info!(
-        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN: {:.1}, Longest: {} bp ({:.2}%), GC/N/Ambiguous bases: {}/{}/{} (fractions {:.2}%/{:.2}%/{:.2}%), N-runs: count {}, max {}, mean {:.1} bp ({:.1} per 100kb), N/Ambiguous bases per 100kb: {:.1}/{:.1}, >=1kb/10kb/50kb/100kb contigs: {}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%)",
+        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN: {:.1}, Ungapped bases/N50/auN: {}/{}/{:.1}, Longest: {} bp ({:.2}%), GC/N/Ambiguous bases: {}/{}/{} (fractions {:.2}%/{:.2}%/{:.2}%), N-runs: count {}, max {}, mean {:.1} bp ({:.1} per 100kb), N/Ambiguous bases per 100kb: {:.1}/{:.1}, >=1kb/10kb/50kb/100kb contigs: {}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%)",
         quality.total_contigs,
         quality.total_bases,
         quality.avg_length,
@@ -579,6 +598,9 @@ pub fn assemble_reads_with_gpu(
         quality.l95,
         quality.l99,
         quality.au_n,
+        quality.ungapped_total_bases,
+        quality.ungapped_n50,
+        quality.ungapped_au_n,
         quality.longest,
         quality.longest_frac * 100.0,
         quality.gc_bases,
@@ -1150,6 +1172,7 @@ mod tests {
         let summary = summarize_assembly_quality(&contigs);
         assert_eq!(summary.total_contigs, 3);
         assert_eq!(summary.total_bases, 12);
+        assert_eq!(summary.ungapped_total_bases, 11);
         assert_eq!(summary.median_length, 4.0);
         assert_eq!(summary.n10, 4);
         assert_eq!(summary.n25, 4);
@@ -1169,6 +1192,8 @@ mod tests {
         assert!((summary.longest_frac - (1.0 / 3.0)).abs() < 1e-12);
         assert!((summary.avg_length - 4.0).abs() < 1e-12);
         assert!((summary.au_n - 4.0).abs() < 1e-12);
+        assert_eq!(summary.ungapped_n50, 4);
+        assert!((summary.ungapped_au_n - (41.0 / 11.0)).abs() < 1e-12);
         assert_eq!(summary.gc_bases, 4);
         assert_eq!(summary.acgt_bases, 9);
         assert_eq!(summary.n_bases, 1);
@@ -1253,6 +1278,7 @@ mod tests {
 
         let summary = summarize_assembly_quality(&contigs);
         assert_eq!(summary.total_bases, 161_999);
+        assert_eq!(summary.ungapped_total_bases, 161_000);
         assert_eq!(summary.median_length, 10_000.0);
         assert_eq!(summary.n10, 100_000);
         assert_eq!(summary.n50, 100_000);
@@ -1286,6 +1312,8 @@ mod tests {
         assert_eq!(summary.n_runs, 1);
         assert_eq!(summary.longest_n_run, 999);
         assert!((summary.mean_n_run_length - 999.0).abs() < 1e-12);
+        assert_eq!(summary.ungapped_n50, 100_000);
+        assert!((summary.ungapped_au_n - (12_601_000_000.0 / 161_000.0)).abs() < 1e-9);
     }
 
     #[test]
@@ -1310,10 +1338,12 @@ mod tests {
 
         let summary = summarize_assembly_quality(&contigs);
         assert_eq!(summary.n_bases, 6);
+        assert_eq!(summary.ungapped_total_bases, 10);
         assert_eq!(summary.n_runs, 3);
         assert_eq!(summary.longest_n_run, 3);
         assert!((summary.mean_n_run_length - 2.0).abs() < 1e-12);
         assert!((summary.n_runs_per_100kb - (3.0 * 100_000.0 / 16.0)).abs() < 1e-12);
+        assert_eq!(summary.ungapped_n50, 3);
     }
 
     #[test]
@@ -1365,6 +1395,7 @@ mod tests {
         let summary = AssemblyQualitySummary {
             total_contigs: 5,
             total_bases: 1234,
+            ungapped_total_bases: 1200,
             avg_length: 246.8,
             median_length: 210.0,
             n10: 320,
@@ -1382,6 +1413,8 @@ mod tests {
             l95: 5,
             l99: 5,
             au_n: 260.5,
+            ungapped_n50: 240,
+            ungapped_au_n: 255.25,
             longest: 420,
             longest_frac: 0.340356564,
             gc_bases: 580,
@@ -1429,6 +1462,9 @@ mod tests {
         assert_eq!(parsed["total_contigs"], 5);
         assert_eq!(parsed["n10"], 320);
         assert_eq!(parsed["n50"], 250);
+        assert_eq!(parsed["ungapped_total_bases"], 1200);
+        assert_eq!(parsed["ungapped_n50"], 240);
+        assert_eq!(parsed["ungapped_au_n"], 255.25);
         assert_eq!(parsed["l10"], 1);
         assert_eq!(parsed["l75"], 3);
         assert_eq!(parsed["acgt_bases"], 1100);
@@ -1449,6 +1485,9 @@ mod tests {
         assert_eq!(lines.next(), Some("metric\tvalue"));
         assert!(tsv.contains("n10\t320"));
         assert!(tsv.contains("n50\t250"));
+        assert!(tsv.contains("ungapped_total_bases\t1200"));
+        assert!(tsv.contains("ungapped_n50\t240"));
+        assert!(tsv.contains("ungapped_au_n\t255.250000000000"));
         assert!(tsv.contains("l10\t1"));
         assert!(tsv.contains("l75\t3"));
         assert!(tsv.contains("acgt_bases\t1100"));
