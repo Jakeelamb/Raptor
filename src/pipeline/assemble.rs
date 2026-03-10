@@ -19,12 +19,14 @@ struct AssemblyQualitySummary {
     total_bases: usize,
     avg_length: f64,
     median_length: f64,
+    n10: usize,
     n25: usize,
     n50: usize,
     n75: usize,
     n90: usize,
     n95: usize,
     n99: usize,
+    l10: usize,
     l25: usize,
     l50: usize,
     l75: usize,
@@ -34,6 +36,10 @@ struct AssemblyQualitySummary {
     au_n: f64,
     longest: usize,
     longest_frac: f64,
+    gc_bases: usize,
+    acgt_bases: usize,
+    n_bases: usize,
+    ambiguous_bases: usize,
     gc_content: f64,
     n_content: f64,
     ambiguous_content: f64,
@@ -76,12 +82,14 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
         total_bases: length_stats.total_bases,
         avg_length: length_stats.avg_length,
         median_length: length_stats.median_length,
+        n10: length_stats.n10,
         n25: length_stats.n25,
         n50: length_stats.n50,
         n75: length_stats.n75,
         n90: length_stats.n90,
         n95: length_stats.n95,
         n99: length_stats.n99,
+        l10: length_stats.l10,
         l25: length_stats.l25,
         l50: length_stats.l50,
         l75: length_stats.l75,
@@ -91,6 +99,10 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
         au_n: length_stats.au_n,
         longest: length_stats.longest,
         longest_frac,
+        gc_bases: composition.gc_bases,
+        acgt_bases: composition.acgt_bases,
+        n_bases: composition.n_bases,
+        ambiguous_bases: composition.ambiguous_bases,
         gc_content: composition.gc_content(),
         n_content: composition.n_content(length_stats.total_bases),
         ambiguous_content: composition.ambiguous_content(length_stats.total_bases),
@@ -136,12 +148,14 @@ fn write_assembly_quality_reports(
         ("total_bases", quality.total_bases.to_string()),
         ("avg_length", format!("{:.12}", quality.avg_length)),
         ("median_length", format!("{:.12}", quality.median_length)),
+        ("n10", quality.n10.to_string()),
         ("n25", quality.n25.to_string()),
         ("n50", quality.n50.to_string()),
         ("n75", quality.n75.to_string()),
         ("n90", quality.n90.to_string()),
         ("n95", quality.n95.to_string()),
         ("n99", quality.n99.to_string()),
+        ("l10", quality.l10.to_string()),
         ("l25", quality.l25.to_string()),
         ("l50", quality.l50.to_string()),
         ("l75", quality.l75.to_string()),
@@ -151,6 +165,10 @@ fn write_assembly_quality_reports(
         ("au_n", format!("{:.12}", quality.au_n)),
         ("longest", quality.longest.to_string()),
         ("longest_frac", format!("{:.12}", quality.longest_frac)),
+        ("gc_bases", quality.gc_bases.to_string()),
+        ("acgt_bases", quality.acgt_bases.to_string()),
+        ("n_bases", quality.n_bases.to_string()),
+        ("ambiguous_bases", quality.ambiguous_bases.to_string()),
         ("gc_content", format!("{:.12}", quality.gc_content)),
         ("n_content", format!("{:.12}", quality.n_content)),
         (
@@ -455,17 +473,19 @@ pub fn assemble_reads_with_gpu(
 
     let quality = summarize_assembly_quality(&contigs);
     info!(
-        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{} bp, L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}, auN: {:.1}, Longest: {} bp ({:.2}%), GC/N/Ambiguous: {:.2}%/{:.2}%/{:.2}%, >=1kb/10kb/50kb/100kb contigs: {}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%)",
+        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN: {:.1}, Longest: {} bp ({:.2}%), GC/N/Ambiguous bases: {}/{}/{} (fractions {:.2}%/{:.2}%/{:.2}%), >=1kb/10kb/50kb/100kb contigs: {}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%)",
         quality.total_contigs,
         quality.total_bases,
         quality.avg_length,
         quality.median_length,
+        quality.n10,
         quality.n25,
         quality.n50,
         quality.n75,
         quality.n90,
         quality.n95,
         quality.n99,
+        quality.l10,
         quality.l25,
         quality.l50,
         quality.l75,
@@ -475,6 +495,9 @@ pub fn assemble_reads_with_gpu(
         quality.au_n,
         quality.longest,
         quality.longest_frac * 100.0,
+        quality.gc_bases,
+        quality.n_bases,
+        quality.ambiguous_bases,
         quality.gc_content * 100.0,
         quality.n_content * 100.0,
         quality.ambiguous_content * 100.0,
@@ -822,17 +845,19 @@ pub fn assemble_reads_with_gpu(
             let mut transcript_lengths: Vec<usize> =
                 transcripts.iter().map(|t| t.sequence.len()).collect();
             let stats = evaluate_lengths_in_place(&mut transcript_lengths);
-            info!(
-                "Transcript statistics: {} transcripts, {} bp total, Avg: {:.1} bp, N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{} bp, L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}, auN: {:.1}",
+    info!(
+        "Transcript statistics: {} transcripts, {} bp total, Avg: {:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN: {:.1}",
                 stats.total,
                 stats.total_bases,
                 stats.avg_length,
+                stats.n10,
                 stats.n25,
                 stats.n50,
                 stats.n75,
                 stats.n90,
                 stats.n95,
                 stats.n99,
+                stats.l10,
                 stats.l25,
                 stats.l50,
                 stats.l75,
@@ -1020,12 +1045,14 @@ mod tests {
         assert_eq!(summary.total_contigs, 3);
         assert_eq!(summary.total_bases, 12);
         assert_eq!(summary.median_length, 4.0);
+        assert_eq!(summary.n10, 4);
         assert_eq!(summary.n25, 4);
         assert_eq!(summary.n50, 4);
         assert_eq!(summary.n75, 4);
         assert_eq!(summary.n90, 4);
         assert_eq!(summary.n95, 4);
         assert_eq!(summary.n99, 4);
+        assert_eq!(summary.l10, 1);
         assert_eq!(summary.l25, 1);
         assert_eq!(summary.l50, 2);
         assert_eq!(summary.l75, 3);
@@ -1036,6 +1063,10 @@ mod tests {
         assert!((summary.longest_frac - (1.0 / 3.0)).abs() < 1e-12);
         assert!((summary.avg_length - 4.0).abs() < 1e-12);
         assert!((summary.au_n - 4.0).abs() < 1e-12);
+        assert_eq!(summary.gc_bases, 4);
+        assert_eq!(summary.acgt_bases, 9);
+        assert_eq!(summary.n_bases, 1);
+        assert_eq!(summary.ambiguous_bases, 2);
         assert!((summary.gc_content - (4.0 / 9.0)).abs() < 1e-12);
         assert!((summary.n_content - (1.0 / 12.0)).abs() < 1e-12);
         assert!((summary.ambiguous_content - (2.0 / 12.0)).abs() < 1e-12);
@@ -1111,10 +1142,12 @@ mod tests {
         let summary = summarize_assembly_quality(&contigs);
         assert_eq!(summary.total_bases, 161_999);
         assert_eq!(summary.median_length, 10_000.0);
+        assert_eq!(summary.n10, 100_000);
         assert_eq!(summary.n50, 100_000);
         assert_eq!(summary.n90, 50_000);
         assert_eq!(summary.n95, 10_000);
         assert_eq!(summary.n99, 1_000);
+        assert_eq!(summary.l10, 1);
         assert_eq!(summary.l25, 1);
         assert_eq!(summary.l50, 1);
         assert_eq!(summary.l75, 2);
@@ -1191,12 +1224,14 @@ mod tests {
             total_bases: 1234,
             avg_length: 246.8,
             median_length: 210.0,
+            n10: 320,
             n25: 300,
             n50: 250,
             n75: 200,
             n90: 150,
             n95: 140,
             n99: 100,
+            l10: 1,
             l25: 1,
             l50: 2,
             l75: 3,
@@ -1206,6 +1241,10 @@ mod tests {
             au_n: 260.5,
             longest: 420,
             longest_frac: 0.340356564,
+            gc_bases: 580,
+            acgt_bases: 1100,
+            n_bases: 90,
+            ambiguous_bases: 44,
             gc_content: 0.5,
             n_content: 0.1,
             ambiguous_content: 0.02,
@@ -1239,16 +1278,22 @@ mod tests {
         let json = std::fs::read_to_string(&json_path).expect("read json report");
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse json");
         assert_eq!(parsed["total_contigs"], 5);
+        assert_eq!(parsed["n10"], 320);
         assert_eq!(parsed["n50"], 250);
+        assert_eq!(parsed["l10"], 1);
         assert_eq!(parsed["l75"], 3);
+        assert_eq!(parsed["acgt_bases"], 1100);
         assert_eq!(parsed["gc_content"], 0.5);
         assert_eq!(parsed["longest_frac"], 0.340356564);
 
         let tsv = std::fs::read_to_string(&tsv_path).expect("read tsv report");
         let mut lines = tsv.lines();
         assert_eq!(lines.next(), Some("metric\tvalue"));
+        assert!(tsv.contains("n10\t320"));
         assert!(tsv.contains("n50\t250"));
+        assert!(tsv.contains("l10\t1"));
         assert!(tsv.contains("l75\t3"));
+        assert!(tsv.contains("acgt_bases\t1100"));
         assert!(tsv.contains("longest_frac\t0.340356564000"));
         assert!(tsv.contains("gc_content\t0.500000000000"));
         assert!(tsv.contains("bases_ge_1kb_frac\t0.810000000000"));
