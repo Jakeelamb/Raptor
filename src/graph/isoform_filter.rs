@@ -63,14 +63,30 @@ fn edit_distance(a: &str, b: &str) -> usize {
 /// Jaccard similarity = |intersection| / |union|
 #[inline]
 pub fn kmer_jaccard_similarity(seq1: &str, seq2: &str, k: usize) -> f64 {
+    if seq1.is_empty() || seq2.is_empty() {
+        return f64::from(seq1.is_empty() && seq2.is_empty());
+    }
+
     if seq1.len() < k || seq2.len() < k {
-        // Fall back to length-based similarity for very short sequences
-        let min_len = seq1.len().min(seq2.len());
-        let max_len = seq1.len().max(seq2.len());
-        if max_len == 0 {
+        // For short equal-length sequences, use direct base agreement so
+        // non-identical transcripts are not treated as perfectly similar.
+        if seq1.len() == seq2.len() {
+            let distance = hamming_distance_simd(seq1.as_bytes(), seq2.as_bytes());
+            return 1.0 - (distance as f64 / seq1.len() as f64);
+        }
+
+        // For short unequal lengths, use the largest k-mer size that fits both
+        // inputs to keep similarity sequence-aware and symmetric.
+        let adaptive_k = seq1.len().min(seq2.len());
+        let kmers1: AHashSet<u64> = extract_kmer_hashes(seq1.as_bytes(), adaptive_k);
+        let kmers2: AHashSet<u64> = extract_kmer_hashes(seq2.as_bytes(), adaptive_k);
+
+        let intersection = kmers1.intersection(&kmers2).count();
+        let union = kmers1.len() + kmers2.len() - intersection;
+        if union == 0 {
             return 1.0;
         }
-        return min_len as f64 / max_len as f64;
+        return intersection as f64 / union as f64;
     }
 
     // Extract k-mer hashes from both sequences
@@ -485,10 +501,9 @@ mod tests {
             splicing: "unknown".to_string(),
         };
 
-        // Now using k-mer Jaccard similarity
-        // For very short sequences (< JACCARD_K), falls back to length ratio
+        // For very short equal-length sequences (< JACCARD_K), we use direct
+        // base agreement.
         let sim = calculate_sequence_similarity(&t1, &t2);
-        // Both have length 7, so length-based similarity is 1.0
         assert!(
             sim > 0.0 && sim <= 1.0,
             "Similarity should be between 0 and 1, got {}",
@@ -555,6 +570,18 @@ mod tests {
 
         // Identical paths
         assert_eq!(calculate_path_similarity(&t1, &t3), 1.0);
+    }
+
+    #[test]
+    fn test_kmer_jaccard_similarity_short_equal_length_is_sequence_aware() {
+        let similarity = kmer_jaccard_similarity("AAAA", "AAAT", JACCARD_K);
+        assert!((similarity - 0.75).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_kmer_jaccard_similarity_short_equal_length_distinguishes_disjoint_sequences() {
+        let similarity = kmer_jaccard_similarity("AAAA", "TTTT", JACCARD_K);
+        assert_eq!(similarity, 0.0);
     }
 
     #[test]
