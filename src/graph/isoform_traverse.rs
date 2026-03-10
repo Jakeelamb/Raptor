@@ -213,6 +213,15 @@ fn calculate_path_confidence(graph: &IsoformGraph, path: &[usize]) -> f32 {
     sum_weight / count as f32
 }
 
+#[inline]
+fn normalize_confidence_threshold(threshold: f32) -> f32 {
+    if threshold.is_finite() {
+        threshold.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
 /// Filter transcript paths by confidence and optional length criteria
 pub fn filter_paths_by_confidence(
     paths: &[TranscriptPath],
@@ -220,6 +229,11 @@ pub fn filter_paths_by_confidence(
     min_path_len: usize,
     high_confidence_threshold: Option<f32>,
 ) -> Vec<TranscriptPath> {
+    let min_confidence = normalize_confidence_threshold(min_confidence);
+    let high_confidence_threshold = high_confidence_threshold
+        .map(normalize_confidence_threshold)
+        .filter(|threshold| *threshold >= min_confidence);
+
     paths
         .iter()
         .filter(|path| {
@@ -336,5 +350,53 @@ mod tests {
         let unique_nodes: Vec<Vec<usize>> = unique.into_iter().map(|p| p.nodes).collect();
         let duplicated_nodes: Vec<Vec<usize>> = duplicated.into_iter().map(|p| p.nodes).collect();
         assert_eq!(duplicated_nodes, unique_nodes);
+    }
+
+    #[test]
+    fn filter_paths_by_confidence_sanitizes_non_finite_thresholds() {
+        let paths = vec![
+            TranscriptPath {
+                nodes: vec![0, 1],
+                confidence: 0.4,
+                length: 200,
+            },
+            TranscriptPath {
+                nodes: vec![2],
+                confidence: 0.9,
+                length: 20,
+            },
+        ];
+
+        let filtered =
+            filter_paths_by_confidence(&paths, f32::NAN, 100, Some(f32::NEG_INFINITY));
+        let kept_nodes: Vec<Vec<usize>> = filtered.into_iter().map(|path| path.nodes).collect();
+
+        assert_eq!(kept_nodes, vec![vec![0, 1], vec![2]]);
+    }
+
+    #[test]
+    fn filter_paths_by_confidence_clamps_thresholds_to_valid_probability_range() {
+        let paths = vec![
+            TranscriptPath {
+                nodes: vec![0],
+                confidence: 0.8,
+                length: 120,
+            },
+            TranscriptPath {
+                nodes: vec![1],
+                confidence: 1.0,
+                length: 30,
+            },
+            TranscriptPath {
+                nodes: vec![2],
+                confidence: 0.99,
+                length: 30,
+            },
+        ];
+
+        let filtered = filter_paths_by_confidence(&paths, -0.5, 100, Some(2.0));
+        let kept_nodes: Vec<Vec<usize>> = filtered.into_iter().map(|path| path.nodes).collect();
+
+        assert_eq!(kept_nodes, vec![vec![0], vec![1]]);
     }
 }
