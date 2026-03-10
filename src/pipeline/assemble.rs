@@ -101,6 +101,16 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
     }
 }
 
+#[inline]
+fn sequence_only_record(record: FastqRecord) -> FastqRecord {
+    FastqRecord {
+        header: String::new(),
+        sequence: record.sequence,
+        plus: String::new(),
+        quality: String::new(),
+    }
+}
+
 pub fn assemble_reads(
     input_path: &str,
     output_path: &str,
@@ -295,7 +305,13 @@ pub fn assemble_reads_with_gpu(
     // Keep records for polishing if needed
     if polish || (isoforms && (polish_isoforms || compute_tpm)) {
         let reader = try_open_fastq(input_path)?;
-        records = stream_fastq_records_checked(reader).collect::<io::Result<Vec<_>>>()?;
+        records = stream_fastq_records_checked(reader)
+            .map(|record| record.map(sequence_only_record))
+            .collect::<io::Result<Vec<_>>>()?;
+        info!(
+            "Loaded {} reads in sequence-only form for polishing/TPM",
+            records.len()
+        );
     }
 
     // Perform greedy assembly using u64 k-mers
@@ -808,9 +824,11 @@ fn derive_contig_expression_map(
 #[cfg(test)]
 mod tests {
     use super::{
-        assemble_reads_with_gpu, derive_contig_expression_map, summarize_assembly_quality,
+        assemble_reads_with_gpu, derive_contig_expression_map, sequence_only_record,
+        summarize_assembly_quality,
     };
     use crate::graph::assembler::Contig;
+    use crate::io::fastq::FastqRecord;
     use ahash::AHashMap;
     use std::io::{self, Write};
     use tempfile::NamedTempFile;
@@ -845,6 +863,22 @@ mod tests {
         assert_eq!(expression.get(&7), Some(&4));
         assert!(!expression.contains_key(&8));
         assert!(!expression.contains_key(&9));
+    }
+
+    #[test]
+    fn sequence_only_record_drops_non_sequence_fields() {
+        let record = FastqRecord {
+            header: "@read_1".to_string(),
+            sequence: "ACGT".to_string(),
+            plus: "+".to_string(),
+            quality: "IIII".to_string(),
+        };
+
+        let compact = sequence_only_record(record);
+        assert!(compact.header.is_empty());
+        assert_eq!(compact.sequence, "ACGT");
+        assert!(compact.plus.is_empty());
+        assert!(compact.quality.is_empty());
     }
 
     #[test]
