@@ -238,6 +238,53 @@ fn reverse_complement(seq: &[u8]) -> Vec<u8> {
         .collect()
 }
 
+#[inline]
+fn compare_extension_sequences(left: &[u8], right: &[u8]) -> Ordering {
+    left.len().cmp(&right.len()).then_with(|| right.cmp(left))
+}
+
+fn choose_consensus_extension<'a>(extensions: &[&'a Vec<u8>]) -> Option<&'a Vec<u8>> {
+    if extensions.is_empty() {
+        return None;
+    }
+
+    let mut sorted = extensions.to_vec();
+    sorted.sort_unstable_by(|left, right| left.as_slice().cmp(right.as_slice()));
+
+    let mut best_seq = sorted[0];
+    let mut best_count = 1usize;
+
+    let mut run_seq = sorted[0];
+    let mut run_count = 1usize;
+    for seq in sorted.iter().copied().skip(1) {
+        if seq.as_slice() == run_seq.as_slice() {
+            run_count += 1;
+            continue;
+        }
+
+        if run_count > best_count
+            || (run_count == best_count
+                && compare_extension_sequences(run_seq.as_slice(), best_seq.as_slice())
+                    == Ordering::Greater)
+        {
+            best_seq = run_seq;
+            best_count = run_count;
+        }
+        run_seq = seq;
+        run_count = 1;
+    }
+
+    if run_count > best_count
+        || (run_count == best_count
+            && compare_extension_sequences(run_seq.as_slice(), best_seq.as_slice())
+                == Ordering::Greater)
+    {
+        best_seq = run_seq;
+    }
+
+    Some(best_seq)
+}
+
 /// Read contigs from FASTA
 fn read_contigs(path: &str) -> Result<Vec<(String, Vec<u8>)>> {
     let reader = open_fasta(path);
@@ -426,8 +473,8 @@ pub fn integrate_long_reads(
                 .collect();
 
             if relevant.len() >= 2 {
-                // Simple consensus: use the most common sequence or the longest
-                if let Some(best_ext) = relevant.iter().max_by_key(|s| s.len()) {
+                // Consensus uses support first, with deterministic tie-breakers.
+                if let Some(best_ext) = choose_consensus_extension(&relevant) {
                     if is_right {
                         contig_seq.extend_from_slice(best_ext);
                     } else {
@@ -508,6 +555,27 @@ mod tests {
     use super::*;
     use std::io::{self, Write};
     use tempfile::{NamedTempFile, TempDir};
+
+    fn write_long_reads_fastq(path: &std::path::Path, reads: &[&str]) {
+        let mut file = std::fs::File::create(path).expect("create FASTQ");
+        for (idx, read) in reads.iter().enumerate() {
+            writeln!(file, "@read_{idx}").expect("write read header");
+            writeln!(file, "{read}").expect("write read sequence");
+            writeln!(file, "+").expect("write plus line");
+            writeln!(file, "{}", "I".repeat(read.len())).expect("write quality");
+        }
+    }
+
+    fn read_single_output_sequence(path: &std::path::Path) -> String {
+        let content = std::fs::read_to_string(path).expect("read output FASTA");
+        let mut seq = String::new();
+        for line in content.lines() {
+            if !line.starts_with('>') {
+                seq.push_str(line);
+            }
+        }
+        seq
+    }
 
     #[test]
     fn test_reverse_complement() {
@@ -736,5 +804,94 @@ mod tests {
         .expect_err("truncated FASTQ must return an error");
 
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn choose_consensus_extension_prefers_support_then_length_then_lexicographic_order() {
+        let a = b"AAA".to_vec();
+        let b = b"AAAA".to_vec();
+        let c = b"TTTT".to_vec();
+        let d = b"CCCC".to_vec();
+
+        let best_supported = choose_consensus_extension(&[&a, &b, &a, &c, &d, &c, &c]);
+        assert_eq!(best_supported.expect("consensus exists"), &c);
+
+        let best_tie_by_length = choose_consensus_extension(&[&a, &b]);
+        assert_eq!(best_tie_by_length.expect("consensus exists"), &b);
+
+        let best_tie_by_lex = choose_consensus_extension(&[&c, &d]);
+        assert_eq!(best_tie_by_lex.expect("consensus exists"), &d);
+    }
+
+    #[test]
+    fn integrate_long_reads_consensus_extension_is_order_invariant_and_majority_driven() {
+        let mut contigs = NamedTempFile::new().expect("temp contig fasta");
+        writeln!(contigs, ">contig_1").expect("write header");
+        writeln!(contigs, "ACGTACGTACGT").expect("write sequence");
+
+        let temp_dir = TempDir::new().expect("temp directory");
+        let reads_a = temp_dir.path().join("reads_a.fastq");
+        let reads_b = temp_dir.path().join("reads_b.fastq");
+        let out_a = temp_dir.path().join("out_a.fasta");
+        let out_b = temp_dir.path().join("out_b.fasta");
+
+        let majority_short = "ACGTACGTACGTAAA";
+        let minority_long = "ACGTACGTACGTTTTTTT";
+        write_long_reads_fastq(
+            &reads_a,
+            &[
+                majority_short,
+                minority_long,
+                majority_short,
+                majority_short,
+                majority_short,
+            ],
+        );
+        write_long_reads_fastq(
+            &reads_b,
+            &[
+                minority_long,
+                majority_short,
+                majority_short,
+                majority_short,
+                majority_short,
+            ],
+        );
+
+        let config = LongReadConfig {
+            min_anchor_matches: 3,
+            min_overlap: 1,
+            min_read_length: 8,
+            minimizer_k: 3,
+            minimizer_w: 2,
+        };
+
+        integrate_long_reads(
+            contigs.path().to_str().expect("utf8 contig path"),
+            reads_a.to_str().expect("utf8 reads_a path"),
+            out_a.to_str().expect("utf8 out_a path"),
+            config.clone(),
+        )
+        .expect("first integration should succeed");
+
+        integrate_long_reads(
+            contigs.path().to_str().expect("utf8 contig path"),
+            reads_b.to_str().expect("utf8 reads_b path"),
+            out_b.to_str().expect("utf8 out_b path"),
+            config,
+        )
+        .expect("second integration should succeed");
+
+        let assembled_a = read_single_output_sequence(&out_a);
+        let assembled_b = read_single_output_sequence(&out_b);
+        assert_eq!(assembled_a, assembled_b);
+        assert!(
+            assembled_a.ends_with("AA"),
+            "expected majority extension suffix to preserve A-supported tail, observed {assembled_a}"
+        );
+        assert!(
+            !assembled_a.ends_with("TTTT"),
+            "longest minority extension should not win, observed {assembled_a}"
+        );
     }
 }
