@@ -67,11 +67,14 @@ fn is_rle_similar(seq1: &str, seq2: &str, threshold: f64) -> bool {
 
 /// Determine if two pre-encoded RLE signatures are similar.
 fn is_rle_similar_encoded(rle1: &[(u8, u8)], rle2: &[(u8, u8)], threshold: f64) -> bool {
+    #[inline]
+    fn rel_diff(lhs: usize, rhs: usize) -> f64 {
+        let denom = lhs.max(rhs).max(1) as f64;
+        lhs.abs_diff(rhs) as f64 / denom
+    }
+
     // If lengths are too different, consider them dissimilar
-    if rle1.is_empty()
-        || rle2.is_empty()
-        || (rle1.len() as f64 - rle2.len() as f64).abs() / rle1.len() as f64 > 0.3
-    {
+    if rle1.is_empty() || rle2.is_empty() || rel_diff(rle1.len(), rle2.len()) > 0.3 {
         return false;
     }
 
@@ -80,9 +83,7 @@ fn is_rle_similar_encoded(rle1: &[(u8, u8)], rle2: &[(u8, u8)], threshold: f64) 
     let total = rle1.len().max(rle2.len());
 
     for i in 0..rle1.len().min(rle2.len()) {
-        if rle1[i].0 == rle2[i].0
-            && (rle1[i].1 as f64 - rle2[i].1 as f64).abs() / rle1[i].1.max(1) as f64 <= 0.2
-        {
+        if rle1[i].0 == rle2[i].0 && rel_diff(rle1[i].1 as usize, rle2[i].1 as usize) <= 0.2 {
             matches += 1;
         }
     }
@@ -245,6 +246,46 @@ mod tests {
         let first_ids: Vec<usize> = first.iter().map(|c| c.id).collect();
         let second_ids: Vec<usize> = second.iter().map(|c| c.id).collect();
         assert_eq!(first_ids, second_ids);
+    }
+
+    #[test]
+    fn is_rle_similarity_is_symmetric_for_near_threshold_run_lengths() {
+        let shorter = "AAAACCCCGGGGTTTTAAAA";
+        let longer = "AAAAACCCCCGGGGGTTTTTAAAAA";
+
+        let left_to_right = is_rle_similar(shorter, longer, 0.9);
+        let right_to_left = is_rle_similar(longer, shorter, 0.9);
+
+        assert_eq!(left_to_right, right_to_left);
+        assert!(left_to_right);
+    }
+
+    #[test]
+    fn collapse_repeats_is_order_invariant_for_run_length_deltas() {
+        let contig_short = Contig {
+            id: 1,
+            sequence: "AAAACCCCGGGGTTTTAAAA".to_string(),
+            kmer_path: vec![encode_kmer("AAA").unwrap()],
+        };
+        let contig_long = Contig {
+            id: 2,
+            sequence: "AAAAACCCCCGGGGGTTTTTAAAAA".to_string(),
+            kmer_path: vec![encode_kmer("AAC").unwrap()],
+        };
+
+        let first = collapse_repeats(vec![contig_short.clone(), contig_long.clone()], 0);
+        let second = collapse_repeats(vec![contig_long, contig_short], 0);
+
+        let first_fingerprint: Vec<(usize, &str, &[u64])> = first
+            .iter()
+            .map(|c| (c.id, c.sequence.as_str(), c.kmer_path.as_slice()))
+            .collect();
+        let second_fingerprint: Vec<(usize, &str, &[u64])> = second
+            .iter()
+            .map(|c| (c.id, c.sequence.as_str(), c.kmer_path.as_slice()))
+            .collect();
+        assert_eq!(first_fingerprint, second_fingerprint);
+        assert_eq!(first.len(), 1);
     }
 
     #[test]
