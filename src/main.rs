@@ -38,25 +38,11 @@
     clippy::write_literal
 )]
 
-mod accel;
-mod cli;
-mod cli_main;
-mod dist;
-mod eval;
-mod gpu;
-mod graph;
-mod io;
-mod kmer;
-mod pipeline;
-mod polish;
-mod quant;
-mod stats;
-mod visualize;
-
 use clap::Parser;
-use cli_main::{Cli, Commands};
 use ndarray::Array2;
 use rayon::ThreadPoolBuilder;
+use raptor::cli_main::{Cli, Commands};
+use raptor::{eval, io, pipeline, stats, visualize};
 use std::collections::HashMap;
 use tracing::info;
 use tracing_subscriber::FmtSubscriber;
@@ -280,7 +266,7 @@ fn main() {
                 .build_global()
                 .expect("Failed to build thread pool");
 
-            crate::cli::benchmark::benchmark_kmer_counting(&input, k);
+            raptor::cli::benchmark::benchmark_kmer_counting(&input, k);
         }
 
         Commands::Isoform {

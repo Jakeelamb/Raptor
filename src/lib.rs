@@ -40,6 +40,7 @@
 
 pub mod accel;
 pub mod cli;
+pub mod cli_main;
 pub mod dist;
 pub mod eval;
 pub mod gpu;
