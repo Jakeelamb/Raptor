@@ -120,7 +120,11 @@ impl std::fmt::Display for AssemblyStats {
         writeln!(f, "Total length: {} bp", self.total_length)?;
         writeln!(f, "GC content: {:.2}%", self.gc_content * 100.0)?;
         writeln!(f, "N content: {:.2}%", self.n_content * 100.0)?;
-        writeln!(f, "Ambiguous content: {:.2}%", self.ambiguous_content * 100.0)?;
+        writeln!(
+            f,
+            "Ambiguous content: {:.2}%",
+            self.ambiguous_content * 100.0
+        )?;
         writeln!(f, "Mean contig: {:.2} bp", self.avg_contig_len)?;
         writeln!(f, "N50: {} bp", self.n50)?;
         writeln!(f, "N75: {} bp", self.n75)?;
