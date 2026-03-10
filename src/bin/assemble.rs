@@ -161,7 +161,7 @@ fn assemble_contigs_u64(k: usize, kmer_counts: &AHashMap<u64, u32>, min_len: usi
 
     // Sort k-mers by abundance (descending)
     let mut sorted_kmers: Vec<(&u64, &u32)> = kmer_counts.iter().collect();
-    sorted_kmers.sort_by(|a, b| b.1.cmp(a.1));
+    sorted_kmers.sort_unstable_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
 
     // Mask for suffix (k-1 bases)
     let suffix_mask: u64 = (1u64 << ((k - 1) * 2)) - 1;

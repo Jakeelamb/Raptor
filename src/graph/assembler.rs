@@ -167,7 +167,7 @@ pub fn greedy_assembly_u64(
         .iter()
         .map(|(&kmer, &count)| (kmer, count))
         .collect();
-    sorted_kmers.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    sorted_kmers.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
     // Build contigs greedily
     for (seed_kmer, _count) in sorted_kmers {
@@ -188,8 +188,13 @@ pub fn greedy_assembly_u64(
             let mut best_next: Option<(u64, u32)> = None;
             for &(next, count) in neighbors {
                 if !used.contains(&next) {
-                    if best_next.is_none() || count > best_next.unwrap().1 {
-                        best_next = Some((next, count));
+                    match best_next {
+                        None => best_next = Some((next, count)),
+                        Some((best_kmer, best_count)) => {
+                            if count > best_count || (count == best_count && next < best_kmer) {
+                                best_next = Some((next, count));
+                            }
+                        }
                     }
                 }
             }
@@ -209,12 +214,19 @@ pub fn greedy_assembly_u64(
 
         // Extend left (backward) from seed
         current = seed_kmer;
+        let mut left_bases: Vec<char> = Vec::new();
+        let mut left_path: Vec<u64> = Vec::new();
         while let Some(neighbors) = adjacency.get_predecessors(current) {
             let mut best_prev: Option<(u64, u32)> = None;
             for &(prev, count) in neighbors {
                 if !used.contains(&prev) {
-                    if best_prev.is_none() || count > best_prev.unwrap().1 {
-                        best_prev = Some((prev, count));
+                    match best_prev {
+                        None => best_prev = Some((prev, count)),
+                        Some((best_kmer, best_count)) => {
+                            if count > best_count || (count == best_count && prev < best_kmer) {
+                                best_prev = Some((prev, count));
+                            }
+                        }
                     }
                 }
             }
@@ -224,13 +236,29 @@ pub fn greedy_assembly_u64(
                 // OPTIMIZED: Extract first base by shifting right by (k-1)*2 bits
                 let shift = (k - 1) * 2;
                 let extension = BASES[((prev >> shift) & 0b11) as usize];
-                contig.insert(0, extension);
-                path.insert(0, prev);
+                left_bases.push(extension);
+                left_path.push(prev);
                 used.insert(prev);
                 current = prev;
             } else {
                 break;
             }
+        }
+
+        if !left_bases.is_empty() {
+            left_bases.reverse();
+            let mut prefixed_contig = String::with_capacity(left_bases.len() + contig.len());
+            for base in left_bases {
+                prefixed_contig.push(base);
+            }
+            prefixed_contig.push_str(&contig);
+            contig = prefixed_contig;
+        }
+
+        if !left_path.is_empty() {
+            left_path.reverse();
+            left_path.extend(path);
+            path = left_path;
         }
 
         if contig.len() >= min_len {
@@ -588,4 +616,70 @@ pub fn cleanup_graph(
     }
 
     (total_tips, total_bubbles)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kmer::kmer::encode_kmer;
+
+    #[test]
+    fn greedy_u64_uses_deterministic_seed_order_when_counts_tie() {
+        let k = 3;
+        let mut counts = AHashMap::new();
+        counts.insert(encode_kmer("AAG").unwrap(), 10);
+        counts.insert(encode_kmer("AAA").unwrap(), 10);
+        counts.insert(encode_kmer("AAC").unwrap(), 10);
+
+        let adjacency = AdjacencyTableU64::new(k as u8);
+        let contigs = greedy_assembly_u64(k, &counts, &adjacency, k);
+        let sequences: Vec<&str> = contigs.iter().map(|c| c.sequence.as_str()).collect();
+
+        assert_eq!(sequences, vec!["AAA", "AAC", "AAG"]);
+    }
+
+    #[test]
+    fn greedy_u64_tie_breaks_neighbors_by_kmer_value() {
+        let k = 3;
+        let mut counts = AHashMap::new();
+        let aaa = encode_kmer("AAA").unwrap();
+        let aag = encode_kmer("AAG").unwrap();
+        let aac = encode_kmer("AAC").unwrap();
+        counts.insert(aaa, 10);
+        counts.insert(aag, 5);
+        counts.insert(aac, 5);
+
+        let mut adjacency = AdjacencyTableU64::new(k as u8);
+        // Insert in reverse lexical order to ensure traversal does not depend on insertion order.
+        adjacency.add_edge(aaa, aag, 5);
+        adjacency.add_edge(aaa, aac, 5);
+
+        let contigs = greedy_assembly_u64(k, &counts, &adjacency, k);
+        assert_eq!(contigs.first().map(|c| c.sequence.as_str()), Some("AAAC"));
+    }
+
+    #[test]
+    fn greedy_u64_extends_left_and_right_without_path_regression() {
+        let k = 3;
+        let tga = encode_kmer("TGA").unwrap();
+        let gaa = encode_kmer("GAA").unwrap();
+        let aaa = encode_kmer("AAA").unwrap();
+        let aat = encode_kmer("AAT").unwrap();
+
+        let mut counts = AHashMap::new();
+        counts.insert(aaa, 10);
+        counts.insert(gaa, 9);
+        counts.insert(tga, 9);
+        counts.insert(aat, 9);
+
+        let mut adjacency = AdjacencyTableU64::new(k as u8);
+        adjacency.add_edge(tga, gaa, 9);
+        adjacency.add_edge(gaa, aaa, 10);
+        adjacency.add_edge(aaa, aat, 9);
+
+        let contigs = greedy_assembly_u64(k, &counts, &adjacency, k);
+        assert_eq!(contigs.len(), 1);
+        assert_eq!(contigs[0].sequence, "TGAAAT");
+        assert_eq!(contigs[0].kmer_path, vec![tga, gaa, aaa, aat]);
+    }
 }
