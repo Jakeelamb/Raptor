@@ -56,13 +56,13 @@ struct ContigLink {
 
 impl ContigLink {
     fn median_gap(&self) -> i32 {
-        if self.gap_estimates.is_empty() {
-            return 0;
-        }
-        let mut sorted = self.gap_estimates.clone();
-        sorted.sort_unstable();
-        sorted[sorted.len() / 2]
+        median_i32(&self.gap_estimates)
     }
+}
+
+#[inline]
+fn midpoint_i32(a: i32, b: i32) -> i32 {
+    ((a as i64 + b as i64) / 2) as i32
 }
 
 #[inline]
@@ -71,9 +71,23 @@ fn median_i32(values: &[i32]) -> i32 {
         return 0;
     }
     let mut scratch = values.to_vec();
-    let mid = scratch.len() / 2;
-    let (_, median, _) = scratch.select_nth_unstable(mid);
-    *median
+    median_i32_in_place(&mut scratch)
+}
+
+#[inline]
+fn median_i32_in_place(values: &mut [i32]) -> i32 {
+    debug_assert!(!values.is_empty());
+    let mid = values.len() / 2;
+    let upper = {
+        let (_, upper, _) = values.select_nth_unstable(mid);
+        *upper
+    };
+    if values.len() % 2 == 1 {
+        upper
+    } else {
+        let lower = values[..mid].iter().copied().max().unwrap_or(upper);
+        midpoint_i32(lower, upper)
+    }
 }
 
 #[inline]
@@ -581,6 +595,25 @@ mod tests {
 
         let h3 = hash_kmer(b"TGCA");
         assert_ne!(h1, h3);
+    }
+
+    #[test]
+    fn test_median_i32_even_sample_uses_midpoint() {
+        let values = [100, 200, 300, 400];
+        assert_eq!(median_i32(&values), 250);
+    }
+
+    #[test]
+    fn test_contig_link_median_gap_even_sample_uses_midpoint() {
+        let link = ContigLink {
+            contig_a: 0,
+            contig_b: 1,
+            orientation_a: Orientation::Forward,
+            orientation_b: Orientation::Forward,
+            gap_estimates: vec![100, 200, 300, 400],
+            support_count: 4,
+        };
+        assert_eq!(link.median_gap(), 250);
     }
 
     #[test]

@@ -219,8 +219,8 @@ impl InsertSizeStats {
         }
 
         let n = samples.len() as f64;
-        let sum: usize = samples.iter().sum();
-        let mean = sum as f64 / n;
+        let sum: f64 = samples.iter().map(|&x| x as f64).sum();
+        let mean = sum / n;
 
         let variance: f64 = samples
             .iter()
@@ -229,16 +229,64 @@ impl InsertSizeStats {
             / n;
         let std_dev = variance.sqrt();
 
-        let mut sorted = samples.to_vec();
-        sorted.sort_unstable();
+        let mut median_scratch = samples.to_vec();
+        let median = median_usize_in_place(&mut median_scratch);
+        let mut min = usize::MAX;
+        let mut max = usize::MIN;
+        for &sample in samples {
+            min = min.min(sample);
+            max = max.max(sample);
+        }
 
         Self {
             mean,
             std_dev,
-            min: sorted[0],
-            max: sorted[sorted.len() - 1],
-            median: sorted[sorted.len() / 2],
+            min,
+            max,
+            median,
         }
+    }
+}
+
+#[inline]
+fn midpoint_u32(a: u32, b: u32) -> u32 {
+    ((a as u64 + b as u64) / 2) as u32
+}
+
+#[inline]
+fn midpoint_usize(a: usize, b: usize) -> usize {
+    ((a as u128 + b as u128) / 2) as usize
+}
+
+#[inline]
+fn median_u32_in_place(values: &mut [u32]) -> u32 {
+    debug_assert!(!values.is_empty());
+    let mid = values.len() / 2;
+    let upper = {
+        let (_, upper, _) = values.select_nth_unstable(mid);
+        *upper
+    };
+    if values.len() % 2 == 1 {
+        upper
+    } else {
+        let lower = values[..mid].iter().copied().max().unwrap_or(upper);
+        midpoint_u32(lower, upper)
+    }
+}
+
+#[inline]
+fn median_usize_in_place(values: &mut [usize]) -> usize {
+    debug_assert!(!values.is_empty());
+    let mid = values.len() / 2;
+    let upper = {
+        let (_, upper, _) = values.select_nth_unstable(mid);
+        *upper
+    };
+    if values.len() % 2 == 1 {
+        upper
+    } else {
+        let lower = values[..mid].iter().copied().max().unwrap_or(upper);
+        midpoint_usize(lower, upper)
     }
 }
 
@@ -1161,17 +1209,16 @@ impl LargeGenomeAssembler {
     /// than the median coverage (typically 2x or more).
     fn identify_repeats(&self, kmer_counts: &AHashMap<u64, u32>) -> (AHashSet<u64>, RepeatStats) {
         let mut counts: Vec<u32> = kmer_counts.values().copied().collect();
-        counts.sort_unstable();
 
         if counts.is_empty() {
             return (AHashSet::new(), RepeatStats::default());
         }
 
         // Calculate median coverage
-        let median = counts[counts.len() / 2];
+        let median = median_u32_in_place(&mut counts);
 
         // Repeat threshold: 2x median or minimum of 10
-        let repeat_threshold = (median * 2).max(10);
+        let repeat_threshold = median.saturating_mul(2).max(10);
 
         // Identify repeat k-mers
         let repeat_kmers: AHashSet<u64> = kmer_counts
@@ -2704,6 +2751,14 @@ mod tests {
         assert!(stats.std_dev > 0.0);
         assert_eq!(stats.min, 190);
         assert_eq!(stats.max, 215);
+        assert_eq!(stats.median, 200);
+    }
+
+    #[test]
+    fn test_insert_size_stats_even_sample_uses_midpoint_median() {
+        let samples = vec![100, 200, 300, 400];
+        let stats = InsertSizeStats::from_samples(&samples);
+        assert_eq!(stats.median, 250);
     }
 
     #[test]
@@ -2976,6 +3031,32 @@ mod tests {
             repeat_kmers.len() >= 5,
             "Should identify the high-coverage k-mers as repeats"
         );
+    }
+
+    #[test]
+    fn test_repeat_stats_even_split_uses_midpoint_median_and_detects_tail_repeats() {
+        let mut counts = AHashMap::new();
+        for i in 0..50 {
+            counts.insert(i as u64, 5);
+        }
+        for i in 50..95 {
+            counts.insert(i as u64, 25);
+        }
+        for i in 95..100 {
+            counts.insert(i as u64, 35);
+        }
+
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig::default());
+        let (repeat_kmers, stats) = assembler.identify_repeats(&counts);
+
+        assert_eq!(stats.total_kmer_count, 100);
+        assert_eq!(stats.median_coverage, 15);
+        assert_eq!(stats.repeat_threshold, 30);
+        assert_eq!(stats.repeat_kmer_count, 5);
+        assert_eq!(repeat_kmers.len(), 5);
+        for i in 95..100 {
+            assert!(repeat_kmers.contains(&(i as u64)));
+        }
     }
 
     #[test]
