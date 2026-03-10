@@ -3,6 +3,24 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use raptor::eval::metrics::evaluate_lengths;
+use raptor::graph::transcript::{calculate_transcript_stats, Transcript};
+
+fn transcripts_from_lengths(lengths: &[usize]) -> Vec<Transcript> {
+    lengths
+        .iter()
+        .enumerate()
+        .map(|(id, &len)| Transcript {
+            id,
+            sequence: "A".repeat(len),
+            path: vec![id],
+            confidence: 1.0,
+            length: len,
+            strand: '+',
+            tpm: None,
+            splicing: "linear".to_string(),
+        })
+        .collect()
+}
 
 proptest! {
     #[test]
@@ -48,5 +66,39 @@ proptest! {
         prop_assert_eq!(observed.longest, baseline.longest);
         prop_assert!((observed.avg_length - baseline.avg_length).abs() < 1e-12);
         prop_assert!((observed.au_n - baseline.au_n).abs() < 1e-12);
+    }
+
+    #[test]
+    fn transcript_stats_length_metrics_match_evaluate_lengths_and_are_permutation_invariant(
+        lengths in prop::collection::vec(1usize..2_000, 1..64),
+        seed in any::<u64>()
+    ) {
+        let expected = evaluate_lengths(&lengths);
+        let transcripts = transcripts_from_lengths(&lengths);
+        let observed = calculate_transcript_stats(&transcripts);
+
+        prop_assert_eq!(observed.get("count").copied().unwrap_or(-1.0) as usize, lengths.len());
+        prop_assert_eq!(observed.get("total_length").copied().unwrap_or(-1.0) as usize, expected.total_bases);
+        prop_assert_eq!(observed.get("mean_length").copied().unwrap_or(-1.0), expected.avg_length);
+        prop_assert_eq!(observed.get("n50").copied().unwrap_or(-1.0) as usize, expected.n50);
+        prop_assert_eq!(observed.get("n75").copied().unwrap_or(-1.0) as usize, expected.n75);
+        prop_assert_eq!(observed.get("n90").copied().unwrap_or(-1.0) as usize, expected.n90);
+        prop_assert_eq!(observed.get("n95").copied().unwrap_or(-1.0) as usize, expected.n95);
+        prop_assert_eq!(observed.get("l50").copied().unwrap_or(-1.0) as usize, expected.l50);
+        prop_assert_eq!(observed.get("l90").copied().unwrap_or(-1.0) as usize, expected.l90);
+        prop_assert_eq!(observed.get("l95").copied().unwrap_or(-1.0) as usize, expected.l95);
+        prop_assert!((observed.get("au_n").copied().unwrap_or(-1.0) - expected.au_n).abs() < 1e-12);
+
+        let mut shuffled = lengths.clone();
+        let mut rng = StdRng::seed_from_u64(seed);
+        shuffled.shuffle(&mut rng);
+        let shuffled_transcripts = transcripts_from_lengths(&shuffled);
+        let shuffled_stats = calculate_transcript_stats(&shuffled_transcripts);
+
+        for key in ["count", "total_length", "mean_length", "n50", "n75", "n90", "n95", "l50", "l90", "l95", "au_n"] {
+            let lhs = observed.get(key).copied().unwrap_or(f64::NAN);
+            let rhs = shuffled_stats.get(key).copied().unwrap_or(f64::NAN);
+            prop_assert!((lhs - rhs).abs() < 1e-12, "metric `{}` differed after permutation: {} vs {}", key, lhs, rhs);
+        }
     }
 }

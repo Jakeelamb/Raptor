@@ -1,20 +1,30 @@
 /// Run-length encode a DNA string: AATT → [(A,2), (T,2)]
 pub fn rle_encode(seq: &str) -> Vec<(u8, u8)> {
-    let mut result = Vec::new();
-    let mut chars = seq.bytes().peekable();
-
-    while let Some(b) = chars.next() {
-        let mut count = 1;
-        while let Some(&next) = chars.peek() {
-            if next == b {
-                count += 1;
-                chars.next();
-            } else {
-                break;
-            }
-        }
-        result.push((b, count));
+    if seq.is_empty() {
+        return Vec::new();
     }
+
+    let mut result = Vec::new();
+    let mut bytes = seq.bytes();
+    let mut current = bytes.next().expect("empty sequences are handled above");
+    let mut count: u8 = 1;
+
+    for next in bytes {
+        if next == current {
+            if count == u8::MAX {
+                // Split very long homopolymers into multiple chunks to avoid overflow.
+                result.push((current, u8::MAX));
+                count = 1;
+            } else {
+                count += 1;
+            }
+        } else {
+            result.push((current, count));
+            current = next;
+            count = 1;
+        }
+    }
+    result.push((current, count));
 
     result
 }
@@ -58,6 +68,16 @@ mod tests {
         let encoded = rle_encode(seq);
         assert_eq!(encoded, vec![]);
 
+        let decoded = rle_decode(&encoded);
+        assert_eq!(decoded, seq);
+    }
+
+    #[test]
+    fn test_rle_long_run_splits_at_u8_max_without_overflow() {
+        let seq = "A".repeat(256 + 44);
+        let encoded = rle_encode(&seq);
+
+        assert_eq!(encoded, vec![(b'A', 255), (b'A', 45)]);
         let decoded = rle_decode(&encoded);
         assert_eq!(decoded, seq);
     }

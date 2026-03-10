@@ -1,3 +1,4 @@
+use crate::eval::metrics::evaluate_lengths;
 use crate::graph::assembler::Contig;
 use crate::graph::isoform_traverse::TranscriptPath;
 use crate::kmer::rle;
@@ -74,35 +75,70 @@ pub fn stitch_isoform(
     path: &[usize],
     overlaps: &[(usize, usize, usize)],
 ) -> String {
+    let contig_sequences: HashMap<usize, &str> = contigs
+        .iter()
+        .map(|contig| (contig.id, contig.sequence.as_str()))
+        .collect();
+    let overlap_map = build_overlap_map(overlaps);
+
+    stitch_isoform_with_maps(&contig_sequences, path, &overlap_map)
+}
+
+#[inline]
+fn build_overlap_map(overlaps: &[(usize, usize, usize)]) -> HashMap<(usize, usize), usize> {
+    let mut overlap_map: HashMap<(usize, usize), usize> = HashMap::with_capacity(overlaps.len());
+    for &(from, to, overlap) in overlaps {
+        overlap_map
+            .entry((from, to))
+            .and_modify(|existing| *existing = (*existing).max(overlap))
+            .or_insert(overlap);
+    }
+    overlap_map
+}
+
+#[inline]
+fn stitch_isoform_with_maps(
+    contig_sequences: &HashMap<usize, &str>,
+    path: &[usize],
+    overlaps: &HashMap<(usize, usize), usize>,
+) -> String {
     if path.is_empty() {
         return String::new();
     }
 
-    // Start with the first contig
-    let mut sequence = contigs[path[0]].sequence.clone();
-
-    // Convert overlaps to a lookup table for quick access
-    let mut overlap_map: HashMap<(usize, usize), usize> = HashMap::new();
-    for &(from, to, overlap) in overlaps {
-        overlap_map.insert((from, to), overlap);
+    // Start with the first path node that resolves to a contig sequence.
+    let mut first_idx = None;
+    let mut sequence = String::new();
+    for (idx, &node_id) in path.iter().enumerate() {
+        if let Some(contig_seq) = contig_sequences.get(&node_id) {
+            sequence.push_str(contig_seq);
+            first_idx = Some(idx);
+            break;
+        }
     }
+    let Some(start_idx) = first_idx else {
+        return String::new();
+    };
+    let mut prev_id = path[start_idx];
 
     // Stitch together subsequent contigs, accounting for overlaps
-    for i in 1..path.len() {
-        let prev_id = path[i - 1];
-        let curr_id = path[i];
+    for &curr_id in path.iter().skip(start_idx + 1) {
+        let Some(curr_seq) = contig_sequences.get(&curr_id) else {
+            continue;
+        };
 
         // Look up the overlap between these contigs
-        let overlap_len = overlap_map.get(&(prev_id, curr_id)).cloned().unwrap_or(0);
+        let overlap_len = overlaps.get(&(prev_id, curr_id)).copied().unwrap_or(0);
 
-        if overlap_len > 0 && overlap_len < contigs[curr_id].sequence.len() {
+        if overlap_len > 0 && overlap_len < curr_seq.len() {
             // Add only the non-overlapping part of the current contig
-            sequence.push_str(&contigs[curr_id].sequence[overlap_len..]);
+            sequence.push_str(&curr_seq[overlap_len..]);
         } else if overlap_len == 0 {
             // No overlap found, just append the entire sequence
-            sequence.push_str(&contigs[curr_id].sequence);
+            sequence.push_str(curr_seq);
         }
         // If overlap_len >= contig length, nothing new to add
+        prev_id = curr_id;
     }
 
     sequence
@@ -167,15 +203,15 @@ pub fn assemble_transcripts(
 ) -> Vec<Transcript> {
     let mut transcripts = Vec::new();
 
-    // Convert overlaps to a lookup format
-    let mut overlap_map: HashMap<(usize, usize), usize> = HashMap::new();
-    for &(from, to, overlap) in overlaps {
-        overlap_map.insert((from, to), overlap);
-    }
+    let contig_sequences: HashMap<usize, &str> = contigs
+        .iter()
+        .map(|contig| (contig.id, contig.sequence.as_str()))
+        .collect();
+    let overlap_map = build_overlap_map(overlaps);
 
     // Process each path
     for (i, path) in paths.iter().enumerate() {
-        let sequence = stitch_isoform(contigs, &path.nodes, overlaps);
+        let sequence = stitch_isoform_with_maps(&contig_sequences, &path.nodes, &overlap_map);
 
         // Detect splicing events if graph is provided
         let splicing = if let Some(g) = graph {
@@ -260,23 +296,15 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
         *lengths.iter().max().unwrap() as f64,
     );
 
-    // Calculate N50
-    let mut sorted_lengths = lengths.clone();
-    sorted_lengths.sort_unstable();
-
-    let half_total = total_length / 2;
-    let mut running_sum = 0;
-    let mut n50 = 0;
-
-    for &length in sorted_lengths.iter().rev() {
-        running_sum += length;
-        if running_sum >= half_total {
-            n50 = length;
-            break;
-        }
-    }
-
-    stats.insert("n50".to_string(), n50 as f64);
+    let length_metrics = evaluate_lengths(&lengths);
+    stats.insert("n50".to_string(), length_metrics.n50 as f64);
+    stats.insert("n75".to_string(), length_metrics.n75 as f64);
+    stats.insert("n90".to_string(), length_metrics.n90 as f64);
+    stats.insert("n95".to_string(), length_metrics.n95 as f64);
+    stats.insert("l50".to_string(), length_metrics.l50 as f64);
+    stats.insert("l90".to_string(), length_metrics.l90 as f64);
+    stats.insert("l95".to_string(), length_metrics.l95 as f64);
+    stats.insert("au_n".to_string(), length_metrics.au_n);
 
     // Confidence statistics
     let confidences: Vec<f64> = transcripts.iter().map(|t| t.confidence).collect();
@@ -467,5 +495,63 @@ mod tests {
         );
 
         assert_eq!(transcripts[1].length, 12);
+    }
+
+    #[test]
+    fn test_stitch_isoform_handles_sparse_contig_ids() {
+        let contigs = vec![
+            Contig {
+                id: 0,
+                sequence: "ATCG".to_string(),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 2,
+                sequence: "CGTT".to_string(),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 5,
+                sequence: "TTAA".to_string(),
+                kmer_path: vec![],
+            },
+        ];
+        let overlaps = vec![(0, 2, 2), (2, 5, 2)];
+        let path = vec![0, 2, 5];
+
+        let stitched = stitch_isoform(&contigs, &path, &overlaps);
+        assert_eq!(stitched, "ATCGTTAA");
+    }
+
+    #[test]
+    fn test_assemble_transcripts_handles_sparse_contig_ids() {
+        let contigs = vec![
+            Contig {
+                id: 1,
+                sequence: "AAAC".to_string(),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 4,
+                sequence: "ACGT".to_string(),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 9,
+                sequence: "GTTT".to_string(),
+                kmer_path: vec![],
+            },
+        ];
+        let overlaps = vec![(1, 4, 2), (4, 9, 2)];
+        let paths = vec![TranscriptPath {
+            nodes: vec![1, 4, 9],
+            confidence: 0.75,
+            length: 10,
+        }];
+
+        let transcripts = assemble_transcripts(&paths, &contigs, &overlaps, None);
+        assert_eq!(transcripts.len(), 1);
+        assert_eq!(transcripts[0].sequence, "AAACGTTT");
+        assert_eq!(transcripts[0].path, vec![1, 4, 9]);
     }
 }
