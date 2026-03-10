@@ -3,7 +3,7 @@ use crate::graph::transcript::Transcript;
 use crate::kmer::nthash::nthash;
 use ahash::AHashSet;
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::HashSet as StdHashSet;
 use tracing::debug;
 
 /// K-mer size for Jaccard similarity calculation
@@ -117,11 +117,21 @@ fn calculate_sequence_similarity(t1: &Transcript, t2: &Transcript) -> f64 {
 
 /// Calculate the path similarity between two transcripts as a ratio
 fn calculate_path_similarity(t1: &Transcript, t2: &Transcript) -> f64 {
-    let t1_nodes: HashSet<usize> = t1.path.iter().cloned().collect();
-    let t2_nodes: HashSet<usize> = t2.path.iter().cloned().collect();
+    let t1_nodes: AHashSet<usize> = t1.path.iter().copied().collect();
+    let t2_nodes: AHashSet<usize> = t2.path.iter().copied().collect();
 
-    let intersection_size = t1_nodes.intersection(&t2_nodes).count();
-    let union_size = t1_nodes.union(&t2_nodes).count();
+    if t1_nodes.is_empty() && t2_nodes.is_empty() {
+        return 1.0;
+    }
+
+    // Iterate only the smaller set for membership tests to reduce work.
+    let (smaller, larger) = if t1_nodes.len() <= t2_nodes.len() {
+        (&t1_nodes, &t2_nodes)
+    } else {
+        (&t2_nodes, &t1_nodes)
+    };
+    let intersection_size = smaller.iter().filter(|node| larger.contains(node)).count();
+    let union_size = t1_nodes.len() + t2_nodes.len() - intersection_size;
 
     if union_size == 0 {
         return 1.0;
@@ -237,7 +247,7 @@ pub fn filter_similar_transcripts(
     });
 
     let mut filtered_transcripts = Vec::new();
-    let mut removed_ids = HashSet::new();
+    let mut removed_ids = StdHashSet::new();
 
     // Keep highest confidence/longest transcripts, filter out similar ones
     for (i, transcript) in sorted_transcripts.iter().enumerate() {
@@ -297,7 +307,7 @@ pub fn merge_transcripts(transcripts: &[Transcript], similarity_threshold: f64) 
     });
 
     let mut merged_transcripts = Vec::new();
-    let mut removed_ids = HashSet::new();
+    let mut removed_ids = StdHashSet::new();
 
     // Process all transcripts
     for (i, transcript) in sorted_transcripts.iter().enumerate() {
@@ -545,6 +555,45 @@ mod tests {
 
         // Identical paths
         assert_eq!(calculate_path_similarity(&t1, &t3), 1.0);
+    }
+
+    #[test]
+    fn test_calculate_path_similarity_handles_duplicates_and_empty_paths() {
+        let repeated_a = Transcript {
+            id: 1,
+            sequence: "AAAA".to_string(),
+            path: vec![1, 1, 2, 2, 3],
+            confidence: 0.9,
+            length: 4,
+            strand: '+',
+            tpm: None,
+            splicing: "unknown".to_string(),
+        };
+        let repeated_b = Transcript {
+            id: 2,
+            sequence: "CCCC".to_string(),
+            path: vec![3, 2, 1, 1],
+            confidence: 0.9,
+            length: 4,
+            strand: '+',
+            tpm: None,
+            splicing: "unknown".to_string(),
+        };
+        let empty = Transcript {
+            id: 3,
+            sequence: String::new(),
+            path: vec![],
+            confidence: 0.9,
+            length: 0,
+            strand: '+',
+            tpm: None,
+            splicing: "unknown".to_string(),
+        };
+
+        // Duplicates are de-duplicated by set semantics.
+        assert_eq!(calculate_path_similarity(&repeated_a, &repeated_b), 1.0);
+        assert_eq!(calculate_path_similarity(&repeated_a, &empty), 0.0);
+        assert_eq!(calculate_path_similarity(&empty, &empty), 1.0);
     }
 
     fn create_test_transcripts() -> Vec<Transcript> {
