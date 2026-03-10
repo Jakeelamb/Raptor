@@ -9,7 +9,7 @@ use crate::io::gfa::GfaWriter;
 use crate::io::gfa2::Gfa2Writer;
 use crate::kmer::variable_k::{kmer_coverage_histogram, optimal_k, select_best_k};
 use std::fs;
-use std::io::Write;
+use std::io::{self, Write};
 use tracing::{info, warn};
 
 pub fn assemble_reads(
@@ -39,7 +39,7 @@ pub fn assemble_reads(
     min_tpm: f64,
     long_reads: Option<String>,
     counts_matrix: bool,
-) {
+) -> io::Result<()> {
     // Default to CPU backend for backwards compatibility
     assemble_reads_with_gpu(
         input_path,
@@ -69,7 +69,7 @@ pub fn assemble_reads(
         long_reads,
         counts_matrix,
         false, // use_gpu = false by default
-    );
+    )
 }
 
 /// Assemble reads with optional GPU acceleration
@@ -101,7 +101,7 @@ pub fn assemble_reads_with_gpu(
     long_reads: Option<String>,
     counts_matrix: bool,
     use_gpu: bool,
-) {
+) -> io::Result<()> {
     info!("Starting assembly from: {}", input_path);
 
     // Determine k-mer size - either adaptive or fixed optimal
@@ -245,15 +245,11 @@ pub fn assemble_reads_with_gpu(
     // Write FASTA output
     let mut writer = FastaWriter::new(output_path);
     for (i, contig) in contigs.iter().enumerate() {
-        writer
-            .write_contig(contig, i + 1)
-            .expect("Failed to write contig");
+        writer.write_contig(contig, i + 1)?;
 
         // Write RLE version if requested
         if _use_rle {
-            writer
-                .write_rle_contig(contig, i + 1)
-                .expect("Failed to write RLE contig");
+            writer.write_rle_contig(contig, i + 1)?;
         }
     }
 
@@ -272,31 +268,40 @@ pub fn assemble_reads_with_gpu(
         // Handle standard metadata JSON export
         if export_metadata {
             info!("Exporting contig metadata to JSON");
-            let json = serde_json::to_string_pretty(&meta).unwrap();
+            let json = serde_json::to_string_pretty(&meta).map_err(|err| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("failed to serialize contig metadata to JSON: {err}"),
+                )
+            })?;
             let meta_path = format!("{}.contig_meta.json", output_path);
-            fs::write(&meta_path, json).expect("Failed to write metadata");
+            fs::write(&meta_path, json)?;
             info!("Metadata written to {}", meta_path);
         }
 
         // Handle custom JSON metadata path
         if let Some(path) = &json_metadata {
             info!("Writing JSON metadata to custom path: {}", path);
-            let json = serde_json::to_string_pretty(&meta).unwrap();
-            fs::write(path, json).expect("Failed to write JSON metadata");
+            let json = serde_json::to_string_pretty(&meta).map_err(|err| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("failed to serialize contig metadata for {}: {err}", path),
+                )
+            })?;
+            fs::write(path, json)?;
         }
 
         // Handle custom TSV metadata path
         if let Some(path) = &tsv_metadata {
             info!("Writing TSV metadata to custom path: {}", path);
-            let mut file = std::fs::File::create(path).expect("Failed to create TSV metadata file");
-            writeln!(file, "contig_id\tlength\trle_compression\tgc_content").unwrap();
+            let mut file = std::fs::File::create(path)?;
+            writeln!(file, "contig_id\tlength\trle_compression\tgc_content")?;
             for m in &meta {
                 writeln!(
                     file,
                     "{}\t{}\t{:.4}\t{:.4}",
                     m.id, m.length, m.rle_compression, m.gc_content
-                )
-                .unwrap();
+                )?;
             }
         }
     }
@@ -477,8 +482,7 @@ pub fn assemble_reads_with_gpu(
                     use std::collections::HashMap;
 
                     info!("Processing multi-sample data from {}", sample_file);
-                    let sample_content =
-                        std::fs::read_to_string(sample_file).expect("Failed to read sample file");
+                    let sample_content = std::fs::read_to_string(sample_file)?;
 
                     let mut sample_tpms: HashMap<String, Vec<f64>> = HashMap::new();
 
@@ -589,21 +593,13 @@ pub fn assemble_reads_with_gpu(
             let mut gfa_writer = GfaWriter::new(&gfa_path);
 
             if _use_rle {
-                gfa_writer
-                    .write_rle_segments(&contigs)
-                    .expect("Failed to write RLE GFA segments");
+                gfa_writer.write_rle_segments(&contigs)?;
             } else {
-                gfa_writer
-                    .write_segments(&contigs)
-                    .expect("Failed to write GFA segments");
+                gfa_writer.write_segments(&contigs)?;
             }
 
-            gfa_writer
-                .write_links(&links)
-                .expect("Failed to write GFA links");
-            gfa_writer
-                .write_assembly_paths(&paths)
-                .expect("Failed to write GFA paths");
+            gfa_writer.write_links(&links)?;
+            gfa_writer.write_assembly_paths(&paths)?;
 
             info!(
                 "GFA output complete: {} segments, {} links, {} paths written",
@@ -620,15 +616,9 @@ pub fn assemble_reads_with_gpu(
 
             // Write GFA2 output
             let mut gfa2_writer = Gfa2Writer::new(&gfa2_path);
-            gfa2_writer
-                .write_segments(&contigs)
-                .expect("Failed to write GFA2 segments");
-            gfa2_writer
-                .write_links(&links)
-                .expect("Failed to write GFA2 links");
-            gfa2_writer
-                .write_paths(&paths)
-                .expect("Failed to write GFA2 paths");
+            gfa2_writer.write_segments(&contigs)?;
+            gfa2_writer.write_links(&links)?;
+            gfa2_writer.write_paths(&paths)?;
 
             info!(
                 "GFA2 output complete: {} segments, {} links, {} paths written",
@@ -638,6 +628,8 @@ pub fn assemble_reads_with_gpu(
             );
         }
     }
+
+    Ok(())
 }
 
 // Helper function to generate output filenames

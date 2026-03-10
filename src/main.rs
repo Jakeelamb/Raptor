@@ -131,7 +131,7 @@ fn main() {
             }
             let start = std::time::Instant::now();
 
-            pipeline::assemble::assemble_reads_with_gpu(
+            if let Err(err) = pipeline::assemble::assemble_reads_with_gpu(
                 &input,
                 &output,
                 min_len,
@@ -159,7 +159,10 @@ fn main() {
                 polish_reads,
                 counts_matrix,
                 gpu,
-            );
+            ) {
+                eprintln!("Assembly failed: {}", err);
+                return;
+            }
 
             println!(
                 "Assembly completed in {:.2}s",
