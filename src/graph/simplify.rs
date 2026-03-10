@@ -50,6 +50,10 @@ pub fn collapse_repeats(contigs: Vec<Contig>, min_repeat_len: usize) -> Vec<Cont
 
     // Keep output deterministic even if caller provides contigs in different orders.
     collapsed.sort_unstable_by(contig_preference);
+    // Downstream overlap/isoform paths assume contig IDs are dense and index-like.
+    for (new_id, contig) in collapsed.iter_mut().enumerate() {
+        contig.id = new_id;
+    }
     collapsed
 }
 
@@ -238,5 +242,33 @@ mod tests {
         let first_sequences: Vec<&str> = first.iter().map(|c| c.sequence.as_str()).collect();
         let second_sequences: Vec<&str> = second.iter().map(|c| c.sequence.as_str()).collect();
         assert_eq!(first_sequences, second_sequences);
+        let first_ids: Vec<usize> = first.iter().map(|c| c.id).collect();
+        let second_ids: Vec<usize> = second.iter().map(|c| c.id).collect();
+        assert_eq!(first_ids, second_ids);
+    }
+
+    #[test]
+    fn collapse_repeats_reindexes_ids_to_dense_order() {
+        let contigs = vec![
+            Contig {
+                id: 41,
+                sequence: "ACGTACGT".to_string(),
+                kmer_path: vec![encode_kmer("ACG").unwrap()],
+            },
+            Contig {
+                id: 99,
+                sequence: "ACGTACGT".to_string(),
+                kmer_path: vec![encode_kmer("CGT").unwrap()],
+            },
+            Contig {
+                id: 7,
+                sequence: "TTTTCCCC".to_string(),
+                kmer_path: vec![encode_kmer("TTT").unwrap()],
+            },
+        ];
+
+        let collapsed = collapse_repeats(contigs, 0);
+        let ids: Vec<usize> = collapsed.iter().map(|c| c.id).collect();
+        assert_eq!(ids, vec![0, 1]);
     }
 }
