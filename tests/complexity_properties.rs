@@ -246,4 +246,45 @@ proptest! {
         prop_assert!((stats_p.path_au_n - stats_w.path_au_n).abs() < 1e-12);
         prop_assert!((stats_p.branchiness - stats_w.branchiness).abs() < 1e-12);
     }
+
+    #[test]
+    fn compute_path_stats_counts_long_reconverging_bubbles(
+        depth in 11usize..40,
+        seed in any::<u64>()
+    ) {
+        let reconverge = (2 * depth) + 1;
+        let segment_count = reconverge + 1;
+        let segments: Vec<String> = (0..segment_count).map(|i| i.to_string()).collect();
+
+        let mut links = Vec::new();
+        // Branch A: 0 -> 1 -> ... -> depth -> reconverge
+        links.push((0, 1));
+        for node in 1..depth {
+            links.push((node, node + 1));
+        }
+        links.push((depth, reconverge));
+
+        // Branch B: 0 -> (depth + 1) -> ... -> (2 * depth) -> reconverge
+        let second_start = depth + 1;
+        links.push((0, second_start));
+        for node in second_start..(2 * depth) {
+            links.push((node, node + 1));
+        }
+        links.push((2 * depth, reconverge));
+
+        let path_a: Vec<usize> = std::iter::once(0)
+            .chain(1..=depth)
+            .chain(std::iter::once(reconverge))
+            .collect();
+        let path_b: Vec<usize> = std::iter::once(0)
+            .chain(second_start..=(2 * depth))
+            .chain(std::iter::once(reconverge))
+            .collect();
+
+        let file = write_gfa(&segments, &links, &[path_a, path_b], seed);
+        let stats = compute_path_stats(file.path().to_str().expect("utf8 path"))
+            .expect("compute path stats for long reconverging bubble");
+
+        prop_assert_eq!(stats.bubble_count, 1);
+    }
 }
