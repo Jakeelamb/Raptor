@@ -33,6 +33,7 @@ struct AssemblyQualitySummary {
     l99: usize,
     au_n: f64,
     longest: usize,
+    longest_frac: f64,
     gc_content: f64,
     n_content: f64,
     ambiguous_content: f64,
@@ -65,6 +66,11 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
     }
 
     let length_stats = evaluate_lengths_in_place(&mut lengths);
+    let longest_frac = if length_stats.total_bases > 0 {
+        length_stats.longest as f64 / length_stats.total_bases as f64
+    } else {
+        0.0
+    };
     AssemblyQualitySummary {
         total_contigs: length_stats.total,
         total_bases: length_stats.total_bases,
@@ -84,6 +90,7 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
         l99: length_stats.l99,
         au_n: length_stats.au_n,
         longest: length_stats.longest,
+        longest_frac,
         gc_content: composition.gc_content(),
         n_content: composition.n_content(length_stats.total_bases),
         ambiguous_content: composition.ambiguous_content(length_stats.total_bases),
@@ -143,6 +150,7 @@ fn write_assembly_quality_reports(
         ("l99", quality.l99.to_string()),
         ("au_n", format!("{:.12}", quality.au_n)),
         ("longest", quality.longest.to_string()),
+        ("longest_frac", format!("{:.12}", quality.longest_frac)),
         ("gc_content", format!("{:.12}", quality.gc_content)),
         ("n_content", format!("{:.12}", quality.n_content)),
         (
@@ -447,7 +455,7 @@ pub fn assemble_reads_with_gpu(
 
     let quality = summarize_assembly_quality(&contigs);
     info!(
-        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{} bp, L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}, auN: {:.1}, Longest: {} bp, GC/N/Ambiguous: {:.2}%/{:.2}%/{:.2}%, >=1kb/10kb/50kb/100kb contigs: {}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%)",
+        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{} bp, L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}, auN: {:.1}, Longest: {} bp ({:.2}%), GC/N/Ambiguous: {:.2}%/{:.2}%/{:.2}%, >=1kb/10kb/50kb/100kb contigs: {}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%)",
         quality.total_contigs,
         quality.total_bases,
         quality.avg_length,
@@ -466,6 +474,7 @@ pub fn assemble_reads_with_gpu(
         quality.l99,
         quality.au_n,
         quality.longest,
+        quality.longest_frac * 100.0,
         quality.gc_content * 100.0,
         quality.n_content * 100.0,
         quality.ambiguous_content * 100.0,
@@ -1024,6 +1033,7 @@ mod tests {
         assert_eq!(summary.l95, 3);
         assert_eq!(summary.l99, 3);
         assert_eq!(summary.longest, 4);
+        assert!((summary.longest_frac - (1.0 / 3.0)).abs() < 1e-12);
         assert!((summary.avg_length - 4.0).abs() < 1e-12);
         assert!((summary.au_n - 4.0).abs() < 1e-12);
         assert!((summary.gc_content - (4.0 / 9.0)).abs() < 1e-12);
@@ -1119,6 +1129,7 @@ mod tests {
         assert_eq!(summary.bases_ge_10kb, 160_000);
         assert_eq!(summary.bases_ge_50kb, 150_000);
         assert_eq!(summary.bases_ge_100kb, 100_000);
+        assert!((summary.longest_frac - (100_000.0 / 161_999.0)).abs() < 1e-12);
         assert!((summary.contigs_ge_1kb_frac - 0.8).abs() < 1e-12);
         assert!((summary.contigs_ge_10kb_frac - 0.6).abs() < 1e-12);
         assert!((summary.contigs_ge_50kb_frac - 0.4).abs() < 1e-12);
@@ -1194,6 +1205,7 @@ mod tests {
             l99: 5,
             au_n: 260.5,
             longest: 420,
+            longest_frac: 0.340356564,
             gc_content: 0.5,
             n_content: 0.1,
             ambiguous_content: 0.02,
@@ -1230,12 +1242,14 @@ mod tests {
         assert_eq!(parsed["n50"], 250);
         assert_eq!(parsed["l75"], 3);
         assert_eq!(parsed["gc_content"], 0.5);
+        assert_eq!(parsed["longest_frac"], 0.340356564);
 
         let tsv = std::fs::read_to_string(&tsv_path).expect("read tsv report");
         let mut lines = tsv.lines();
         assert_eq!(lines.next(), Some("metric\tvalue"));
         assert!(tsv.contains("n50\t250"));
         assert!(tsv.contains("l75\t3"));
+        assert!(tsv.contains("longest_frac\t0.340356564000"));
         assert!(tsv.contains("gc_content\t0.500000000000"));
         assert!(tsv.contains("bases_ge_1kb_frac\t0.810000000000"));
     }
