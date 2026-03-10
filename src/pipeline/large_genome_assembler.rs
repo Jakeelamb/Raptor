@@ -1023,6 +1023,25 @@ impl LargeGenomeAssembler {
         .encoded
     }
 
+    #[inline]
+    fn resolve_adjacency_orientation(
+        encoded: u64,
+        k: usize,
+        adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+    ) -> Option<u64> {
+        if adjacency.contains_key(&encoded) {
+            return Some(encoded);
+        }
+
+        let canonical = Self::canonical_kmer(encoded, k);
+        if adjacency.contains_key(&canonical) {
+            return Some(canonical);
+        }
+
+        let reverse = Self::reverse_complement_kmer(canonical, k);
+        adjacency.contains_key(&reverse).then_some(reverse)
+    }
+
     fn remove_kmers_and_prune_adjacency(
         adjacency: &mut AHashMap<u64, ([bool; 4], [bool; 4])>,
         kmers_to_remove: &AHashSet<u64>,
@@ -1141,8 +1160,12 @@ impl LargeGenomeAssembler {
         let max_tip = self.config.max_tip_len + 10; // Safety limit
 
         while length < max_tip {
+            let Some(current_oriented) = Self::resolve_adjacency_orientation(current, k, adjacency)
+            else {
+                return length;
+            };
             let (left_ext, right_ext) = adjacency
-                .get(&current)
+                .get(&current_oriented)
                 .copied()
                 .unwrap_or(([false; 4], [false; 4]));
 
@@ -1158,25 +1181,16 @@ impl LargeGenomeAssembler {
                 let base = bases[ext_idx];
 
                 let next = if going_left {
-                    extend_left(current, base, k)
+                    extend_left(current_oriented, base, k)
                 } else {
-                    extend_right(current, base, k)
+                    extend_right(current_oriented, base, k)
                 };
 
                 if let Some(next_kmer) = next {
-                    let next_canonical = KmerU64 {
-                        encoded: next_kmer,
-                        len: k as u8,
-                    }
-                    .canonical()
-                    .encoded;
-                    if adjacency.contains_key(&next_kmer) || adjacency.contains_key(&next_canonical)
+                    if let Some(next_oriented) =
+                        Self::resolve_adjacency_orientation(next_kmer, k, adjacency)
                     {
-                        current = if adjacency.contains_key(&next_kmer) {
-                            next_kmer
-                        } else {
-                            next_canonical
-                        };
+                        current = next_oriented;
                         length += 1;
                     } else {
                         return length;
@@ -1385,20 +1399,9 @@ impl LargeGenomeAssembler {
         let mut current = start;
 
         for _ in 0..max_len {
-            let lookup_kmer = if adjacency.contains_key(&current) {
-                current
-            } else {
-                let canonical = KmerU64 {
-                    encoded: current,
-                    len: k as u8,
-                }
-                .canonical()
-                .encoded;
-                if adjacency.contains_key(&canonical) {
-                    canonical
-                } else {
-                    return Some((path, current));
-                }
+            let Some(lookup_kmer) = Self::resolve_adjacency_orientation(current, k, adjacency)
+            else {
+                return Some((path, current));
             };
 
             let (left_ext, right_ext) = adjacency.get(&lookup_kmer).copied()?;
@@ -1411,12 +1414,17 @@ impl LargeGenomeAssembler {
                 let ext_idx = extensions.iter().position(|&b| b).unwrap();
                 let base = bases[ext_idx];
                 let next = if going_left {
-                    extend_left(current, base, k)?
+                    extend_left(lookup_kmer, base, k)?
                 } else {
-                    extend_right(current, base, k)?
+                    extend_right(lookup_kmer, base, k)?
                 };
-                path.push(next);
-                current = next;
+                let Some(next_oriented) = Self::resolve_adjacency_orientation(next, k, adjacency)
+                else {
+                    path.push(next);
+                    return Some((path, next));
+                };
+                path.push(next_oriented);
+                current = next_oriented;
             } else {
                 // Reached another branch point - this is the end
                 return Some((path, current));
@@ -2223,8 +2231,13 @@ impl LargeGenomeAssembler {
 
         // Extend right: look up adjacency for current k-mer (not canonical)
         loop {
+            let Some(current_oriented) =
+                Self::resolve_adjacency_orientation(right_kmer, k, adjacency)
+            else {
+                break;
+            };
             let (_, right_ext) = adjacency
-                .get(&right_kmer)
+                .get(&current_oriented)
                 .copied()
                 .unwrap_or(([false; 4], [false; 4]));
 
@@ -2237,7 +2250,7 @@ impl LargeGenomeAssembler {
                         return false;
                     }
                     // Check if this extension leads to an unused k-mer
-                    if let Some(next) = extend_right(right_kmer, bases[*i], k) {
+                    if let Some(next) = extend_right(current_oriented, bases[*i], k) {
                         let next_kmer = KmerU64 {
                             encoded: next,
                             len: k as u8,
@@ -2258,7 +2271,7 @@ impl LargeGenomeAssembler {
             let base_idx = extensions[0];
             let base = bases[base_idx];
 
-            if let Some(next) = extend_right(right_kmer, base, k) {
+            if let Some(next) = extend_right(current_oriented, base, k) {
                 let next_kmer = KmerU64 {
                     encoded: next,
                     len: k as u8,
@@ -2278,8 +2291,13 @@ impl LargeGenomeAssembler {
 
         // Extend left
         loop {
+            let Some(current_oriented) =
+                Self::resolve_adjacency_orientation(left_kmer, k, adjacency)
+            else {
+                break;
+            };
             let (left_ext, _) = adjacency
-                .get(&left_kmer)
+                .get(&current_oriented)
                 .copied()
                 .unwrap_or(([false; 4], [false; 4]));
 
@@ -2290,7 +2308,7 @@ impl LargeGenomeAssembler {
                     if !valid {
                         return false;
                     }
-                    if let Some(next) = extend_left(left_kmer, bases[*i], k) {
+                    if let Some(next) = extend_left(current_oriented, bases[*i], k) {
                         let next_kmer = KmerU64 {
                             encoded: next,
                             len: k as u8,
@@ -2311,7 +2329,7 @@ impl LargeGenomeAssembler {
             let base_idx = extensions[0];
             let base = bases[base_idx];
 
-            if let Some(next) = extend_left(left_kmer, base, k) {
+            if let Some(next) = extend_left(current_oriented, base, k) {
                 let next_kmer = KmerU64 {
                     encoded: next,
                     len: k as u8,
@@ -2372,13 +2390,18 @@ impl LargeGenomeAssembler {
 
         // Extend right with coverage-guided traversal
         loop {
+            let Some(current_oriented) =
+                Self::resolve_adjacency_orientation(right_kmer, k, adjacency)
+            else {
+                break;
+            };
             let (_, right_ext) = adjacency
-                .get(&right_kmer)
+                .get(&current_oriented)
                 .copied()
                 .unwrap_or(([false; 4], [false; 4]));
 
             let Some(best) = self.select_branch_extension(
-                right_kmer,
+                current_oriented,
                 &right_ext,
                 k,
                 kmer_counts,
@@ -2398,13 +2421,18 @@ impl LargeGenomeAssembler {
 
         // Extend left with coverage-guided traversal
         loop {
+            let Some(current_oriented) =
+                Self::resolve_adjacency_orientation(left_kmer, k, adjacency)
+            else {
+                break;
+            };
             let (left_ext, _) = adjacency
-                .get(&left_kmer)
+                .get(&current_oriented)
                 .copied()
                 .unwrap_or(([false; 4], [false; 4]));
 
             let Some(best) = self.select_branch_extension(
-                left_kmer,
+                current_oriented,
                 &left_ext,
                 k,
                 kmer_counts,
@@ -2804,6 +2832,45 @@ mod tests {
             .collect();
         entries.sort_unstable_by_key(|(edge, _)| *edge);
         entries
+    }
+
+    fn canonical_only_orientation_fixture() -> (
+        LargeGenomeAssembler,
+        usize,
+        AHashMap<u64, ([bool; 4], [bool; 4])>,
+        AHashMap<u64, u32>,
+        u64,
+        u64,
+        u64,
+    ) {
+        let k = 4;
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: 1,
+            ..Default::default()
+        });
+
+        let acga = KmerU64::from_str("ACGA").unwrap().canonical().encoded;
+        let atcg = KmerU64::from_str("ATCG").unwrap().canonical().encoded;
+        let tcga = KmerU64::from_str("TCGA").unwrap().canonical().encoded;
+
+        let mut adjacency = AHashMap::new();
+        let mut right_t = [false; 4];
+        right_t[3] = true;
+        adjacency.insert(acga, ([false; 4], right_t));
+
+        let mut right_a = [false; 4];
+        right_a[0] = true;
+        adjacency.insert(atcg, ([false; 4], right_a));
+        adjacency.insert(tcga, ([false; 4], [false; 4]));
+
+        let mut counts = AHashMap::new();
+        counts.insert(acga, 30);
+        counts.insert(atcg, 28);
+        counts.insert(tcga, 26);
+
+        (assembler, k, adjacency, counts, acga, atcg, tcga)
     }
 
     #[test]
@@ -4579,5 +4646,53 @@ mod tests {
         }
 
         assert!(baseline.is_some(), "baseline should be captured");
+    }
+
+    #[test]
+    fn test_extend_bidirectional_recovers_via_canonical_orientation_lookup() {
+        let (assembler, k, adjacency, _counts, acga, atcg, tcga) =
+            canonical_only_orientation_fixture();
+        let mut used = AHashSet::new();
+
+        let contig = assembler.extend_bidirectional(acga, k, &adjacency, &mut used);
+        assert_eq!(contig, "ACGATA");
+        assert!(used.contains(&acga));
+        assert!(used.contains(&atcg));
+        assert!(used.contains(&tcga));
+    }
+
+    #[test]
+    fn test_extend_bidirectional_with_coverage_recovers_via_canonical_orientation_lookup() {
+        let (assembler, k, adjacency, counts, acga, _atcg, _tcga) =
+            canonical_only_orientation_fixture();
+        let mut used = AHashSet::new();
+        let branch_support: AHashMap<(u64, u64), u32> = AHashMap::new();
+        let repeat_kmers: AHashSet<u64> = AHashSet::new();
+
+        let contig = assembler.extend_bidirectional_with_coverage(
+            acga,
+            k,
+            &adjacency,
+            &counts,
+            &branch_support,
+            &repeat_kmers,
+            &mut used,
+        );
+        assert_eq!(contig, "ACGATA");
+    }
+
+    #[test]
+    fn test_trace_path_extends_from_resolved_orientation_when_start_is_missing() {
+        let (assembler, k, adjacency, _counts, _acga, _atcg, tcga) =
+            canonical_only_orientation_fixture();
+        let start = KmerU64::from_str("CGAT").unwrap().encoded;
+        let bases = [b'A', b'C', b'G', b'T'];
+
+        let (path, end) = assembler
+            .trace_path(start, k, &adjacency, 8, &bases, false)
+            .expect("trace path should succeed");
+
+        assert_eq!(path, vec![start, tcga]);
+        assert_eq!(end, tcga);
     }
 }
