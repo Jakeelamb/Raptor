@@ -2898,6 +2898,35 @@ mod tests {
         entries
     }
 
+    fn simple_pop_bubble_fixture() -> (usize, [u64; 7], AHashMap<u64, ([bool; 4], [bool; 4])>) {
+        let k = 3;
+        let aaa = KmerU64::from_str("AAA").unwrap().encoded;
+        let aac = KmerU64::from_str("AAC").unwrap().encoded;
+        let aag = KmerU64::from_str("AAG").unwrap().encoded;
+        let agc = KmerU64::from_str("AGC").unwrap().encoded;
+        let acc = KmerU64::from_str("ACC").unwrap().encoded;
+        let gcc = KmerU64::from_str("GCC").unwrap().encoded;
+        let ccc = KmerU64::from_str("CCC").unwrap().encoded;
+
+        let mut right_aa = [false; 4];
+        right_aa[1] = true; // AAA -> AAC
+        right_aa[2] = true; // AAA -> AAG
+        let mut right_c = [false; 4];
+        right_c[1] = true; // * -> *C
+        let none = [false; 4];
+
+        let mut adjacency = AHashMap::new();
+        adjacency.insert(aaa, (none, right_aa));
+        adjacency.insert(aac, (none, right_c));
+        adjacency.insert(aag, (none, right_c));
+        adjacency.insert(agc, (none, right_c));
+        adjacency.insert(acc, (none, right_c));
+        adjacency.insert(gcc, (none, right_c));
+        adjacency.insert(ccc, (none, none));
+
+        (k, [aaa, aac, aag, agc, acc, gcc, ccc], adjacency)
+    }
+
     fn canonical_only_orientation_fixture() -> (
         LargeGenomeAssembler,
         usize,
@@ -4880,6 +4909,70 @@ mod tests {
             adjacency.contains_key(&ccc) || adjacency.contains_key(&ccc_canonical),
             "reconvergence node should survive even at extreme coverage"
         );
+    }
+
+    proptest! {
+        #[test]
+        fn prop_pop_bubbles_is_stable_under_randomized_coverage_insertion_order(
+            coverages in prop::array::uniform7(1u32..=u32::MAX),
+            seed in any::<u64>(),
+        ) {
+            let (k, nodes, fixture) = simple_pop_bubble_fixture();
+            let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+                k,
+                min_count: 1,
+                min_contig_len: 1,
+                ..Default::default()
+            });
+
+            let mut baseline_counts = AHashMap::new();
+            for idx in 0..nodes.len() {
+                let canonical = KmerU64 {
+                    encoded: nodes[idx],
+                    len: k as u8,
+                }
+                .canonical()
+                .encoded;
+                baseline_counts.insert(canonical, coverages[idx]);
+            }
+            let mut baseline_adjacency = fixture.clone();
+            let baseline_popped = assembler.pop_bubbles(&mut baseline_adjacency, &baseline_counts, k);
+            let baseline_snapshot = canonicalize_adjacency(&baseline_adjacency);
+
+            let mut order = [0usize, 1, 2, 3, 4, 5, 6];
+            let mut rng = StdRng::seed_from_u64(seed);
+            order.shuffle(&mut rng);
+
+            let mut shuffled_counts = AHashMap::new();
+            for idx in order {
+                let canonical = KmerU64 {
+                    encoded: nodes[idx],
+                    len: k as u8,
+                }
+                .canonical()
+                .encoded;
+                shuffled_counts.insert(canonical, coverages[idx]);
+            }
+
+            let mut shuffled_adjacency = fixture;
+            let shuffled_popped = assembler.pop_bubbles(&mut shuffled_adjacency, &shuffled_counts, k);
+            let shuffled_snapshot = canonicalize_adjacency(&shuffled_adjacency);
+
+            prop_assert_eq!(shuffled_popped, baseline_popped);
+            prop_assert_eq!(shuffled_snapshot, baseline_snapshot);
+
+            let ccc = nodes[6];
+            let ccc_canonical = KmerU64 {
+                encoded: ccc,
+                len: k as u8,
+            }
+            .canonical()
+            .encoded;
+            prop_assert!(
+                shuffled_adjacency.contains_key(&ccc) || shuffled_adjacency.contains_key(&ccc_canonical),
+                "shared reconvergence node should remain after bubble cleanup"
+            );
+        }
     }
 
     #[test]
