@@ -1,5 +1,5 @@
 use crate::graph::assembler::Contig;
-use crate::graph::isoform_graph::build_isoform_graph;
+use crate::graph::isoform_graph::{build_isoform_graph, find_end_nodes, find_start_nodes};
 use crate::graph::isoform_traverse::{filter_paths_by_confidence, find_directed_paths};
 use crate::graph::transcript::Transcript;
 use std::collections::HashMap;
@@ -61,10 +61,10 @@ pub fn process_isoforms(
     );
 
     // Build expression map from k-mer counts if available
-    let mut expression_map = HashMap::new();
-    for (contig_id, count) in kmer_counts {
-        expression_map.insert(*contig_id, *count as f64);
-    }
+    let expression_map: HashMap<usize, f64> = kmer_counts
+        .iter()
+        .map(|(&contig_id, &count)| (contig_id, count as f64))
+        .collect();
 
     // Convert contigs to a HashMap for easier lookup
     let mut contig_map = HashMap::new();
@@ -76,17 +76,35 @@ pub fn process_isoforms(
     let overlaps_vec = links.to_vec();
     let graph = build_isoform_graph(&contig_map, &overlaps_vec, &expression_map);
 
-    // Prepare start and end nodes (for simplicity, using all nodes as candidates)
-    let all_nodes: Vec<usize> = graph.nodes().collect();
-    let start_nodes = all_nodes.clone();
-    let end_nodes = all_nodes;
+    // Determine start/end nodes using graph structure; fall back to all nodes if degenerate.
+    let mut all_nodes: Vec<usize> = graph.nodes().collect();
+    all_nodes.sort_unstable();
+
+    let mut start_nodes = find_start_nodes(&graph);
+    let mut end_nodes = find_end_nodes(&graph);
+
+    if start_nodes.is_empty() {
+        start_nodes = all_nodes.clone();
+    }
+    if end_nodes.is_empty() {
+        end_nodes = all_nodes.clone();
+    }
+
+    start_nodes.sort_unstable();
+    end_nodes.sort_unstable();
 
     // Find paths through the graph
     let paths = find_directed_paths(&graph, &start_nodes, &end_nodes, max_path_depth);
     info!("Found {} raw transcript paths", paths.len());
 
     // Filter paths by confidence (using min_confidence as f32, 100 as min path length, and None for high threshold)
-    let filtered_paths = filter_paths_by_confidence(&paths, min_confidence as f32, 100, None);
+    let mut filtered_paths = filter_paths_by_confidence(&paths, min_confidence as f32, 100, None);
+    filtered_paths.sort_unstable_by(|a, b| {
+        b.confidence
+            .total_cmp(&a.confidence)
+            .then_with(|| b.length.cmp(&a.length))
+            .then_with(|| a.nodes.cmp(&b.nodes))
+    });
     info!("Filtered to {} high-confidence paths", filtered_paths.len());
 
     // Convert paths to transcripts

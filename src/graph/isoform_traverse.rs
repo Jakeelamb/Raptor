@@ -31,8 +31,10 @@ pub fn find_directed_paths(
 ) -> Vec<TranscriptPath> {
     let mut raw_paths = Vec::new();
     let end_node_set: HashSet<usize> = end_nodes.iter().cloned().collect();
+    let mut ordered_starts: Vec<usize> = start_nodes.to_vec();
+    ordered_starts.sort_unstable();
 
-    for &start in start_nodes {
+    for start in ordered_starts {
         // Check if we've hit the path limit
         if raw_paths.len() >= MAX_PATHS {
             debug!(
@@ -62,7 +64,7 @@ pub fn find_directed_paths(
     debug!("Found {} raw paths in graph traversal", raw_paths.len());
 
     // Convert paths to TranscriptPath objects with confidence scores
-    let transcript_paths: Vec<TranscriptPath> = raw_paths
+    let mut transcript_paths: Vec<TranscriptPath> = raw_paths
         .into_iter()
         .map(|path| {
             let confidence = calculate_path_confidence(graph, &path);
@@ -75,6 +77,7 @@ pub fn find_directed_paths(
         })
         .collect();
 
+    transcript_paths.sort_unstable_by(|a, b| a.nodes.cmp(&b.nodes));
     transcript_paths
 }
 
@@ -160,7 +163,9 @@ fn find_paths_dfs_optimized(
     }
 
     // Explore neighbors
-    for neighbor in graph.neighbors(current) {
+    let mut neighbors: Vec<usize> = graph.neighbors(current).collect();
+    neighbors.sort_unstable();
+    for neighbor in neighbors {
         if !visited.contains(&neighbor) {
             // Add to path and visited (forward step)
             path.push(neighbor);
@@ -280,5 +285,41 @@ mod tests {
 
         assert!((path1.confidence - 0.8).abs() < 0.01); // Average of 0.9, 0.8, 0.7
         assert!((path2.confidence - 0.55).abs() < 0.01); // Average of 0.6 and 0.5
+    }
+
+    #[test]
+    fn test_find_directed_paths_is_stable_under_edge_insertion_order() {
+        let edges = vec![
+            (0, 2, 0.7),
+            (0, 1, 0.9),
+            (1, 4, 0.8),
+            (2, 4, 0.6),
+            (4, 5, 0.95),
+            (1, 3, 0.85),
+            (3, 5, 0.75),
+        ];
+
+        let mut graph_a = DiGraphMap::new();
+        let mut graph_b = DiGraphMap::new();
+        for i in 0..6 {
+            graph_a.add_node(i);
+            graph_b.add_node(i);
+        }
+
+        for &(u, v, w) in &edges {
+            graph_a.add_edge(u, v, w);
+        }
+        for &(u, v, w) in edges.iter().rev() {
+            graph_b.add_edge(u, v, w);
+        }
+
+        let start_nodes = vec![2, 0, 1];
+        let end_nodes = vec![5, 4];
+        let paths_a = find_directed_paths(&graph_a, &start_nodes, &end_nodes, 6);
+        let paths_b = find_directed_paths(&graph_b, &start_nodes, &end_nodes, 6);
+
+        let a_nodes: Vec<Vec<usize>> = paths_a.into_iter().map(|p| p.nodes).collect();
+        let b_nodes: Vec<Vec<usize>> = paths_b.into_iter().map(|p| p.nodes).collect();
+        assert_eq!(a_nodes, b_nodes);
     }
 }

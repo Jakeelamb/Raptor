@@ -1,10 +1,12 @@
 use ahash::AHashMap;
+use petgraph::graphmap::DiGraphMap;
 use proptest::prelude::*;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use raptor::accel::backend::AdjacencyTableU64;
 use raptor::graph::assembler::greedy_assembly_u64;
+use raptor::graph::isoform_traverse::find_directed_paths;
 use raptor::kmer::kmer::{encode_kmer, reverse_complement, KmerU64};
 
 fn dna_string(max_len: usize) -> impl Strategy<Value = String> {
@@ -81,5 +83,53 @@ fn greedy_assembly_is_stable_under_randomized_insertion_order() {
         let contigs = greedy_assembly_u64(k, &counts, &adjacency, k);
         let observed: Vec<String> = contigs.into_iter().map(|c| c.sequence).collect();
         assert_eq!(observed, expected);
+    }
+}
+
+#[test]
+fn isoform_path_enumeration_is_stable_under_randomized_edge_order() {
+    let nodes: Vec<usize> = (0..6).collect();
+    let edges = vec![
+        (0, 1, 0.9),
+        (0, 2, 0.7),
+        (1, 3, 0.8),
+        (2, 3, 0.6),
+        (3, 4, 0.95),
+        (2, 5, 0.75),
+    ];
+    let start_nodes = vec![2, 0];
+    let end_nodes = vec![4, 5];
+
+    let mut baseline_graph = DiGraphMap::new();
+    for &node in &nodes {
+        baseline_graph.add_node(node);
+    }
+    for &(u, v, w) in &edges {
+        baseline_graph.add_edge(u, v, w);
+    }
+    let baseline_paths: Vec<Vec<usize>> =
+        find_directed_paths(&baseline_graph, &start_nodes, &end_nodes, 6)
+            .into_iter()
+            .map(|p| p.nodes)
+            .collect();
+
+    let mut rng = StdRng::seed_from_u64(0x150F0F1_u64);
+    for _ in 0..128 {
+        let mut shuffled_edges = edges.clone();
+        shuffled_edges.shuffle(&mut rng);
+
+        let mut graph = DiGraphMap::new();
+        for &node in &nodes {
+            graph.add_node(node);
+        }
+        for &(u, v, w) in &shuffled_edges {
+            graph.add_edge(u, v, w);
+        }
+
+        let observed: Vec<Vec<usize>> = find_directed_paths(&graph, &start_nodes, &end_nodes, 6)
+            .into_iter()
+            .map(|p| p.nodes)
+            .collect();
+        assert_eq!(observed, baseline_paths);
     }
 }

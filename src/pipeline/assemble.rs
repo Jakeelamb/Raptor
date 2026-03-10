@@ -8,7 +8,6 @@ use crate::io::fastq::{open_fastq, stream_fastq_records, FastqRecord};
 use crate::io::gfa::GfaWriter;
 use crate::io::gfa2::Gfa2Writer;
 use crate::kmer::variable_k::{kmer_coverage_histogram, optimal_k, select_best_k};
-use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use tracing::{info, warn};
@@ -208,13 +207,6 @@ pub fn assemble_reads_with_gpu(
     info!("Assembling contigs with minimum length: {}", min_len);
     let mut contigs = greedy_assembly_u64(k, &kmer_counts_u64, &adjacency, min_len);
 
-    // Legacy path for GPU backend (uses String k-mers)
-    // Convert u64 counts to String counts for compatibility with existing GPU code
-    let kmer_counts: HashMap<String, u32> = kmer_counts_u64
-        .iter()
-        .map(|(&kmer, &count)| (crate::kmer::kmer::decode_kmer(kmer, k), count))
-        .collect();
-
     // Collapse repeats if requested
     if collapse_repeats {
         use crate::graph::simplify::collapse_repeats;
@@ -337,17 +329,8 @@ pub fn assemble_reads_with_gpu(
             let bam_path_value = None; // No BAM file for quantification
             let long_reads_value = None; // No long reads for polishing
 
-            // Convert kmer_counts to the expected HashMap<usize, usize> type
-            let kmer_counts_converted: HashMap<usize, usize> = kmer_counts
-                .iter()
-                .filter_map(|(k, v)| {
-                    if let Ok(id) = k.parse::<usize>() {
-                        Some((id, *v as usize))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            // Derive per-contig expression support from assembled k-mer paths.
+            let kmer_counts_converted = derive_contig_expression_map(&contigs, &kmer_counts_u64);
 
             // Create a function pointer with the expected signature
             let get_output_filename_fn: fn(&str, Option<&str>) -> String =
@@ -656,5 +639,71 @@ fn get_output_filename(output_path: &str, extension: &str) -> String {
         )
     } else {
         format!("{}.{}", path, extension)
+    }
+}
+
+fn derive_contig_expression_map(
+    contigs: &[crate::graph::assembler::Contig],
+    kmer_counts: &ahash::AHashMap<u64, u32>,
+) -> std::collections::HashMap<usize, usize> {
+    let mut expression_by_contig = std::collections::HashMap::with_capacity(contigs.len());
+
+    for contig in contigs {
+        let mut support_sum = 0u128;
+        let mut support_obs = 0u128;
+
+        for kmer in &contig.kmer_path {
+            if let Some(&count) = kmer_counts.get(kmer) {
+                support_sum += count as u128;
+                support_obs += 1;
+            }
+        }
+
+        if support_obs > 0 {
+            // Rounded mean support keeps deterministic integer weights for graph scoring.
+            let mean_support = ((support_sum + (support_obs / 2)) / support_obs) as usize;
+            expression_by_contig.insert(contig.id, mean_support.max(1));
+        }
+    }
+
+    expression_by_contig
+}
+
+#[cfg(test)]
+mod tests {
+    use super::derive_contig_expression_map;
+    use crate::graph::assembler::Contig;
+    use ahash::AHashMap;
+
+    #[test]
+    fn derive_contig_expression_map_averages_observed_kmer_support() {
+        let contigs = vec![
+            Contig {
+                id: 7,
+                sequence: "AAAC".to_string(),
+                kmer_path: vec![11, 12, 13],
+            },
+            Contig {
+                id: 8,
+                sequence: "GGG".to_string(),
+                kmer_path: vec![99],
+            },
+            Contig {
+                id: 9,
+                sequence: "TTT".to_string(),
+                kmer_path: vec![],
+            },
+        ];
+
+        let mut kmer_counts = AHashMap::new();
+        kmer_counts.insert(11, 3);
+        kmer_counts.insert(12, 5);
+        kmer_counts.insert(13, 4);
+
+        let expression = derive_contig_expression_map(&contigs, &kmer_counts);
+
+        assert_eq!(expression.get(&7), Some(&4));
+        assert!(!expression.contains_key(&8));
+        assert!(!expression.contains_key(&9));
     }
 }
