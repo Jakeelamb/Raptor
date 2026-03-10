@@ -38,7 +38,7 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
 
     // Parse segments and links
     let mut segments = BTreeSet::new();
-    let mut links = Vec::new();
+    let mut links = BTreeSet::new();
     let mut paths = Vec::new();
 
     for line_result in reader.lines() {
@@ -55,7 +55,7 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
                 // Link line
                 let from = parts[1].to_string();
                 let to = parts[3].to_string();
-                links.push((from, to));
+                links.insert((from, to));
             }
             Some(&"P") if parts.len() >= 3 => {
                 // Path line
@@ -82,7 +82,7 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
     }
 
     // Add all links as edges
-    for (from, to) in &links {
+    for (from, to) in links.iter() {
         if let (Some(&from_idx), Some(&to_idx)) = (node_indices.get(from), node_indices.get(to)) {
             graph.add_edge(from_idx, to_idx, ());
         }
@@ -144,7 +144,7 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
     }
 
     // Add edges using the numeric indices
-    for (from, to) in &links {
+    for (from, to) in links.iter() {
         if let (Some(&from_idx), Some(&to_idx)) = (string_to_idx.get(from), string_to_idx.get(to)) {
             digraph.add_edge(from_idx, to_idx, ());
         }
@@ -370,6 +370,24 @@ mod tests {
         assert_eq!(stats.total_paths, 1);
         assert_eq!(stats.branch_count, 0);
         assert_eq!(stats.max_depth, 2);
+        assert_eq!(stats.bubble_count, 0);
+    }
+
+    #[test]
+    fn test_compute_path_stats_ignores_duplicate_links() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "H\tVN:Z:1.0").unwrap();
+        writeln!(temp_file, "S\t1\tAAAA").unwrap();
+        writeln!(temp_file, "S\t2\tCCCC").unwrap();
+        writeln!(temp_file, "L\t1\t+\t2\t+\t3M").unwrap();
+        writeln!(temp_file, "L\t1\t+\t2\t+\t3M").unwrap();
+        writeln!(temp_file, "L\t1\t+\t2\t+\t3M").unwrap();
+        writeln!(temp_file, "P\tonly\t1+,2+\t*").unwrap();
+
+        let stats = compute_path_stats(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(stats.total_paths, 1);
+        assert_eq!(stats.branch_count, 0);
+        assert_eq!(stats.max_depth, 1);
         assert_eq!(stats.bubble_count, 0);
     }
 

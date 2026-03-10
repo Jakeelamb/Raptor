@@ -23,6 +23,9 @@ pub struct Stats {
     pub path_count: Option<usize>,
     pub avg_path_length: Option<f64>,
     pub branch_count: Option<usize>,
+    pub graph_max_depth: Option<usize>,
+    pub graph_bubble_count: Option<usize>,
+    pub graph_branchiness: Option<f64>,
 }
 
 pub fn calculate_stats(path: &str) -> Stats {
@@ -69,6 +72,9 @@ pub fn calculate_stats(path: &str) -> Stats {
         path_count: None,
         avg_path_length: None,
         branch_count: None,
+        graph_max_depth: None,
+        graph_bubble_count: None,
+        graph_branchiness: None,
     }
 }
 
@@ -97,6 +103,9 @@ pub fn update_with_graph_stats(
     stats.path_count = Some(graph_stats.total_paths);
     stats.avg_path_length = Some(graph_stats.average_length);
     stats.branch_count = Some(graph_stats.branch_count);
+    stats.graph_max_depth = Some(graph_stats.max_depth);
+    stats.graph_bubble_count = Some(graph_stats.bubble_count);
+    stats.graph_branchiness = Some(graph_stats.branchiness);
 }
 
 #[cfg(test)]
@@ -157,5 +166,48 @@ mod tests {
         assert_eq!(stats.l99, 2);
         assert!((stats.au_n - 10.0).abs() < 1e-6);
         assert_eq!(stats.longest_contig, 12);
+    }
+
+    #[test]
+    fn test_update_with_graph_stats_populates_extended_metrics() {
+        let mut stats = Stats {
+            total_contigs: 0,
+            total_length: 0,
+            average_length: 0.0,
+            n50: 0,
+            n75: 0,
+            n90: 0,
+            n95: 0,
+            n99: 0,
+            l50: 0,
+            l90: 0,
+            l95: 0,
+            l99: 0,
+            au_n: 0.0,
+            longest_contig: 0,
+            path_count: None,
+            avg_path_length: None,
+            branch_count: None,
+            graph_max_depth: None,
+            graph_bubble_count: None,
+            graph_branchiness: None,
+        };
+        let graph_stats = crate::graph::complexity::PathStats {
+            total_paths: 7,
+            average_length: 3.5,
+            branch_count: 2,
+            max_depth: 5,
+            bubble_count: 1,
+            branchiness: 0.4,
+        };
+
+        update_with_graph_stats(&mut stats, &graph_stats);
+
+        assert_eq!(stats.path_count, Some(7));
+        assert_eq!(stats.avg_path_length, Some(3.5));
+        assert_eq!(stats.branch_count, Some(2));
+        assert_eq!(stats.graph_max_depth, Some(5));
+        assert_eq!(stats.graph_bubble_count, Some(1));
+        assert_eq!(stats.graph_branchiness, Some(0.4));
     }
 }

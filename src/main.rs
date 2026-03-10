@@ -200,6 +200,9 @@ fn main() {
                     println!("  Total paths: {}", graph_stats.total_paths);
                     println!("  Average path length: {:.2}", graph_stats.average_length);
                     println!("  Shared segments (branches): {}", graph_stats.branch_count);
+                    println!("  Max graph depth: {}", graph_stats.max_depth);
+                    println!("  Bubble count: {}", graph_stats.bubble_count);
+                    println!("  Branchiness: {:.4}", graph_stats.branchiness);
                 }
             }
 
