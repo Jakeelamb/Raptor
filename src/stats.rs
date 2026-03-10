@@ -262,6 +262,14 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
                         format!("ungapped contig length overflow while reading {}", path),
                     )
                 })?;
+        } else if !trimmed_line.trim().is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "encountered sequence data before first FASTA header while reading {}",
+                    path
+                ),
+            ));
         }
     }
 
@@ -1002,6 +1010,37 @@ mod tests {
             Ok(_) => panic!("expected not found error for missing FASTA"),
             Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::NotFound),
         }
+    }
+
+    #[test]
+    fn test_calculate_stats_rejects_sequence_data_before_first_header() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "ACGT").unwrap();
+        writeln!(file, ">contig_1").unwrap();
+        writeln!(file, "TTTT").unwrap();
+
+        match calculate_stats(file.path().to_str().unwrap()) {
+            Ok(_) => panic!("expected invalid FASTA error"),
+            Err(err) => {
+                assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+                assert!(err
+                    .to_string()
+                    .contains("sequence data before first FASTA header"));
+            }
+        }
+    }
+
+    #[test]
+    fn test_calculate_stats_allows_leading_blank_lines_before_first_header() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file).unwrap();
+        writeln!(file, "   ").unwrap();
+        writeln!(file, ">contig_1").unwrap();
+        writeln!(file, "ACGT").unwrap();
+
+        let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(stats.total_contigs, 1);
+        assert_eq!(stats.total_length, 4);
     }
 
     proptest! {
