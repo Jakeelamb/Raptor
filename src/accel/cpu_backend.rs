@@ -124,8 +124,13 @@ impl CpuBackend {
         k: usize,
         min_count: u32,
     ) -> AHashMap<u64, u32> {
-        if k > 32 {
-            panic!("k-mer size {} exceeds maximum of 32 for u64 encoding", k);
+        if !(1..=32).contains(&k) || sequences.is_empty() {
+            return AHashMap::new();
+        }
+
+        // Threshold <= 1 means no pre-filtering is required; fall back to exact counting.
+        if min_count <= 1 {
+            return self.count_kmers_u64(sequences, k);
         }
 
         // Estimate total k-mers for Bloom filter sizing
@@ -133,10 +138,16 @@ impl CpuBackend {
             .iter()
             .map(|s| s.len().saturating_sub(k - 1))
             .sum();
+        if total_kmers == 0 {
+            return AHashMap::new();
+        }
 
         // Use counting Bloom filter with 1% FP rate
         // Shared across threads with mutex (Bloom filter updates are fast)
-        let bloom = Mutex::new(CountingBloomFilter::with_fp_rate(total_kmers / 2, 0.01));
+        let bloom = Mutex::new(CountingBloomFilter::with_fp_rate(
+            (total_kmers / 2).max(1),
+            0.01,
+        ));
 
         // Pass 1: Populate Bloom filter using ntHash for fast iteration
         sequences.par_iter().for_each(|seq| {
@@ -465,5 +476,34 @@ mod tests {
         assert!(adj.forward.contains_key("ACGT"));
         let acgt_neighbors = adj.forward.get("ACGT").unwrap();
         assert!(acgt_neighbors.iter().any(|(k, _)| k == "CGTA"));
+    }
+
+    #[test]
+    fn filtered_counting_returns_empty_for_invalid_or_too_short_inputs() {
+        let backend = CpuBackend::new();
+
+        let empty: Vec<String> = Vec::new();
+        assert!(backend.count_kmers_u64_filtered(&empty, 15, 2).is_empty());
+
+        let short = vec!["AC".to_string(), "GT".to_string()];
+        assert!(backend.count_kmers_u64_filtered(&short, 5, 2).is_empty());
+
+        let valid = vec!["ACGT".to_string()];
+        assert!(backend.count_kmers_u64_filtered(&valid, 0, 2).is_empty());
+        assert!(backend.count_kmers_u64_filtered(&valid, 33, 2).is_empty());
+    }
+
+    #[test]
+    fn filtered_counting_with_threshold_one_matches_exact_counting() {
+        let backend = CpuBackend::new();
+        let sequences = vec![
+            "ACGTACGT".to_string(),
+            "TACGTAAA".to_string(),
+            "NNNNACGT".to_string(),
+        ];
+
+        let exact = backend.count_kmers_u64(&sequences, 4);
+        let filtered = backend.count_kmers_u64_filtered(&sequences, 4, 1);
+        assert_eq!(filtered, exact);
     }
 }

@@ -43,6 +43,9 @@ impl BloomFilter {
     /// assert!(bloom.num_bits() > 0);
     /// ```
     pub fn with_fp_rate(expected_items: usize, fp_rate: f64) -> Self {
+        let expected_items = expected_items.max(1);
+        let fp_rate = sanitize_fp_rate(fp_rate);
+
         // Optimal number of bits: m = -n * ln(p) / (ln(2)^2)
         let ln2_sq = std::f64::consts::LN_2 * std::f64::consts::LN_2;
         let num_bits = (-(expected_items as f64) * fp_rate.ln() / ln2_sq).ceil() as usize;
@@ -218,6 +221,9 @@ impl CountingBloomFilter {
     /// * `expected_items` - Expected number of items
     /// * `fp_rate` - Desired false positive rate
     pub fn with_fp_rate(expected_items: usize, fp_rate: f64) -> Self {
+        let expected_items = expected_items.max(1);
+        let fp_rate = sanitize_fp_rate(fp_rate);
+
         let ln2_sq = std::f64::consts::LN_2 * std::f64::consts::LN_2;
         let num_counters = (-(expected_items as f64) * fp_rate.ln() / ln2_sq).ceil() as usize;
         let num_hashes = ((num_counters as f64 / expected_items as f64) * std::f64::consts::LN_2)
@@ -307,6 +313,15 @@ impl CountingBloomFilter {
     /// Clear all counters.
     pub fn clear(&mut self) {
         self.counters.fill(0);
+    }
+}
+
+#[inline]
+fn sanitize_fp_rate(fp_rate: f64) -> f64 {
+    if fp_rate.is_finite() {
+        fp_rate.clamp(f64::EPSILON, 1.0 - f64::EPSILON)
+    } else {
+        0.01
     }
 }
 
@@ -421,5 +436,15 @@ mod tests {
         // Should use roughly 12 MB (9.6 bits per item for 1% FP)
         let mb = bloom.memory_bytes() / (1024 * 1024);
         assert!(mb >= 10 && mb <= 20, "Unexpected memory usage: {} MB", mb);
+    }
+
+    #[test]
+    fn with_fp_rate_handles_zero_expected_items_and_extreme_rates() {
+        let bloom = BloomFilter::with_fp_rate(0, 0.0);
+        assert!(bloom.num_bits() > 0);
+        assert!(bloom.num_hashes() > 0);
+
+        let counting = CountingBloomFilter::with_fp_rate(0, 2.0);
+        assert!(counting.memory_bytes() > 0);
     }
 }
