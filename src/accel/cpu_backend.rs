@@ -7,7 +7,6 @@ use crate::kmer::bloom::CountingBloomFilter;
 use crate::kmer::kmer::canonical_kmer;
 use crate::kmer::kmer::{canonical_kmer_u64, KmerU64};
 use crate::kmer::minimizer::MinimizerIndex;
-use crate::kmer::nthash::NtHashIterator;
 use ahash::AHashMap;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -42,6 +41,32 @@ impl Default for CpuBackend {
 }
 
 impl CpuBackend {
+    #[inline]
+    fn for_each_canonical_kmer_u64<F>(bytes: &[u8], k: usize, mut f: F)
+    where
+        F: FnMut(u64),
+    {
+        if bytes.len() < k || k == 0 {
+            return;
+        }
+
+        if let Some(mut kmer) = KmerU64::from_slice(&bytes[0..k]) {
+            f(kmer.canonical().encoded);
+
+            for i in k..bytes.len() {
+                if let Some(next) = kmer.extend(bytes[i]) {
+                    kmer = next;
+                    f(kmer.canonical().encoded);
+                } else if i + 1 >= k {
+                    if let Some(fresh) = KmerU64::from_slice(&bytes[i + 1 - k..i + 1]) {
+                        kmer = fresh;
+                        f(kmer.canonical().encoded);
+                    }
+                }
+            }
+        }
+    }
+
     /// Count k-mers using u64 encoding for maximum performance.
     /// Uses sliding window encoding to avoid redundant work.
     /// Zero allocations in the inner loop.
@@ -56,34 +81,9 @@ impl CpuBackend {
             .fold(
                 || AHashMap::with_capacity(1024),
                 |mut counts, seq| {
-                    let bytes = seq.as_bytes();
-                    if bytes.len() >= k {
-                        // Initialize first k-mer
-                        if let Some(mut kmer) = KmerU64::from_slice(&bytes[0..k]) {
-                            let canonical = kmer.canonical();
-                            *counts.entry(canonical.encoded).or_insert(0) += 1;
-
-                            // Sliding window: extend and re-canonicalize
-                            for i in k..bytes.len() {
-                                if let Some(next) = kmer.extend(bytes[i]) {
-                                    kmer = next;
-                                    let canonical = kmer.canonical();
-                                    *counts.entry(canonical.encoded).or_insert(0) += 1;
-                                } else {
-                                    // Invalid base encountered, restart
-                                    if i + 1 >= k {
-                                        if let Some(fresh) =
-                                            KmerU64::from_slice(&bytes[i + 1 - k..i + 1])
-                                        {
-                                            kmer = fresh;
-                                            let canonical = kmer.canonical();
-                                            *counts.entry(canonical.encoded).or_insert(0) += 1;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    Self::for_each_canonical_kmer_u64(seq.as_bytes(), k, |canonical| {
+                        *counts.entry(canonical).or_insert(0) += 1;
+                    });
                     counts
                 },
             )
@@ -106,8 +106,8 @@ impl CpuBackend {
     /// Count k-mers with Bloom filter pre-filtering to remove singletons.
     ///
     /// Two-pass approach:
-    /// 1. Pass 1: Use ntHash + counting Bloom filter to identify k-mers seen 2+ times
-    /// 2. Pass 2: Only count k-mers that passed the Bloom filter
+    /// 1. Pass 1: Use canonical u64 k-mers + counting Bloom filter to identify k-mers seen 2+ times
+    /// 2. Pass 2: Only count canonical k-mers that passed the Bloom filter
     ///
     /// This reduces memory by 30-50% by filtering out singleton k-mers (sequencing errors).
     ///
@@ -132,6 +132,12 @@ impl CpuBackend {
         if min_count <= 1 {
             return self.count_kmers_u64(sequences, k);
         }
+        // For k=1, use exact counting to avoid edge-case discrepancies in ntHash-based filtering.
+        if k == 1 {
+            let mut exact = self.count_kmers_u64(sequences, k);
+            exact.retain(|_, count| *count >= min_count);
+            return exact;
+        }
 
         // Estimate total k-mers for Bloom filter sizing
         let total_kmers: usize = sequences
@@ -142,23 +148,44 @@ impl CpuBackend {
             return AHashMap::new();
         }
 
-        // Use counting Bloom filter with 1% FP rate
-        // Shared across threads with mutex (Bloom filter updates are fast)
+        // Use counting Bloom filter with 1% FP rate.
+        // Shared across threads with coarse batched locking to reduce contention.
         let bloom = Mutex::new(CountingBloomFilter::with_fp_rate(
             (total_kmers / 2).max(1),
             0.01,
         ));
 
-        // Pass 1: Populate Bloom filter using ntHash for fast iteration
+        // Pass 1: Populate Bloom filter using canonical u64 k-mers.
+        const BLOOM_LOCK_BATCH_SIZE: usize = 4096;
         sequences.par_iter().for_each(|seq| {
             let bytes = seq.as_bytes();
-            for (_, hash) in NtHashIterator::new(bytes, k) {
-                let mut bloom_guard = bloom.lock().unwrap();
-                bloom_guard.insert(hash);
+            let mut pending_hashes = Vec::with_capacity(BLOOM_LOCK_BATCH_SIZE);
+            Self::for_each_canonical_kmer_u64(bytes, k, |canonical| {
+                pending_hashes.push(canonical);
+
+                if pending_hashes.len() == BLOOM_LOCK_BATCH_SIZE {
+                    let mut bloom_guard = bloom
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    for pending in pending_hashes.drain(..) {
+                        bloom_guard.insert(pending);
+                    }
+                }
+            });
+
+            if !pending_hashes.is_empty() {
+                let mut bloom_guard = bloom
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                for pending in pending_hashes {
+                    bloom_guard.insert(pending);
+                }
             }
         });
 
-        let bloom = bloom.into_inner().unwrap();
+        let bloom = bloom
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // Pass 2: Count only k-mers that appear multiple times in Bloom filter
         let thread_counts: Vec<AHashMap<u64, u32>> = sequences
@@ -166,22 +193,11 @@ impl CpuBackend {
             .fold(
                 || AHashMap::with_capacity(1024),
                 |mut counts, seq| {
-                    let bytes = seq.as_bytes();
-                    if bytes.len() >= k {
-                        // Iterate with ntHash for fast Bloom checking
-                        let hash_iter = NtHashIterator::new(bytes, k);
-
-                        for (pos, hash) in hash_iter {
-                            // Check if this k-mer appears multiple times
-                            if bloom.count_at_least(hash, min_count as u8) {
-                                // Now compute the u64 encoding for the actual count
-                                if let Some(kmer) = KmerU64::from_slice(&bytes[pos..pos + k]) {
-                                    let canonical = kmer.canonical();
-                                    *counts.entry(canonical.encoded).or_insert(0) += 1;
-                                }
-                            }
+                    Self::for_each_canonical_kmer_u64(seq.as_bytes(), k, |canonical| {
+                        if bloom.count_at_least(canonical, min_count as u8) {
+                            *counts.entry(canonical).or_insert(0) += 1;
                         }
-                    }
+                    });
                     counts
                 },
             )
@@ -505,5 +521,17 @@ mod tests {
         let exact = backend.count_kmers_u64(&sequences, 4);
         let filtered = backend.count_kmers_u64_filtered(&sequences, 4, 1);
         assert_eq!(filtered, exact);
+    }
+
+    #[test]
+    fn filtered_counting_k1_matches_exact_thresholding() {
+        let backend = CpuBackend::new();
+        let sequences = vec!["GCCCCACC".to_string()];
+
+        let mut expected = backend.count_kmers_u64(&sequences, 1);
+        expected.retain(|_, count| *count >= 2);
+
+        let observed = backend.count_kmers_u64_filtered(&sequences, 1, 2);
+        assert_eq!(observed, expected);
     }
 }

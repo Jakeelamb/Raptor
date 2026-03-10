@@ -6,6 +6,7 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use rand::SeedableRng;
 use raptor::accel::backend::AdjacencyTableU64;
+use raptor::accel::CpuBackend;
 use raptor::graph::assembler::{cleanup_graph, greedy_assembly_u64};
 use raptor::graph::isoform_filter::{filter_similar_transcripts, merge_transcripts};
 use raptor::graph::isoform_traverse::find_directed_paths;
@@ -18,6 +19,14 @@ use tempfile::NamedTempFile;
 fn dna_string(max_len: usize) -> impl Strategy<Value = String> {
     prop::collection::vec(
         prop_oneof![Just('A'), Just('C'), Just('G'), Just('T')],
+        1..=max_len,
+    )
+    .prop_map(|chars| chars.into_iter().collect())
+}
+
+fn dna_or_n_string(max_len: usize) -> impl Strategy<Value = String> {
+    prop::collection::vec(
+        prop_oneof![Just('A'), Just('C'), Just('G'), Just('T'), Just('N')],
         1..=max_len,
     )
     .prop_map(|chars| chars.into_iter().collect())
@@ -54,6 +63,22 @@ proptest! {
 
         let expected = format!("{}{}", &seq[1..], base);
         prop_assert_eq!(extended.decode(), expected);
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+    #[test]
+    fn filtered_kmer_counting_matches_exact_thresholding(
+        sequences in prop::collection::vec(dna_or_n_string(48), 1..32),
+        k in 1usize..16usize,
+        min_count in 2u32..5u32
+    ) {
+        let backend = CpuBackend::new();
+        let observed = backend.count_kmers_u64_filtered(&sequences, k, min_count);
+        let mut expected = backend.count_kmers_u64(&sequences, k);
+        expected.retain(|_, count| *count >= min_count);
+        prop_assert_eq!(observed, expected);
     }
 }
 
@@ -137,6 +162,27 @@ fn isoform_path_enumeration_is_stable_under_randomized_edge_order() {
             .map(|p| p.nodes)
             .collect();
         assert_eq!(observed, baseline_paths);
+    }
+}
+
+#[test]
+fn filtered_kmer_counting_is_stable_under_randomized_read_order() {
+    let backend = CpuBackend::new();
+    let reads = vec![
+        "ACGTACGTACGT".to_string(),
+        "TACGTACGTAAA".to_string(),
+        "GGGGACGTNNNN".to_string(),
+        "ACGTACGTACGT".to_string(),
+        "TTTTACGTCCCC".to_string(),
+    ];
+    let expected = backend.count_kmers_u64_filtered(&reads, 5, 2);
+
+    let mut rng = StdRng::seed_from_u64(0xACED_1234_u64);
+    for _ in 0..128 {
+        let mut shuffled = reads.clone();
+        shuffled.shuffle(&mut rng);
+        let observed = backend.count_kmers_u64_filtered(&shuffled, 5, 2);
+        assert_eq!(observed, expected);
     }
 }
 
