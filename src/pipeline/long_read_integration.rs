@@ -64,6 +64,37 @@ struct ReadMapping {
     score: usize, // Number of matching minimizers
 }
 
+#[derive(Debug, Clone, Copy)]
+struct MappingHitStats {
+    count: usize,
+    read_min: usize,
+    read_max: usize,
+    contig_min: usize,
+    contig_max: usize,
+}
+
+impl MappingHitStats {
+    #[inline]
+    fn new(read_pos: usize, contig_pos: usize) -> Self {
+        Self {
+            count: 1,
+            read_min: read_pos,
+            read_max: read_pos,
+            contig_min: contig_pos,
+            contig_max: contig_pos,
+        }
+    }
+
+    #[inline]
+    fn observe(&mut self, read_pos: usize, contig_pos: usize) {
+        self.count += 1;
+        self.read_min = self.read_min.min(read_pos);
+        self.read_max = self.read_max.max(read_pos);
+        self.contig_min = self.contig_min.min(contig_pos);
+        self.contig_max = self.contig_max.max(contig_pos);
+    }
+}
+
 #[inline]
 fn compare_read_mappings(a: &ReadMapping, b: &ReadMapping) -> Ordering {
     b.score
@@ -143,40 +174,34 @@ impl MinimizerIndex {
 
     /// Map a long read to contigs
     fn map_read(&self, sequence: &[u8]) -> Vec<ReadMapping> {
-        let mut hits: AHashMap<(usize, bool), Vec<(usize, usize)>> = AHashMap::new();
+        let mut hits: AHashMap<(usize, bool), MappingHitStats> = AHashMap::new();
 
         // Collect minimizer hits
         for (read_pos, minimizer) in self.extract_minimizers(sequence) {
             if let Some(entries) = self.index.get(&minimizer) {
                 for &(contig_id, contig_pos, is_rc) in entries {
                     hits.entry((contig_id, is_rc))
-                        .or_default()
-                        .push((read_pos, contig_pos));
+                        .and_modify(|stats| stats.observe(read_pos, contig_pos))
+                        .or_insert_with(|| MappingHitStats::new(read_pos, contig_pos));
                 }
             }
         }
 
         // Convert hits to mappings
         let mut mappings = Vec::new();
-        for ((contig_id, is_reverse), positions) in hits {
-            if positions.len() < 3 {
+        for ((contig_id, is_reverse), stats) in hits {
+            if stats.count < 3 {
                 continue;
             }
 
-            // Find the range of the mapping
-            let read_start = positions.iter().map(|(r, _)| *r).min().unwrap_or(0);
-            let read_end = positions.iter().map(|(r, _)| *r).max().unwrap_or(0) + self.k;
-            let contig_start = positions.iter().map(|(_, c)| *c).min().unwrap_or(0);
-            let contig_end = positions.iter().map(|(_, c)| *c).max().unwrap_or(0) + self.k;
-
             mappings.push(ReadMapping {
                 contig_id,
-                contig_start,
-                contig_end,
-                read_start,
-                read_end,
+                contig_start: stats.contig_min,
+                contig_end: stats.contig_max + self.k,
+                read_start: stats.read_min,
+                read_end: stats.read_max + self.k,
                 is_reverse,
-                score: positions.len(),
+                score: stats.count,
             });
         }
 
@@ -498,6 +523,25 @@ mod tests {
         let mappings = index.map_read(b"ACGTACGTACGTACGTACGT");
         assert!(!mappings.is_empty());
         assert_eq!(mappings[0].contig_id, 0);
+    }
+
+    #[test]
+    fn map_read_reports_full_span_and_score_for_exact_match() {
+        let mut index = MinimizerIndex::new(3, 2);
+        let seq = b"ACGTACGTACGTAC";
+        index.add_contig(0, seq);
+
+        let mappings = index.map_read(seq);
+        let best = mappings.first().expect("expected at least one mapping");
+
+        assert_eq!(best.contig_id, 0);
+        assert!(!best.is_reverse);
+        assert_eq!(best.read_start, 0);
+        assert_eq!(best.contig_start, 0);
+        assert_eq!(best.read_end, best.contig_end);
+        assert!(best.read_end >= seq.len().saturating_sub(1));
+        assert!(best.read_end <= seq.len());
+        assert!(best.score >= 3);
     }
 
     #[test]
