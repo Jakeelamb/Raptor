@@ -561,8 +561,7 @@ fn find_bubble_from_branch(
                 current1 = next;
 
                 // Check if paths reconverge
-                if visited2.contains(&next)
-                    && is_valid_reconvergence(start, branch1, branch2, next)
+                if visited2.contains(&next) && is_valid_reconvergence(start, branch1, branch2, next)
                 {
                     return Some(Bubble {
                         start,
@@ -585,8 +584,7 @@ fn find_bubble_from_branch(
                 current2 = next;
 
                 // Check if paths reconverge
-                if visited1.contains(&next)
-                    && is_valid_reconvergence(start, branch1, branch2, next)
+                if visited1.contains(&next) && is_valid_reconvergence(start, branch1, branch2, next)
                 {
                     return Some(Bubble {
                         start,
