@@ -10,8 +10,11 @@
 use crate::io::fasta::{open_fasta, FastaWriter};
 use crate::io::fastq::{stream_fastq_records_checked, try_open_fastq};
 use ahash::AHashMap;
+use std::cmp::Ordering;
 use std::io::{BufRead, Result};
 use tracing::info;
+
+const REVERSE_STRAND_FLAG: usize = 1usize << (usize::BITS - 1);
 
 /// Statistics from polishing
 #[derive(Debug, Clone, Default)]
@@ -33,39 +36,63 @@ struct PileupColumn {
 }
 
 impl PileupColumn {
-    fn add_base(&mut self, base: u8) {
-        let idx = match base {
+    #[inline]
+    fn base_to_index(base: u8) -> usize {
+        match base {
             b'A' | b'a' => 0,
             b'C' | b'c' => 1,
             b'G' | b'g' => 2,
             b'T' | b't' => 3,
-            _ => 4, // gap or N
-        };
+            _ => 4, // gap or ambiguous base
+        }
+    }
+
+    #[inline]
+    fn index_to_base(idx: usize) -> Option<u8> {
+        match idx {
+            0 => Some(b'A'),
+            1 => Some(b'C'),
+            2 => Some(b'G'),
+            3 => Some(b'T'),
+            _ => None, // Gap - deletion or unknown
+        }
+    }
+
+    fn add_base(&mut self, base: u8) {
+        let idx = Self::base_to_index(base);
         self.bases[idx] += 1;
         self.depth += 1;
     }
 
-    fn consensus(&self, min_freq: f64) -> Option<u8> {
+    fn consensus(&self, min_freq: f64, preferred_base: Option<u8>) -> Option<u8> {
         if self.depth == 0 {
             return None;
         }
 
-        let max_idx = self
-            .bases
-            .iter()
-            .enumerate()
-            .max_by_key(|(_, &count)| count)
-            .map(|(idx, _)| idx)?;
+        let mut max_count = 0u32;
+        let mut tied = [false; 5];
+        for (idx, &count) in self.bases.iter().enumerate() {
+            if count > max_count {
+                max_count = count;
+                tied = [false; 5];
+                tied[idx] = true;
+            } else if count == max_count {
+                tied[idx] = true;
+            }
+        }
+
+        if max_count == 0 {
+            return None;
+        }
+
+        let max_idx = preferred_base
+            .map(Self::base_to_index)
+            .filter(|&idx| tied[idx])
+            .unwrap_or_else(|| tied.iter().position(|is_tied| *is_tied).unwrap_or(4));
 
         let freq = self.bases[max_idx] as f64 / self.depth as f64;
         if freq >= min_freq {
-            match max_idx {
-                0 => Some(b'A'),
-                1 => Some(b'C'),
-                2 => Some(b'G'),
-                3 => Some(b'T'),
-                _ => None, // Gap - deletion
-            }
+            Self::index_to_base(max_idx)
         } else {
             None
         }
@@ -133,11 +160,7 @@ impl MinimizerIndex {
         for (read_pos, minimizer) in self.extract_minimizers(sequence) {
             if let Some(entries) = self.index.get(&minimizer) {
                 for &(contig_id, contig_pos) in entries {
-                    let start = if contig_pos >= read_pos {
-                        contig_pos - read_pos
-                    } else {
-                        0
-                    };
+                    let start = contig_pos.saturating_sub(read_pos);
                     *hits.entry((contig_id, start)).or_default() += 1;
                 }
             }
@@ -148,27 +171,59 @@ impl MinimizerIndex {
         for (read_pos, minimizer) in self.extract_minimizers(&rc) {
             if let Some(entries) = self.index.get(&minimizer) {
                 for &(contig_id, contig_pos) in entries {
-                    let start = if contig_pos >= read_pos {
-                        contig_pos - read_pos
-                    } else {
-                        0
-                    };
-                    // Use negative positions to mark reverse mappings (we'll handle this later)
-                    *hits.entry((contig_id, start | 0x80000000)).or_default() += 1;
+                    let start = contig_pos.saturating_sub(read_pos);
+                    *hits
+                        .entry((contig_id, start | REVERSE_STRAND_FLAG))
+                        .or_default() += 1;
                 }
             }
         }
 
-        // Find best hit with at least 3 minimizer matches
-        hits.into_iter()
-            .filter(|(_, count)| *count >= 3)
-            .max_by_key(|(_, count)| *count)
-            .map(|((contig_id, pos), _)| {
-                let is_reverse = (pos & 0x80000000) != 0;
-                let actual_pos = pos & 0x7FFFFFFF;
-                (contig_id, actual_pos, is_reverse)
-            })
+        // Find best hit with at least 3 minimizer matches using explicit,
+        // insertion-order-independent tie-breaking.
+        select_best_mapping_hit(hits, 3)
     }
+}
+
+#[inline]
+fn decode_mapping_position(pos: usize) -> (usize, bool) {
+    let is_reverse = (pos & REVERSE_STRAND_FLAG) != 0;
+    let actual_pos = pos & !REVERSE_STRAND_FLAG;
+    (actual_pos, is_reverse)
+}
+
+#[inline]
+fn compare_mapping_hits(
+    left: &((usize, usize), usize),
+    right: &((usize, usize), usize),
+) -> Ordering {
+    let ((left_contig, left_pos), left_count) = left;
+    let ((right_contig, right_pos), right_count) = right;
+    let (left_actual_pos, left_is_reverse) = decode_mapping_position(*left_pos);
+    let (right_actual_pos, right_is_reverse) = decode_mapping_position(*right_pos);
+
+    left_count
+        .cmp(right_count)
+        // Prefer lower contig IDs when support ties.
+        .then_with(|| right_contig.cmp(left_contig))
+        // Prefer earlier start positions when contig IDs tie.
+        .then_with(|| right_actual_pos.cmp(&left_actual_pos))
+        // Prefer forward mappings over reverse-complement mappings.
+        .then_with(|| right_is_reverse.cmp(&left_is_reverse))
+}
+
+#[inline]
+fn select_best_mapping_hit<I>(hits: I, min_matches: usize) -> Option<(usize, usize, bool)>
+where
+    I: IntoIterator<Item = ((usize, usize), usize)>,
+{
+    hits.into_iter()
+        .filter(|(_, count)| *count >= min_matches)
+        .max_by(compare_mapping_hits)
+        .map(|((contig_id, pos), _)| {
+            let (actual_pos, is_reverse) = decode_mapping_position(pos);
+            (contig_id, actual_pos, is_reverse)
+        })
 }
 
 fn hash_kmer(kmer: &[u8]) -> u64 {
@@ -210,14 +265,16 @@ fn read_contigs(path: &str) -> Result<Vec<(String, Vec<u8>)>> {
         let line = line?;
         if line.starts_with('>') {
             if !current_header.is_empty() {
-                contigs.push((current_header.clone(), current_seq.clone()));
+                contigs.push((
+                    std::mem::take(&mut current_header),
+                    std::mem::take(&mut current_seq),
+                ));
             }
             current_header = line[1..]
                 .split_whitespace()
                 .next()
                 .unwrap_or("")
                 .to_string();
-            current_seq.clear();
         } else {
             current_seq.extend(line.trim().bytes());
         }
@@ -355,7 +412,7 @@ fn apply_corrections(
                 continue;
             }
 
-            if let Some(consensus_base) = column.consensus(MIN_FREQ) {
+            if let Some(consensus_base) = column.consensus(MIN_FREQ, seq.get(pos).copied()) {
                 if pos < seq.len() && seq[pos] != consensus_base {
                     corrections.push((pos, consensus_base));
                 }
@@ -371,7 +428,7 @@ fn apply_corrections(
                 stats.corrections += 1;
 
                 // Categorize the correction
-                if old_base == b'-' || old_base == b'N' {
+                if old_base == b'-' {
                     stats.insertions += 1;
                 } else if base == b'-' {
                     stats.deletions += 1;
@@ -388,6 +445,8 @@ fn apply_corrections(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::bool::ANY;
+    use proptest::prelude::*;
     use std::io::Write;
     use tempfile::{NamedTempFile, TempDir};
 
@@ -400,8 +459,21 @@ mod tests {
         col.add_base(b'C');
 
         assert_eq!(col.depth, 4);
-        assert_eq!(col.consensus(0.5), Some(b'A'));
-        assert_eq!(col.consensus(0.9), None);
+        assert_eq!(col.consensus(0.5, None), Some(b'A'));
+        assert_eq!(col.consensus(0.9, None), None);
+    }
+
+    #[test]
+    fn test_pileup_column_tie_prefers_requested_reference_base() {
+        let mut col = PileupColumn::default();
+        col.add_base(b'A');
+        col.add_base(b'A');
+        col.add_base(b'C');
+        col.add_base(b'C');
+
+        assert_eq!(col.consensus(0.5, None), Some(b'A'));
+        assert_eq!(col.consensus(0.5, Some(b'C')), Some(b'C'));
+        assert_eq!(col.consensus(0.75, Some(b'C')), None);
     }
 
     #[test]
@@ -418,6 +490,82 @@ mod tests {
         // Should find the contig
         let result = index.map_read(b"ACGTACGTACGTACGTACGT");
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn select_best_mapping_hit_prefers_contig_position_and_forward_strand_on_ties() {
+        let hits = vec![
+            ((1, 10), 7),
+            ((0, 20), 7),
+            ((0, 5 | REVERSE_STRAND_FLAG), 7),
+            ((0, 5), 7),
+        ];
+
+        let best = select_best_mapping_hit(hits.iter().copied(), 3);
+        assert_eq!(best, Some((0, 5, false)));
+
+        let mut reversed = hits.clone();
+        reversed.reverse();
+        let best_reversed = select_best_mapping_hit(reversed.iter().copied(), 3);
+        assert_eq!(best_reversed, Some((0, 5, false)));
+    }
+
+    #[test]
+    fn apply_corrections_counts_n_to_acgt_as_substitution() {
+        let mut contigs = vec![("contig_1".to_string(), b"NAAAA".to_vec())];
+        let mut pileups = vec![vec![PileupColumn::default(); 5]];
+        for _ in 0..6 {
+            pileups[0][0].add_base(b'A');
+        }
+
+        let mut stats = PolishStats::default();
+        let corrections = apply_corrections(&mut contigs, &pileups, &mut stats);
+
+        assert_eq!(corrections, 1);
+        assert_eq!(contigs[0].1[0], b'A');
+        assert_eq!(stats.substitutions, 1);
+        assert_eq!(stats.insertions, 0);
+        assert_eq!(stats.deletions, 0);
+    }
+
+    fn canonical_best_mapping_hit(
+        hits: &[((usize, usize), usize)],
+        min_matches: usize,
+    ) -> Option<(usize, usize, bool)> {
+        let mut filtered: Vec<((usize, usize), usize)> = hits
+            .iter()
+            .copied()
+            .filter(|(_, count)| *count >= min_matches)
+            .collect();
+        filtered.sort_unstable_by(|a, b| compare_mapping_hits(b, a));
+        filtered.first().map(|((contig_id, pos), _)| {
+            let (actual_pos, is_reverse) = decode_mapping_position(*pos);
+            (*contig_id, actual_pos, is_reverse)
+        })
+    }
+
+    proptest! {
+        #[test]
+        fn select_best_mapping_hit_is_invariant_to_candidate_order(
+            raw_hits in prop::collection::vec(((0usize..8, 0usize..256usize, ANY), 0usize..10usize), 1..128)
+        ) {
+            let hits: Vec<((usize, usize), usize)> = raw_hits
+                .iter()
+                .map(|((contig, pos, is_reverse), count)| {
+                    let encoded_pos = if *is_reverse { *pos | REVERSE_STRAND_FLAG } else { *pos };
+                    ((*contig, encoded_pos), *count)
+                })
+                .collect();
+
+            let expected = canonical_best_mapping_hit(&hits, 3);
+            let observed = select_best_mapping_hit(hits.iter().copied(), 3);
+            prop_assert_eq!(observed, expected);
+
+            let mut reversed = hits.clone();
+            reversed.reverse();
+            let observed_reversed = select_best_mapping_hit(reversed.iter().copied(), 3);
+            prop_assert_eq!(observed_reversed, expected);
+        }
     }
 
     #[test]
