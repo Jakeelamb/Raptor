@@ -26,10 +26,17 @@ pub fn load_contig_coverages(expression_path: &str) -> Result<HashMap<usize, f64
             continue;
         }
 
-        // Parse contig ID and coverage
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 2 {
-            if let (Ok(id), Ok(coverage)) = (parts[0].parse::<usize>(), parts[1].parse::<f64>()) {
+        // Parse contig ID and coverage while ignoring malformed or non-finite values.
+        let mut parts = line.split_whitespace();
+        let Some(id_str) = parts.next() else {
+            continue;
+        };
+        let Some(coverage_str) = parts.next() else {
+            continue;
+        };
+
+        if let (Ok(id), Ok(coverage)) = (id_str.parse::<usize>(), coverage_str.parse::<f64>()) {
+            if coverage.is_finite() && coverage >= 0.0 {
                 coverage_map.insert(id, coverage);
             }
         }
@@ -115,10 +122,12 @@ pub fn process_isoforms(
 
 #[cfg(test)]
 mod tests {
-    use super::process_isoforms;
+    use super::{load_contig_coverages, process_isoforms};
     use crate::graph::assembler::Contig;
     use crate::graph::transcript::Transcript;
     use std::collections::HashMap;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     fn long_contig(id: usize, base: char) -> Contig {
         Contig {
@@ -245,5 +254,31 @@ mod tests {
             transcript_signature(&transcripts_a),
             transcript_signature(&transcripts_b)
         );
+    }
+
+    #[test]
+    fn load_contig_coverages_skips_invalid_non_finite_and_negative_entries() {
+        let mut file = NamedTempFile::new().expect("create temp coverage file");
+        writeln!(file, "# comment").expect("write comment");
+        writeln!(file, "0 10.5").expect("write valid row");
+        writeln!(file, "1 NaN").expect("write nan row");
+        writeln!(file, "2 inf").expect("write inf row");
+        writeln!(file, "3 -1.0").expect("write negative row");
+        writeln!(file, "4 2.25 extra").expect("write valid row with extra field");
+        writeln!(file, "bad line").expect("write malformed row");
+        writeln!(file, "5 8").expect("write valid integer coverage row");
+        writeln!(file, "4 3.75").expect("write duplicate id overwrite row");
+        file.flush().expect("flush coverage file");
+
+        let coverage = load_contig_coverages(file.path().to_str().expect("utf8 path"))
+            .expect("coverage loading should succeed");
+
+        assert_eq!(coverage.len(), 3);
+        assert_eq!(coverage.get(&0).copied(), Some(10.5));
+        assert_eq!(coverage.get(&4).copied(), Some(3.75));
+        assert_eq!(coverage.get(&5).copied(), Some(8.0));
+        assert!(!coverage.contains_key(&1));
+        assert!(!coverage.contains_key(&2));
+        assert!(!coverage.contains_key(&3));
     }
 }
