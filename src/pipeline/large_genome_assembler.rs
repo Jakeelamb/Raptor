@@ -1369,46 +1369,78 @@ impl LargeGenomeAssembler {
 
         for i in 0..paths.len() {
             for j in (i + 1)..paths.len() {
-                if paths[i].1 == paths[j].1 {
-                    // Found a bubble - keep the higher coverage path
-                    let cov_i: u32 = paths[i]
-                        .0
-                        .iter()
-                        .filter_map(|&kmer| {
-                            let canonical = KmerU64 {
-                                encoded: kmer,
-                                len: k as u8,
-                            }
-                            .canonical()
-                            .encoded;
-                            kmer_counts.get(&canonical).copied()
-                        })
-                        .sum();
-                    let cov_j: u32 = paths[j]
-                        .0
-                        .iter()
-                        .filter_map(|&kmer| {
-                            let canonical = KmerU64 {
-                                encoded: kmer,
-                                len: k as u8,
-                            }
-                            .canonical()
-                            .encoded;
-                            kmer_counts.get(&canonical).copied()
-                        })
-                        .sum();
+                let shared_end = paths[i].1;
+                if shared_end == paths[j].1 {
+                    // Found a bubble. Compare only branch-unique nodes so we do not
+                    // remove the shared reconvergence node.
+                    let path_i = Self::path_without_terminal_node(&paths[i].0, shared_end);
+                    let path_j = Self::path_without_terminal_node(&paths[j].0, shared_end);
 
-                    // Return the lower-coverage path for removal
-                    if cov_i < cov_j {
-                        return Some(paths[i].0.clone());
-                    } else {
-                        return Some(paths[j].0.clone());
+                    if path_i.is_empty() && path_j.is_empty() {
+                        continue;
                     }
+
+                    let cov_i = Self::path_coverage_sum(path_i, kmer_counts, k);
+                    let cov_j = Self::path_coverage_sum(path_j, kmer_counts, k);
+
+                    let remove_i =
+                        match Self::compare_bubble_path_quality(path_i, cov_i, path_j, cov_j, k) {
+                            std::cmp::Ordering::Less => true,
+                            std::cmp::Ordering::Greater => false,
+                            std::cmp::Ordering::Equal => false,
+                        };
+
+                    return if remove_i {
+                        Some(path_i.to_vec())
+                    } else {
+                        Some(path_j.to_vec())
+                    };
                 }
             }
         }
 
         None
+    }
+
+    #[inline]
+    fn path_without_terminal_node(path: &[u64], terminal: u64) -> &[u64] {
+        if path.last().copied() == Some(terminal) {
+            &path[..path.len().saturating_sub(1)]
+        } else {
+            path
+        }
+    }
+
+    #[inline]
+    fn path_coverage_sum(path: &[u64], kmer_counts: &AHashMap<u64, u32>, k: usize) -> u64 {
+        path.iter().fold(0u64, |acc, &kmer| {
+            let canonical = Self::canonical_kmer(kmer, k);
+            acc.saturating_add(kmer_counts.get(&canonical).copied().unwrap_or(0) as u64)
+        })
+    }
+
+    fn compare_bubble_path_quality(
+        left_path: &[u64],
+        left_cov: u64,
+        right_path: &[u64],
+        right_cov: u64,
+        k: usize,
+    ) -> std::cmp::Ordering {
+        left_cov
+            .cmp(&right_cov)
+            .then_with(|| {
+                let left_len = left_path.len().max(1) as u128;
+                let right_len = right_path.len().max(1) as u128;
+                (left_cov as u128 * right_len).cmp(&(right_cov as u128 * left_len))
+            })
+            .then_with(|| left_path.len().cmp(&right_path.len()))
+            .then_with(|| {
+                left_path
+                    .iter()
+                    .map(|&kmer| Self::canonical_kmer(kmer, k))
+                    .cmp(right_path.iter().map(|&kmer| Self::canonical_kmer(kmer, k)))
+                    .reverse()
+            })
     }
 
     /// Trace a path from a starting k-mer, returning the path and endpoint
@@ -4708,6 +4740,144 @@ mod tests {
         }
 
         assert!(baseline.is_some(), "baseline should be captured");
+    }
+
+    #[test]
+    fn test_pop_bubbles_preserves_reconvergence_node() {
+        let k = 3;
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: 1,
+            ..Default::default()
+        });
+
+        let aaa = KmerU64::from_str("AAA").unwrap().encoded;
+        let aac = KmerU64::from_str("AAC").unwrap().encoded;
+        let aag = KmerU64::from_str("AAG").unwrap().encoded;
+        let agc = KmerU64::from_str("AGC").unwrap().encoded;
+        let acc = KmerU64::from_str("ACC").unwrap().encoded;
+        let gcc = KmerU64::from_str("GCC").unwrap().encoded;
+        let ccc = KmerU64::from_str("CCC").unwrap().encoded;
+
+        let mut right_aa = [false; 4];
+        right_aa[1] = true; // AAA -> AAC
+        right_aa[2] = true; // AAA -> AAG
+        let mut right_c = [false; 4];
+        right_c[1] = true; // * -> *C
+        let none = [false; 4];
+
+        let mut adjacency = AHashMap::new();
+        adjacency.insert(aaa, (none, right_aa));
+        adjacency.insert(aac, (none, right_c));
+        adjacency.insert(aag, (none, right_c));
+        adjacency.insert(agc, (none, right_c));
+        adjacency.insert(acc, (none, right_c));
+        adjacency.insert(gcc, (none, right_c));
+        adjacency.insert(ccc, (none, none));
+
+        let mut counts = AHashMap::new();
+        for (node, count) in [
+            (aaa, 40u32),
+            (aac, 30u32),
+            (acc, 30u32),
+            (aag, 8u32),
+            (agc, 8u32),
+            (gcc, 8u32),
+            (ccc, 35u32),
+        ] {
+            let canonical = KmerU64 {
+                encoded: node,
+                len: k as u8,
+            }
+            .canonical()
+            .encoded;
+            counts.insert(canonical, count);
+        }
+
+        let popped = assembler.pop_bubbles(&mut adjacency, &counts, k);
+
+        assert_eq!(popped, 1);
+        let ccc_canonical = KmerU64 {
+            encoded: ccc,
+            len: k as u8,
+        }
+        .canonical()
+        .encoded;
+        assert!(
+            adjacency.contains_key(&ccc) || adjacency.contains_key(&ccc_canonical),
+            "bubble popping must preserve the shared reconvergence node"
+        );
+        let aag_canonical = KmerU64 {
+            encoded: aag,
+            len: k as u8,
+        }
+        .canonical()
+        .encoded;
+        assert!(
+            !adjacency.contains_key(&aag) && !adjacency.contains_key(&aag_canonical),
+            "expected lower-coverage branch nodes to be removed"
+        );
+    }
+
+    #[test]
+    fn test_pop_bubbles_handles_high_coverage_without_overflow() {
+        let k = 3;
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: 1,
+            ..Default::default()
+        });
+
+        let aaa = KmerU64::from_str("AAA").unwrap().encoded;
+        let aac = KmerU64::from_str("AAC").unwrap().encoded;
+        let aag = KmerU64::from_str("AAG").unwrap().encoded;
+        let agc = KmerU64::from_str("AGC").unwrap().encoded;
+        let acc = KmerU64::from_str("ACC").unwrap().encoded;
+        let gcc = KmerU64::from_str("GCC").unwrap().encoded;
+        let ccc = KmerU64::from_str("CCC").unwrap().encoded;
+
+        let mut right_aa = [false; 4];
+        right_aa[1] = true; // AAA -> AAC
+        right_aa[2] = true; // AAA -> AAG
+        let mut right_c = [false; 4];
+        right_c[1] = true; // * -> *C
+        let none = [false; 4];
+
+        let mut adjacency = AHashMap::new();
+        adjacency.insert(aaa, (none, right_aa));
+        adjacency.insert(aac, (none, right_c));
+        adjacency.insert(aag, (none, right_c));
+        adjacency.insert(agc, (none, right_c));
+        adjacency.insert(acc, (none, right_c));
+        adjacency.insert(gcc, (none, right_c));
+        adjacency.insert(ccc, (none, none));
+
+        let mut counts = AHashMap::new();
+        for node in [aaa, aac, aag, agc, acc, gcc, ccc] {
+            let canonical = KmerU64 {
+                encoded: node,
+                len: k as u8,
+            }
+            .canonical()
+            .encoded;
+            counts.insert(canonical, u32::MAX);
+        }
+
+        let popped = assembler.pop_bubbles(&mut adjacency, &counts, k);
+
+        assert_eq!(popped, 1);
+        let ccc_canonical = KmerU64 {
+            encoded: ccc,
+            len: k as u8,
+        }
+        .canonical()
+        .encoded;
+        assert!(
+            adjacency.contains_key(&ccc) || adjacency.contains_key(&ccc_canonical),
+            "reconvergence node should survive even at extreme coverage"
+        );
     }
 
     #[test]
