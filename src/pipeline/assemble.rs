@@ -37,8 +37,13 @@ struct AssemblyQualitySummary {
     au_n: f64,
     effective_contig_count: f64,
     ungapped_n50: usize,
+    ungapped_n90: usize,
+    ungapped_n95: usize,
+    ungapped_n99: usize,
     ungapped_au_n: f64,
     ungapped_effective_contig_count: f64,
+    gap_bases: usize,
+    gap_bases_frac: f64,
     longest: usize,
     longest_frac: f64,
     gc_bases: usize,
@@ -237,6 +242,14 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
     } else {
         0.0
     };
+    let gap_bases = length_stats
+        .total_bases
+        .saturating_sub(ungapped_length_stats.total_bases);
+    let gap_bases_frac = if length_stats.total_bases > 0 {
+        gap_bases as f64 / length_stats.total_bases as f64
+    } else {
+        0.0
+    };
     let mean_n_run_length = if n_runs.count > 0 {
         composition.n_bases as f64 / n_runs.count as f64
     } else {
@@ -308,8 +321,13 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
         au_n: length_stats.au_n,
         effective_contig_count: length_stats.effective_count,
         ungapped_n50: ungapped_length_stats.n50,
+        ungapped_n90: ungapped_length_stats.n90,
+        ungapped_n95: ungapped_length_stats.n95,
+        ungapped_n99: ungapped_length_stats.n99,
         ungapped_au_n: ungapped_length_stats.au_n,
         ungapped_effective_contig_count: ungapped_length_stats.effective_count,
+        gap_bases,
+        gap_bases_frac,
         longest: length_stats.longest,
         longest_frac,
         gc_bases: composition.gc_bases,
@@ -410,11 +428,16 @@ fn write_assembly_quality_reports(
             format!("{:.12}", quality.effective_contig_count),
         ),
         ("ungapped_n50", quality.ungapped_n50.to_string()),
+        ("ungapped_n90", quality.ungapped_n90.to_string()),
+        ("ungapped_n95", quality.ungapped_n95.to_string()),
+        ("ungapped_n99", quality.ungapped_n99.to_string()),
         ("ungapped_au_n", format!("{:.12}", quality.ungapped_au_n)),
         (
             "ungapped_effective_contig_count",
             format!("{:.12}", quality.ungapped_effective_contig_count),
         ),
+        ("gap_bases", quality.gap_bases.to_string()),
+        ("gap_bases_frac", format!("{:.12}", quality.gap_bases_frac)),
         ("longest", quality.longest.to_string()),
         ("longest_frac", format!("{:.12}", quality.longest_frac)),
         ("gc_bases", quality.gc_bases.to_string()),
@@ -818,7 +841,7 @@ pub fn assemble_reads_with_gpu(
 
     let quality = summarize_assembly_quality(&contigs);
     info!(
-        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN/effective count: {:.1}/{:.2}, Ungapped bases/N50/auN/effective count: {}/{}/{:.1}/{:.2}, Longest: {} bp ({:.2}%), GC/N/Ambiguous bases: {}/{}/{} (fractions {:.2}%/{:.2}%/{:.2}%), Contigs with N/Ambiguous/All-ACGT: {}/{}/{} ({:.2}%/{:.2}%/{:.2}%), RLE mean/weighted runs ratio: {:.4}/{:.4} ({} runs), N-runs: count {}, max {}, mean {:.1} bp ({:.1} per 100kb), N/Ambiguous bases per 100kb: {:.1}/{:.1}, >=1kb/10kb/50kb/100kb/1mb contigs: {}/{}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%/{:.1}%)",
+        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN/effective count: {:.1}/{:.2}, Ungapped bases/gaps/N50/N90/N95/N99/auN/effective count: {}/{}/{}/{}/{}/{}/{:.1}/{:.2}, Longest: {} bp ({:.2}%), GC/N/Ambiguous bases: {}/{}/{} (fractions {:.2}%/{:.2}%/{:.2}%), Contigs with N/Ambiguous/All-ACGT: {}/{}/{} ({:.2}%/{:.2}%/{:.2}%), RLE mean/weighted runs ratio: {:.4}/{:.4} ({} runs), N-runs: count {}, max {}, mean {:.1} bp ({:.1} per 100kb), N/Ambiguous bases per 100kb: {:.1}/{:.1}, >=1kb/10kb/50kb/100kb/1mb contigs: {}/{}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%/{:.1}%)",
         quality.total_contigs,
         quality.total_bases,
         quality.avg_length,
@@ -840,7 +863,11 @@ pub fn assemble_reads_with_gpu(
         quality.au_n,
         quality.effective_contig_count,
         quality.ungapped_total_bases,
+        quality.gap_bases,
         quality.ungapped_n50,
+        quality.ungapped_n90,
+        quality.ungapped_n95,
+        quality.ungapped_n99,
         quality.ungapped_au_n,
         quality.ungapped_effective_contig_count,
         quality.longest,
@@ -1558,8 +1585,13 @@ mod tests {
         assert!((summary.au_n - 4.0).abs() < 1e-12);
         assert!((summary.effective_contig_count - 3.0).abs() < 1e-12);
         assert_eq!(summary.ungapped_n50, 4);
+        assert_eq!(summary.ungapped_n90, 3);
+        assert_eq!(summary.ungapped_n95, 3);
+        assert_eq!(summary.ungapped_n99, 3);
         assert!((summary.ungapped_au_n - (41.0 / 11.0)).abs() < 1e-12);
         assert!((summary.ungapped_effective_contig_count - (11.0 / (41.0 / 11.0))).abs() < 1e-12);
+        assert_eq!(summary.gap_bases, 1);
+        assert!((summary.gap_bases_frac - (1.0 / 12.0)).abs() < 1e-12);
         assert_eq!(summary.gc_bases, 4);
         assert_eq!(summary.acgt_bases, 9);
         assert_eq!(summary.n_bases, 1);
@@ -1711,7 +1743,12 @@ mod tests {
         assert!((summary.length_weighted_rle_ratio - (5.0 / 161_999.0)).abs() < 1e-12);
         assert_eq!(summary.total_rle_runs, 5);
         assert_eq!(summary.ungapped_n50, 100_000);
+        assert_eq!(summary.ungapped_n90, 50_000);
+        assert_eq!(summary.ungapped_n95, 10_000);
+        assert_eq!(summary.ungapped_n99, 10_000);
         assert!((summary.ungapped_au_n - (12_601_000_000.0 / 161_000.0)).abs() < 1e-9);
+        assert_eq!(summary.gap_bases, 999);
+        assert!((summary.gap_bases_frac - (999.0 / 161_999.0)).abs() < 1e-12);
         assert!((summary.effective_contig_count - (161_999.0 / summary.au_n)).abs() < 1e-9);
     }
 
@@ -1752,6 +1789,11 @@ mod tests {
         assert_eq!(summary.total_rle_runs, 9);
         assert!((summary.n_runs_per_100kb - (3.0 * 100_000.0 / 16.0)).abs() < 1e-12);
         assert_eq!(summary.ungapped_n50, 3);
+        assert_eq!(summary.ungapped_n90, 3);
+        assert_eq!(summary.ungapped_n95, 3);
+        assert_eq!(summary.ungapped_n99, 3);
+        assert_eq!(summary.gap_bases, 6);
+        assert!((summary.gap_bases_frac - (6.0 / 16.0)).abs() < 1e-12);
     }
 
     #[test]
@@ -1938,6 +1980,7 @@ mod tests {
             prop_assert_eq!(summary.total_contigs, sequences.len());
             prop_assert_eq!(summary.total_bases, total_bases);
             prop_assert_eq!(summary.ungapped_total_bases, ungapped_total_bases);
+            prop_assert_eq!(summary.gap_bases, total_bases.saturating_sub(ungapped_total_bases));
             prop_assert_eq!(summary.gc_bases, gc_bases);
             prop_assert_eq!(summary.acgt_bases, acgt_bases);
             prop_assert_eq!(summary.n_bases, n_bases);
@@ -1966,6 +2009,9 @@ mod tests {
             prop_assert!(summary.bases_ge_50kb <= summary.bases_ge_10kb);
             prop_assert!(summary.bases_ge_10kb <= summary.bases_ge_1kb);
             prop_assert!(summary.bases_ge_1kb <= summary.total_bases);
+            prop_assert!(summary.ungapped_n50 >= summary.ungapped_n90);
+            prop_assert!(summary.ungapped_n90 >= summary.ungapped_n95);
+            prop_assert!(summary.ungapped_n95 >= summary.ungapped_n99);
 
             for fraction in [
                 summary.contigs_with_n_frac,
@@ -1984,6 +2030,7 @@ mod tests {
                 summary.bases_ge_50kb_frac,
                 summary.bases_ge_100kb_frac,
                 summary.bases_ge_1mb_frac,
+                summary.gap_bases_frac,
                 summary.gc_content,
                 summary.n_content,
                 summary.ambiguous_content,
@@ -1995,6 +2042,7 @@ mod tests {
                 let total_bases_f = summary.total_bases as f64;
                 prop_assert!((summary.n_content - summary.n_bases as f64 / total_bases_f).abs() < 1e-12);
                 prop_assert!((summary.ambiguous_content - summary.ambiguous_bases as f64 / total_bases_f).abs() < 1e-12);
+                prop_assert!((summary.gap_bases_frac - summary.gap_bases as f64 / total_bases_f).abs() < 1e-12);
                 prop_assert!((summary.duplicate_bases_frac - summary.duplicate_bases as f64 / total_bases_f).abs() < 1e-12);
                 prop_assert!((summary.length_weighted_rle_ratio - summary.total_rle_runs as f64 / total_bases_f).abs() < 1e-12);
                 prop_assert!((summary.n_runs_per_100kb - summary.n_runs as f64 * 100_000.0 / total_bases_f).abs() < 1e-12);
@@ -2003,6 +2051,7 @@ mod tests {
             } else {
                 prop_assert_eq!(summary.n_content, 0.0);
                 prop_assert_eq!(summary.ambiguous_content, 0.0);
+                prop_assert_eq!(summary.gap_bases_frac, 0.0);
                 prop_assert_eq!(summary.duplicate_bases_frac, 0.0);
                 prop_assert_eq!(summary.length_weighted_rle_ratio, 0.0);
                 prop_assert_eq!(summary.n_runs_per_100kb, 0.0);
@@ -2127,8 +2176,13 @@ mod tests {
             au_n: 260.5,
             effective_contig_count: 1234.0 / 260.5,
             ungapped_n50: 240,
+            ungapped_n90: 180,
+            ungapped_n95: 170,
+            ungapped_n99: 150,
             ungapped_au_n: 255.25,
             ungapped_effective_contig_count: 1200.0 / 255.25,
+            gap_bases: 34,
+            gap_bases_frac: 34.0 / 1234.0,
             longest: 420,
             longest_frac: 0.340356564,
             gc_bases: 580,
@@ -2197,9 +2251,14 @@ mod tests {
         assert_eq!(parsed["n50"], 250);
         assert_eq!(parsed["ungapped_total_bases"], 1200);
         assert_eq!(parsed["ungapped_n50"], 240);
+        assert_eq!(parsed["ungapped_n90"], 180);
+        assert_eq!(parsed["ungapped_n95"], 170);
+        assert_eq!(parsed["ungapped_n99"], 150);
         assert_eq!(parsed["ungapped_au_n"], 255.25);
         assert_eq!(parsed["effective_contig_count"], 1234.0 / 260.5);
         assert_eq!(parsed["ungapped_effective_contig_count"], 1200.0 / 255.25);
+        assert_eq!(parsed["gap_bases"], 34);
+        assert_eq!(parsed["gap_bases_frac"], 34.0 / 1234.0);
         assert_eq!(parsed["l10"], 1);
         assert_eq!(parsed["l75"], 3);
         assert_eq!(parsed["acgt_bases"], 1100);
@@ -2237,9 +2296,14 @@ mod tests {
         assert!(tsv.contains("n50\t250"));
         assert!(tsv.contains("ungapped_total_bases\t1200"));
         assert!(tsv.contains("ungapped_n50\t240"));
+        assert!(tsv.contains("ungapped_n90\t180"));
+        assert!(tsv.contains("ungapped_n95\t170"));
+        assert!(tsv.contains("ungapped_n99\t150"));
         assert!(tsv.contains("ungapped_au_n\t255.250000000000"));
         assert!(tsv.contains("effective_contig_count\t4.737044145873"));
         assert!(tsv.contains("ungapped_effective_contig_count\t4.701273261508"));
+        assert!(tsv.contains("gap_bases\t34"));
+        assert!(tsv.contains("gap_bases_frac\t0.027552674230"));
         assert!(tsv.contains("l10\t1"));
         assert!(tsv.contains("l75\t3"));
         assert!(tsv.contains("acgt_bases\t1100"));
