@@ -1,4 +1,5 @@
 use crate::graph::assembler::Contig;
+use crate::kmer::rle::rle_encoded_len;
 use std::cmp::Ordering;
 
 /// Collapse contigs with identical or highly similar RLE-encoded sequences
@@ -7,14 +8,18 @@ pub fn collapse_repeats(contigs: Vec<Contig>, min_repeat_len: usize) -> Vec<Cont
         return contigs;
     }
 
-    let signatures: Vec<Vec<(u8, u8)>> = contigs
-        .iter()
-        .map(|c| normalized_rle_signature(&c.sequence))
-        .collect();
-    let eligible: Vec<bool> = signatures
-        .iter()
-        .map(|sig| min_repeat_len == 0 || sig.len() >= min_repeat_len)
-        .collect();
+    let mut signatures = Vec::with_capacity(contigs.len());
+    let mut eligible = Vec::with_capacity(contigs.len());
+    for contig in &contigs {
+        let sig_len = rle_encoded_len(&contig.sequence);
+        let is_eligible = min_repeat_len == 0 || sig_len >= min_repeat_len;
+        eligible.push(is_eligible);
+        if is_eligible {
+            signatures.push(normalized_rle_signature(&contig.sequence));
+        } else {
+            signatures.push(Vec::new());
+        }
+    }
 
     let mut groups = DisjointSet::new(contigs.len());
     for i in 0..contigs.len() {
