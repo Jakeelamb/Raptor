@@ -1,19 +1,76 @@
 use crate::io::fastq::FastqRecord;
 use rayon::prelude::*;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
+
+const DNA_BASES: [u8; 4] = [b'A', b'C', b'G', b'T'];
+
+#[inline]
+fn base_to_index(base: u8) -> Option<usize> {
+    match base {
+        b'A' | b'a' => Some(0),
+        b'C' | b'c' => Some(1),
+        b'G' | b'g' => Some(2),
+        b'T' | b't' => Some(3),
+        _ => None,
+    }
+}
+
+#[inline]
+fn best_consensus_base(counts: &[u32; 4], current_base: u8) -> Option<(u8, u32)> {
+    let current_idx = base_to_index(current_base);
+    let mut best_idx: Option<usize> = None;
+    let mut best_count = 0u32;
+
+    for idx in 0..DNA_BASES.len() {
+        let count = counts[idx];
+        if count == 0 {
+            continue;
+        }
+
+        match best_idx {
+            None => {
+                best_idx = Some(idx);
+                best_count = count;
+            }
+            Some(existing_idx) if count > best_count => {
+                best_idx = Some(idx);
+                best_count = count;
+            }
+            Some(existing_idx) if count == best_count => {
+                let existing_is_current = current_idx.is_some_and(|cur| cur == existing_idx);
+                let candidate_is_current = current_idx.is_some_and(|cur| cur == idx);
+
+                let should_replace =
+                    !existing_is_current && (candidate_is_current || idx < existing_idx);
+
+                if should_replace {
+                    best_idx = Some(idx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    best_idx.map(|idx| (DNA_BASES[idx], best_count))
+}
 
 /// Simple polishing using consensus from aligned reads
 pub fn polish_contig(sequence: &str, reads: &[FastqRecord], window: usize) -> String {
+    if window == 0 || sequence.is_empty() || window > sequence.len() {
+        return sequence.to_string();
+    }
+
     let mut polished = sequence.as_bytes().to_vec();
+    let seq_bytes = sequence.as_bytes();
+    let mut counts = vec![[0u32; 4]; window];
 
     // For each possible window position in the sequence
     for i in 0..=sequence.len().saturating_sub(window) {
-        let mut counts = vec![[0u32; 4]; window];
+        counts.fill([0; 4]);
 
         // Count each aligned read's contribution to the consensus
         for read in reads {
-            let read_seq = &read.sequence;
+            let read_seq = read.sequence.as_bytes();
 
             // Check if read is long enough and covers this position
             if read_seq.len() < window {
@@ -22,10 +79,6 @@ pub fn polish_contig(sequence: &str, reads: &[FastqRecord], window: usize) -> St
 
             // Exact match for the window to anchor the read
             for j in 0..=read_seq.len().saturating_sub(window) {
-                if j + window > read_seq.len() {
-                    continue;
-                }
-
                 // Check for match with up to 2 mismatches (flexible anchor)
                 let mut mismatches = 0;
                 for k in 0..window {
@@ -33,7 +86,7 @@ pub fn polish_contig(sequence: &str, reads: &[FastqRecord], window: usize) -> St
                         mismatches += 1;
                         continue;
                     }
-                    if sequence.as_bytes()[i + k] != read_seq.as_bytes()[j + k] {
+                    if seq_bytes[i + k] != read_seq[j + k] {
                         mismatches += 1;
                     }
                 }
@@ -41,14 +94,8 @@ pub fn polish_contig(sequence: &str, reads: &[FastqRecord], window: usize) -> St
                 // If it's a good enough match, count the bases
                 if mismatches <= 2 {
                     for k in 0..window {
-                        if j + k < read_seq.len() {
-                            match read_seq.as_bytes()[j + k] {
-                                b'A' => counts[k][0] += 1,
-                                b'C' => counts[k][1] += 1,
-                                b'G' => counts[k][2] += 1,
-                                b'T' => counts[k][3] += 1,
-                                _ => {}
-                            }
+                        if let Some(base_idx) = base_to_index(read_seq[j + k]) {
+                            counts[k][base_idx] += 1;
                         }
                     }
                 }
@@ -61,27 +108,11 @@ pub fn polish_contig(sequence: &str, reads: &[FastqRecord], window: usize) -> St
                 continue;
             }
 
-            let mut max_idx = 0;
-            let mut max_count = 0;
-
-            // Find consensus base
-            for idx in 0..4 {
-                if counts[k][idx] > max_count {
-                    max_count = counts[k][idx];
-                    max_idx = idx;
+            // Only update if we have strong evidence.
+            if let Some((base, support)) = best_consensus_base(&counts[k], polished[i + k]) {
+                if support >= 3 {
+                    polished[i + k] = base;
                 }
-            }
-
-            // Only update if we have strong evidence
-            if max_count >= 3 {
-                // Require at least 3 reads supporting the change
-                polished[i + k] = match max_idx {
-                    0 => b'A',
-                    1 => b'C',
-                    2 => b'G',
-                    3 => b'T',
-                    _ => polished[i + k],
-                };
             }
         }
     }
@@ -106,9 +137,14 @@ pub fn polish_contig_parallel(
     chunk_size: usize,
 ) -> String {
     let seq_len = sequence.len();
+    let chunk_size = chunk_size.max(1);
+
+    if window == 0 || seq_len == 0 || window > seq_len {
+        return sequence.to_string();
+    }
 
     // For small sequences, use sequential version
-    if seq_len < chunk_size * 2 {
+    if seq_len < chunk_size.saturating_mul(2) {
         return polish_contig(sequence, reads, window);
     }
 
@@ -117,33 +153,32 @@ pub fn polish_contig_parallel(
     // Create atomic byte array for thread-safe updates
     let polished: Vec<AtomicU8> = seq_bytes.iter().map(|&b| AtomicU8::new(b)).collect();
 
-    // Divide into overlapping chunks
-    let overlap = window; // Overlap by window size for boundary handling
+    // Divide into chunks. Each chunk only writes to its owned range
+    // so output is deterministic and race-free.
     let num_chunks = seq_len.div_ceil(chunk_size);
 
     // Process chunks in parallel
     (0..num_chunks).into_par_iter().for_each(|chunk_idx| {
-        let start = chunk_idx * chunk_size;
-        let end = ((chunk_idx + 1) * chunk_size + overlap).min(seq_len);
-
-        // Skip if chunk is too small
-        if end - start < window {
+        let chunk_start = chunk_idx * chunk_size;
+        let chunk_end = ((chunk_idx + 1) * chunk_size).min(seq_len);
+        if chunk_start >= chunk_end {
             return;
         }
 
-        // Process this chunk
-        for i in start..=end.saturating_sub(window) {
-            // Skip positions in overlap region (will be handled by adjacent chunk)
-            // except for the last chunk
-            if chunk_idx < num_chunks - 1 && i >= (chunk_idx + 1) * chunk_size {
-                continue;
-            }
+        // Scan slightly beyond owned start so boundary positions use the same
+        // consensus windows as the sequential algorithm.
+        let scan_start = chunk_start.saturating_sub(window - 1);
+        let scan_end = chunk_end.saturating_sub(1).min(seq_len - window);
+        if scan_start > scan_end {
+            return;
+        }
 
-            let mut counts = vec![[0u32; 4]; window];
-
+        let mut counts = vec![[0u32; 4]; window];
+        for i in scan_start..=scan_end {
+            counts.fill([0; 4]);
             // Count reads covering this window
             for read in reads {
-                let read_seq = &read.sequence;
+                let read_seq = read.sequence.as_bytes();
 
                 if read_seq.len() < window {
                     continue;
@@ -157,21 +192,15 @@ pub fn polish_contig_parallel(
                             mismatches += 1;
                             continue;
                         }
-                        if seq_bytes[i + k] != read_seq.as_bytes()[j + k] {
+                        if seq_bytes[i + k] != read_seq[j + k] {
                             mismatches += 1;
                         }
                     }
 
                     if mismatches <= 2 {
                         for k in 0..window {
-                            if j + k < read_seq.len() {
-                                match read_seq.as_bytes()[j + k] {
-                                    b'A' => counts[k][0] += 1,
-                                    b'C' => counts[k][1] += 1,
-                                    b'G' => counts[k][2] += 1,
-                                    b'T' => counts[k][3] += 1,
-                                    _ => {}
-                                }
+                            if let Some(base_idx) = base_to_index(read_seq[j + k]) {
+                                counts[k][base_idx] += 1;
                             }
                         }
                     }
@@ -180,29 +209,16 @@ pub fn polish_contig_parallel(
 
             // Apply corrections
             for k in 0..window {
-                if i + k >= polished.len() {
+                let pos = i + k;
+                if pos < chunk_start || pos >= chunk_end {
                     continue;
                 }
 
-                let mut max_idx = 0;
-                let mut max_count = 0;
-
-                for idx in 0..4 {
-                    if counts[k][idx] > max_count {
-                        max_count = counts[k][idx];
-                        max_idx = idx;
+                let current = polished[pos].load(Ordering::Relaxed);
+                if let Some((new_base, support)) = best_consensus_base(&counts[k], current) {
+                    if support >= 3 {
+                        polished[pos].store(new_base, Ordering::Relaxed);
                     }
-                }
-
-                if max_count >= 3 {
-                    let new_base = match max_idx {
-                        0 => b'A',
-                        1 => b'C',
-                        2 => b'G',
-                        3 => b'T',
-                        _ => continue,
-                    };
-                    polished[i + k].store(new_base, Ordering::Relaxed);
                 }
             }
         }
@@ -229,7 +245,7 @@ pub fn polish_contig_string(
     aligned_reads: &[String],
     correction_threshold: f32,
 ) -> String {
-    let mut polished = contig.to_string();
+    let mut polished = contig.as_bytes().to_vec();
     let window_size = 5;
 
     // Convert sequence to bytes for easier processing
@@ -237,7 +253,7 @@ pub fn polish_contig_string(
     let length = contig_bytes.len();
 
     if length == 0 || aligned_reads.is_empty() {
-        return polished;
+        return contig.to_string();
     }
 
     // Iterate through each position in the contig
@@ -247,44 +263,49 @@ pub fn polish_contig_string(
             continue;
         }
 
-        // Count nucleotide occurrences at this position
-        let mut counts: HashMap<u8, usize> = HashMap::new();
+        // Count nucleotide occurrences at this position.
+        let mut counts = [0u32; 4];
+        let mut total_coverage = 0u32;
 
-        // Add weight for the original base
-        *counts.entry(contig_bytes[i]).or_insert(0) += 1;
+        // Add weight for the original base.
+        if let Some(base_idx) = base_to_index(contig_bytes[i]) {
+            counts[base_idx] += 1;
+            total_coverage += 1;
+        }
 
         // Count bases from aligned reads at this position
         for read in aligned_reads {
             let read_bytes = read.as_bytes();
-            let read_len = read_bytes.len();
 
             // Only consider reads that cover this position
-            if read_len <= i {
+            if read_bytes.len() <= i {
                 continue;
             }
 
             // Check if read contains this position
             if let Some(&base) = read_bytes.get(i) {
-                *counts.entry(base).or_insert(0) += 1;
+                if let Some(base_idx) = base_to_index(base) {
+                    counts[base_idx] += 1;
+                    total_coverage += 1;
+                }
             }
         }
 
-        // Find the base with the highest count
-        if let Some((best_base, count)) = counts.iter().max_by_key(|&(_, count)| count) {
-            let total_coverage: usize = counts.values().sum();
+        if total_coverage == 0 {
+            continue;
+        }
 
-            // Only correct if the best base is different and exceeds threshold
-            if *best_base != contig_bytes[i]
-                && (*count as f32 / total_coverage as f32) > correction_threshold
+        // Only correct if the best base is different and exceeds threshold.
+        if let Some((best_base, support)) = best_consensus_base(&counts, polished[i]) {
+            if best_base != polished[i]
+                && (support as f32 / total_coverage as f32) > correction_threshold
             {
-                // Replace the base at this position
-                let bytes = unsafe { polished.as_bytes_mut() };
-                bytes[i] = *best_base;
+                polished[i] = best_base;
             }
         }
     }
 
-    polished
+    String::from_utf8(polished).expect("polished contig should contain only valid ASCII DNA bases")
 }
 
 /// Polish a contig using both short and long reads
@@ -327,6 +348,7 @@ pub fn hybrid_polish_contig(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rayon::ThreadPoolBuilder;
 
     #[test]
     fn test_polish_contig() {
@@ -375,5 +397,72 @@ mod tests {
             polished.is_ascii(),
             "Polished sequence should remain valid ASCII"
         );
+    }
+
+    #[test]
+    fn test_polish_contig_parallel_matches_sequential_across_chunk_boundaries() {
+        let draft = "ACGT".repeat(60); // 240 bp
+        let mutate_pos = 80;
+        let mut mutated = draft.clone().into_bytes();
+        mutated[mutate_pos] = b'T';
+        let mutated = String::from_utf8(mutated).unwrap();
+
+        let reads: Vec<FastqRecord> = (0..8)
+            .map(|idx| FastqRecord {
+                header: format!("@read{}", idx),
+                sequence: mutated.clone(),
+                plus: "+".to_string(),
+                quality: "I".repeat(mutated.len()),
+            })
+            .collect();
+
+        let sequential = polish_contig(&draft, &reads, 9);
+        let parallel = polish_contig_parallel(&draft, &reads, 9, 64);
+        assert_eq!(parallel, sequential);
+    }
+
+    #[test]
+    fn test_polish_contig_parallel_is_deterministic_across_thread_counts() {
+        let draft = "ACGT".repeat(80);
+        let mut mutated = draft.clone().into_bytes();
+        mutated[127] = b'A';
+        let mutated = String::from_utf8(mutated).unwrap();
+
+        let reads: Vec<FastqRecord> = (0..6)
+            .map(|idx| FastqRecord {
+                header: format!("@read{}", idx),
+                sequence: mutated.clone(),
+                plus: "+".to_string(),
+                quality: "I".repeat(mutated.len()),
+            })
+            .collect();
+
+        let one_thread = ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap()
+            .install(|| polish_contig_parallel(&draft, &reads, 7, 48));
+        let four_threads = ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap()
+            .install(|| polish_contig_parallel(&draft, &reads, 7, 48));
+
+        assert_eq!(one_thread, four_threads);
+    }
+
+    #[test]
+    fn test_polish_contig_string_prefers_current_base_on_tie() {
+        let contig = "AAAAA";
+        let reads = vec![
+            "AACAA".to_string(),
+            "AACAA".to_string(),
+            "AAAAA".to_string(),
+        ];
+
+        // At center position, A and C tie. Deterministic tie-breaking should
+        // preserve the current base instead of flipping arbitrarily.
+        let polished = polish_contig_string(contig, &reads, 0.3);
+        assert_eq!(polished, contig);
     }
 }
