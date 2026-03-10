@@ -23,6 +23,17 @@ fn kmer_mask(k: usize) -> u64 {
     }
 }
 
+#[inline]
+fn encode_base_2bit(base: u8) -> Option<u64> {
+    match base {
+        b'A' | b'a' => Some(0),
+        b'C' | b'c' => Some(1),
+        b'G' | b'g' => Some(2),
+        b'T' | b't' => Some(3),
+        _ => None,
+    }
+}
+
 /// Configuration for disk-based k-mer counting
 #[derive(Clone, Debug)]
 pub struct DiskCounterConfig {
@@ -173,7 +184,9 @@ impl DiskKmerCounterV2 {
     {
         let k = self.config.k;
         let num_buckets = self.config.num_buckets;
-        let mask = (num_buckets - 1) as u64;
+        let use_mask_bucket = num_buckets.is_power_of_two();
+        let bucket_mask = (num_buckets.saturating_sub(1)) as u64;
+        let rolling_mask = kmer_mask(k);
 
         // Create buckets on first call, append on subsequent calls
         let first_call = self.bucket_paths.is_empty();
@@ -196,17 +209,28 @@ impl DiskKmerCounterV2 {
                 continue;
             }
 
-            // Extract k-mers using KmerU64 for proper encoding
-            for i in 0..=bytes.len() - k {
-                if let Some(kmer) = KmerU64::from_slice(&bytes[i..i + k]) {
-                    // Use canonical form for consistent counting
-                    let canonical = kmer.canonical();
-                    let encoded = canonical.encoded;
+            // Rolling extraction avoids O(n*k) repeated re-encoding per window.
+            let mut rolling = 0u64;
+            let mut valid_run = 0usize;
 
-                    // Bucket by lower bits of encoded value
-                    let bucket_id = (encoded & mask) as usize;
-                    buckets[bucket_id].add(encoded)?;
-                    batch_total += 1;
+            for &base in bytes {
+                if let Some(base_bits) = encode_base_2bit(base) {
+                    rolling = ((rolling << 2) | base_bits) & rolling_mask;
+                    valid_run += 1;
+
+                    if valid_run >= k {
+                        let canonical_encoded = canonical(rolling, k);
+                        let bucket_id = if use_mask_bucket {
+                            (canonical_encoded & bucket_mask) as usize
+                        } else {
+                            (canonical_encoded % num_buckets as u64) as usize
+                        };
+                        buckets[bucket_id].add(canonical_encoded)?;
+                        batch_total += 1;
+                    }
+                } else {
+                    rolling = 0;
+                    valid_run = 0;
                 }
             }
         }
@@ -460,6 +484,37 @@ mod tests {
             assert_eq!(seq.len(), 11);
             assert!(count >= 1);
         }
+    }
+
+    #[test]
+    fn disk_counter_matches_reference_with_ambiguous_bases_and_non_power_of_two_buckets() {
+        let config = DiskCounterConfig {
+            k: 5,
+            num_buckets: 3,
+            min_count: 1,
+            temp_dir: std::env::temp_dir().join("raptor_test_v2_reference_match"),
+            ..Default::default()
+        };
+        let mut counter = DiskKmerCounterV2::new(config).expect("counter should construct");
+
+        let sequences = vec!["ACGTNACGTACGT", "ttttacgt", "NNNNN", "ACGTACGT", "acgtaa"];
+        counter
+            .distribute(sequences.iter().map(|s| s.as_bytes()))
+            .expect("distribution should succeed");
+
+        let observed = counter.count_all().expect("counting should succeed");
+
+        let mut expected = AHashMap::new();
+        for sequence in &sequences {
+            for window in sequence.as_bytes().windows(5) {
+                if let Some(kmer) = KmerU64::from_slice(window) {
+                    let canonical = kmer.canonical().encoded;
+                    *expected.entry(canonical).or_insert(0u32) += 1;
+                }
+            }
+        }
+
+        assert_eq!(observed, expected);
     }
 
     #[test]

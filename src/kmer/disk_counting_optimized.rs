@@ -96,6 +96,17 @@ pub struct OptimizedDiskCounter {
     compressed_sizes: Vec<u64>,
 }
 
+#[inline]
+fn encode_base_2bit(base: u8) -> Option<u64> {
+    match base {
+        b'A' | b'a' => Some(0),
+        b'C' | b'c' => Some(1),
+        b'G' | b'g' => Some(2),
+        b'T' | b't' => Some(3),
+        _ => None,
+    }
+}
+
 impl OptimizedDiskCounter {
     pub fn new(config: OptimizedDiskConfig) -> std::io::Result<Self> {
         if config.k == 0 || config.k > 32 {
@@ -155,10 +166,16 @@ impl OptimizedDiskCounter {
         sequences: &[Vec<u8>],
         k: usize,
         num_buckets: usize,
-        mask: u64,
+        bucket_mask: u64,
     ) -> std::io::Result<()> {
         // Accumulate k-mers in memory per bucket
         let mut bucket_data: Vec<Vec<u64>> = (0..num_buckets).map(|_| Vec::new()).collect();
+        let use_mask_bucket = num_buckets.is_power_of_two();
+        let rolling_mask = if k >= 32 {
+            u64::MAX
+        } else {
+            (1u64 << (k * 2)) - 1
+        };
         let mut total = 0u64;
 
         for seq in sequences {
@@ -166,13 +183,32 @@ impl OptimizedDiskCounter {
                 continue;
             }
 
-            for i in 0..=seq.len() - k {
-                if let Some(kmer) = KmerU64::from_slice(&seq[i..i + k]) {
-                    let canonical = kmer.canonical();
-                    let encoded = canonical.encoded;
-                    let bucket_id = (encoded & mask) as usize;
-                    bucket_data[bucket_id].push(encoded);
-                    total += 1;
+            let mut rolling = 0u64;
+            let mut valid_run = 0usize;
+
+            for &base in seq {
+                if let Some(base_bits) = encode_base_2bit(base) {
+                    rolling = ((rolling << 2) | base_bits) & rolling_mask;
+                    valid_run += 1;
+
+                    if valid_run >= k {
+                        let canonical = KmerU64 {
+                            encoded: rolling,
+                            len: k as u8,
+                        }
+                        .canonical()
+                        .encoded;
+                        let bucket_id = if use_mask_bucket {
+                            (canonical & bucket_mask) as usize
+                        } else {
+                            (canonical % num_buckets as u64) as usize
+                        };
+                        bucket_data[bucket_id].push(canonical);
+                        total += 1;
+                    }
+                } else {
+                    rolling = 0;
+                    valid_run = 0;
                 }
             }
         }
@@ -189,9 +225,15 @@ impl OptimizedDiskCounter {
         sequences: &[Vec<u8>],
         k: usize,
         num_buckets: usize,
-        mask: u64,
+        bucket_mask: u64,
     ) -> std::io::Result<()> {
         let chunk_size = self.config.chunk_size;
+        let use_mask_bucket = num_buckets.is_power_of_two();
+        let rolling_mask = if k >= 32 {
+            u64::MAX
+        } else {
+            (1u64 << (k * 2)) - 1
+        };
 
         // Process chunks in parallel
         let chunk_results: Vec<Vec<Vec<u64>>> = sequences
@@ -204,12 +246,31 @@ impl OptimizedDiskCounter {
                         continue;
                     }
 
-                    for i in 0..=seq.len() - k {
-                        if let Some(kmer) = KmerU64::from_slice(&seq[i..i + k]) {
-                            let canonical = kmer.canonical();
-                            let encoded = canonical.encoded;
-                            let bucket_id = (encoded & mask) as usize;
-                            bucket_data[bucket_id].push(encoded);
+                    let mut rolling = 0u64;
+                    let mut valid_run = 0usize;
+
+                    for &base in seq {
+                        if let Some(base_bits) = encode_base_2bit(base) {
+                            rolling = ((rolling << 2) | base_bits) & rolling_mask;
+                            valid_run += 1;
+
+                            if valid_run >= k {
+                                let canonical = KmerU64 {
+                                    encoded: rolling,
+                                    len: k as u8,
+                                }
+                                .canonical()
+                                .encoded;
+                                let bucket_id = if use_mask_bucket {
+                                    (canonical & bucket_mask) as usize
+                                } else {
+                                    (canonical % num_buckets as u64) as usize
+                                };
+                                bucket_data[bucket_id].push(canonical);
+                            }
+                        } else {
+                            rolling = 0;
+                            valid_run = 0;
                         }
                     }
                 }
