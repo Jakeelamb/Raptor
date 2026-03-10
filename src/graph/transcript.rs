@@ -243,6 +243,7 @@ pub fn assemble_transcripts(
     // Process each path
     for (i, path) in paths.iter().enumerate() {
         let sequence = stitch_isoform_with_maps(&contig_sequences, &path.nodes, &overlap_map);
+        let length = sequence.len();
 
         // Detect splicing events if graph is provided
         let splicing = if let Some(g) = graph {
@@ -253,10 +254,10 @@ pub fn assemble_transcripts(
 
         transcripts.push(Transcript {
             id: i + 1, // 1-based IDs for transcripts
-            sequence: sequence.clone(),
+            sequence,
             path: path.nodes.clone(),
             confidence: path.confidence as f64,
-            length: sequence.len(),
+            length,
             strand: '+', // Default to forward strand
             tpm: None,   // No expression value yet
             splicing,    // Detected splicing events
