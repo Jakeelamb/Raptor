@@ -17,6 +17,7 @@ use crate::io::fasta::FastaWriter;
 use crate::io::fastq::{open_fastq, stream_fastq_records_checked};
 use crate::kmer::disk_counting_v2::{DiskCounterConfig, DiskKmerCounterV2};
 use ahash::AHashMap;
+use std::fs;
 use std::path::Path;
 use tracing::info;
 
@@ -103,6 +104,7 @@ impl StreamingAssembler {
 
         info!("Starting streaming assembly pipeline");
         info!("K-mer size: {}, Min count: {}", k, min_count);
+        let mut peak_memory_bytes = Self::detect_peak_memory_bytes();
 
         // Phase 1: Disk-based k-mer counting
         info!("Phase 1: Distributing k-mers to disk buckets...");
@@ -114,6 +116,7 @@ impl StreamingAssembler {
             self.stream_to_disk_counter(input_path, &mut disk_counter)?;
 
         let (distributed_kmers, bucket_count, disk_usage_bytes) = disk_counter.stats();
+        peak_memory_bytes = peak_memory_bytes.max(Self::detect_peak_memory_bytes());
         info!(
             "Distribution complete: kmers={}, buckets={}, disk={:.2} GB",
             distributed_kmers,
@@ -125,6 +128,7 @@ impl StreamingAssembler {
         // Phase 2: Count k-mers from buckets
         info!("Phase 2: Counting k-mers from buckets...");
         let kmer_counts = disk_counter.count_all()?;
+        peak_memory_bytes = peak_memory_bytes.max(Self::detect_peak_memory_bytes());
 
         let unique_kmers = kmer_counts.len() as u64;
         // count_all() already applies min_count filtering during bucket counting.
@@ -137,11 +141,13 @@ impl StreamingAssembler {
         // Phase 3: Build assembly graph and extract contigs
         info!("Phase 3: Building assembly graph and extracting contigs...");
         let contigs = self.build_contigs_streaming(&kmer_counts);
+        peak_memory_bytes = peak_memory_bytes.max(Self::detect_peak_memory_bytes());
 
         // Phase 4: Write output
         info!("Phase 4: Writing contigs...");
         let (contigs_produced, total_contig_length, length_stats) =
             self.write_contigs(&contigs, output_path)?;
+        peak_memory_bytes = peak_memory_bytes.max(Self::detect_peak_memory_bytes());
 
         // Cleanup
         disk_counter.cleanup()?;
@@ -167,7 +173,34 @@ impl StreamingAssembler {
             au_n: length_stats.au_n,
             longest_contig: length_stats.longest,
             disk_usage_bytes,
-            peak_memory_bytes: 0, // TODO: track actual peak
+            peak_memory_bytes,
+        })
+    }
+
+    #[inline]
+    fn detect_peak_memory_bytes() -> u64 {
+        #[cfg(target_os = "linux")]
+        {
+            fs::read_to_string("/proc/self/status")
+                .ok()
+                .and_then(|status| Self::parse_proc_status_kib(&status, "VmHWM:"))
+                .and_then(|kib| kib.checked_mul(1024))
+                .unwrap_or(0)
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            0
+        }
+    }
+
+    #[inline]
+    fn parse_proc_status_kib(status: &str, key: &str) -> Option<u64> {
+        status.lines().find_map(|line| {
+            if !line.starts_with(key) {
+                return None;
+            }
+            line.split_whitespace().nth(1)?.parse::<u64>().ok()
         })
     }
 
@@ -518,5 +551,28 @@ mod tests {
         assert_eq!(stats.longest_contig, expected.longest);
         assert!((stats.average_contig_length - expected.avg_length).abs() < 1e-12);
         assert!((stats.au_n - expected.au_n).abs() < 1e-12);
+        if cfg!(target_os = "linux") {
+            assert!(
+                stats.peak_memory_bytes > 0,
+                "expected non-zero peak memory on Linux"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_proc_status_kib_extracts_values() {
+        let status = "Name:\traptor\nVmRSS:\t  2048 kB\nVmHWM:\t  4096 kB\n";
+        assert_eq!(
+            StreamingAssembler::parse_proc_status_kib(status, "VmHWM:"),
+            Some(4096)
+        );
+        assert_eq!(
+            StreamingAssembler::parse_proc_status_kib(status, "VmRSS:"),
+            Some(2048)
+        );
+        assert_eq!(
+            StreamingAssembler::parse_proc_status_kib(status, "VmSize:"),
+            None
+        );
     }
 }
