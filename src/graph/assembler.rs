@@ -36,16 +36,26 @@ pub fn greedy_assembly(
 ) -> Vec<Contig> {
     use crate::kmer::kmer::encode_kmer;
 
+    if k == 0 {
+        return Vec::new();
+    }
+
     let mut used = HashSet::new();
     let mut contigs = Vec::new();
 
     // Create new HashMap that stores both canonical and original form of each kmer
     let mut kmer_info = HashMap::new();
     for (kmer, &count) in kmer_counts.iter() {
+        if kmer.len() != k {
+            continue;
+        }
         // Get the canonical form
         if let Some(canon) = canonical_kmer(kmer) {
             kmer_info.insert(kmer.clone(), (canon, count));
         }
+    }
+    if kmer_info.is_empty() {
+        return contigs;
     }
 
     // Sort by descending count, then lexicographically by k-mer for deterministic ties.
@@ -54,36 +64,23 @@ pub fn greedy_assembly(
 
     // Collect adjacent kmers that can be stitched together
     let mut adjacency: HashMap<String, Vec<(String, u32)>> = HashMap::new();
-    for (kmer, (_, _)) in &kmer_info {
-        let bases = ["A", "C", "G", "T"];
-
-        // Try extensions on suffix
-        if kmer.len() >= k - 1 {
-            let suffix = &kmer[1..];
-            for base in &bases {
-                let next = format!("{}{}", suffix, base);
-                if let Some(&(_, count)) = kmer_info.get(&next) {
-                    adjacency
-                        .entry(kmer.clone())
-                        .or_default()
-                        .push((next.clone(), count));
-                }
+    for kmer in kmer_info.keys() {
+        let suffix = &kmer[1..];
+        for base in [b'A', b'C', b'G', b'T'] {
+            let mut next = String::with_capacity(k);
+            next.push_str(suffix);
+            next.push(base as char);
+            if let Some(&(_, count)) = kmer_info.get(&next) {
+                adjacency
+                    .entry(kmer.clone())
+                    .or_default()
+                    .push((next, count));
             }
         }
-
-        // Try extensions on prefix
-        if kmer.len() >= k - 1 {
-            let prefix = &kmer[..kmer.len() - 1];
-            for base in &bases {
-                let prev = format!("{}{}", base, prefix);
-                if let Some(&(_, count)) = kmer_info.get(&prev) {
-                    adjacency
-                        .entry(prev.clone())
-                        .or_default()
-                        .push((kmer.clone(), count));
-                }
-            }
-        }
+    }
+    for neighbors in adjacency.values_mut() {
+        neighbors.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        neighbors.dedup_by(|a, b| a.0 == b.0);
     }
 
     // Build contigs greedily
@@ -92,35 +89,27 @@ pub fn greedy_assembly(
             continue;
         }
 
+        let Some(seed_encoded) = encode_kmer(seed_kmer) else {
+            continue;
+        };
         let mut contig = seed_kmer.clone();
-        let mut path: Vec<u64> = vec![encode_kmer(seed_kmer).unwrap_or(0)];
+        let mut path: Vec<u64> = vec![seed_encoded];
         used.insert(seed_kmer.clone());
 
         // Extend right (forward)
         let mut current = seed_kmer.clone();
         while let Some(neighbors) = adjacency.get(&current) {
-            // Find best extension (highest count)
-            let mut best_next: Option<(String, u32)> = None;
-            for (next, count) in neighbors {
-                if !used.contains(next) {
-                    match &best_next {
-                        None => best_next = Some((next.clone(), *count)),
-                        Some((best_kmer, best_count)) => {
-                            if *count > *best_count || (*count == *best_count && next < best_kmer) {
-                                best_next = Some((next.clone(), *count));
-                            }
-                        }
-                    };
-                }
-            }
-
-            if let Some((next, _)) = best_next {
+            if let Some((next, _)) = neighbors.iter().find(|(next, _)| !used.contains(next)) {
                 let overlap = k - 1;
                 let extension = &next[overlap..];
                 contig.push_str(extension);
-                path.push(encode_kmer(&next).unwrap_or(0));
+                if let Some(encoded) = encode_kmer(next) {
+                    path.push(encoded);
+                } else {
+                    break;
+                }
                 used.insert(next.clone());
-                current = next;
+                current = next.clone();
             } else {
                 break;
             }
@@ -877,6 +866,25 @@ mod tests {
 
         assert_eq!(seqs_a, vec!["AAAC".to_string(), "AAG".to_string()]);
         assert_eq!(seqs_b, seqs_a);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn greedy_string_rejects_invalid_k_and_mismatched_kmers_without_panicking() {
+        let mut counts = HashMap::new();
+        counts.insert("AAA".to_string(), 10);
+        counts.insert("AAC".to_string(), 9);
+        counts.insert("AA".to_string(), 20);
+        counts.insert("AA?".to_string(), 30);
+
+        assert!(greedy_assembly(0, &counts, 1).is_empty());
+
+        let k4 = greedy_assembly(4, &counts, 1);
+        assert!(k4.is_empty());
+
+        let k3 = greedy_assembly(3, &counts, 3);
+        let seqs: Vec<String> = k3.into_iter().map(|c| c.sequence).collect();
+        assert_eq!(seqs, vec!["AAAC".to_string()]);
     }
 
     #[test]
