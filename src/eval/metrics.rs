@@ -145,17 +145,43 @@ fn compute_au_n(lengths: &[usize], total_len: usize) -> f64 {
     sum_squares as f64 / total_len as f64
 }
 
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+struct LengthBuckets {
+    contigs_ge_1kb: usize,
+    contigs_ge_10kb: usize,
+    contigs_ge_50kb: usize,
+    contigs_ge_100kb: usize,
+    bases_ge_1kb: usize,
+    bases_ge_10kb: usize,
+    bases_ge_50kb: usize,
+    bases_ge_100kb: usize,
+}
+
 #[inline]
-fn count_and_span_at_or_above(lengths: &[usize], threshold: usize) -> (usize, usize) {
-    let mut count = 0usize;
-    let mut span = 0usize;
+fn compute_length_buckets(lengths: &[usize]) -> LengthBuckets {
+    let mut buckets = LengthBuckets::default();
     for &len in lengths {
-        if len >= threshold {
-            count += 1;
-            span = span.saturating_add(len);
+        if len >= 1_000 {
+            buckets.contigs_ge_1kb += 1;
+            buckets.bases_ge_1kb = buckets.bases_ge_1kb.saturating_add(len);
+
+            if len >= 10_000 {
+                buckets.contigs_ge_10kb += 1;
+                buckets.bases_ge_10kb = buckets.bases_ge_10kb.saturating_add(len);
+
+                if len >= 50_000 {
+                    buckets.contigs_ge_50kb += 1;
+                    buckets.bases_ge_50kb = buckets.bases_ge_50kb.saturating_add(len);
+
+                    if len >= 100_000 {
+                        buckets.contigs_ge_100kb += 1;
+                        buckets.bases_ge_100kb = buckets.bases_ge_100kb.saturating_add(len);
+                    }
+                }
+            }
         }
     }
-    (count, span)
+    buckets
 }
 
 /// Evaluate contig/transcript lengths that are already sorted descending.
@@ -178,10 +204,7 @@ pub fn evaluate_lengths_sorted_desc(sorted_lengths: &[usize]) -> TranscriptStats
     let (n99, l99) = nx_lx(sorted_lengths, total_len, 99, 100);
     let au_n = compute_au_n(sorted_lengths, total_len);
     let longest = sorted_lengths.first().copied().unwrap_or(0);
-    let (contigs_ge_1kb, bases_ge_1kb) = count_and_span_at_or_above(sorted_lengths, 1_000);
-    let (contigs_ge_10kb, bases_ge_10kb) = count_and_span_at_or_above(sorted_lengths, 10_000);
-    let (contigs_ge_50kb, bases_ge_50kb) = count_and_span_at_or_above(sorted_lengths, 50_000);
-    let (contigs_ge_100kb, bases_ge_100kb) = count_and_span_at_or_above(sorted_lengths, 100_000);
+    let length_buckets = compute_length_buckets(sorted_lengths);
 
     TranscriptStats {
         total: sorted_lengths.len(),
@@ -199,14 +222,14 @@ pub fn evaluate_lengths_sorted_desc(sorted_lengths: &[usize]) -> TranscriptStats
         l99,
         au_n,
         longest,
-        contigs_ge_1kb,
-        contigs_ge_10kb,
-        contigs_ge_50kb,
-        contigs_ge_100kb,
-        bases_ge_1kb,
-        bases_ge_10kb,
-        bases_ge_50kb,
-        bases_ge_100kb,
+        contigs_ge_1kb: length_buckets.contigs_ge_1kb,
+        contigs_ge_10kb: length_buckets.contigs_ge_10kb,
+        contigs_ge_50kb: length_buckets.contigs_ge_50kb,
+        contigs_ge_100kb: length_buckets.contigs_ge_100kb,
+        bases_ge_1kb: length_buckets.bases_ge_1kb,
+        bases_ge_10kb: length_buckets.bases_ge_10kb,
+        bases_ge_50kb: length_buckets.bases_ge_50kb,
+        bases_ge_100kb: length_buckets.bases_ge_100kb,
     }
 }
 
