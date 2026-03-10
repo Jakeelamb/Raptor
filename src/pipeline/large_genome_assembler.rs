@@ -574,7 +574,7 @@ impl LargeGenomeAssembler {
         // For each canonical k-mer, compute adjacency for both orientations
         let entries: Vec<(u64, ([bool; 4], [bool; 4]))> = valid_kmers
             .par_iter()
-            .flat_map(|&canonical_encoded| {
+            .fold(Vec::new, |mut local_entries, &canonical_encoded| {
                 let kmer = KmerU64 {
                     encoded: canonical_encoded,
                     len: k as u8,
@@ -590,14 +590,23 @@ impl LargeGenomeAssembler {
 
                 // Return both entries (they may be the same for palindromic k-mers)
                 if canonical_encoded == rc.encoded {
-                    vec![(canonical_encoded, fwd_adj)]
+                    local_entries.push((canonical_encoded, fwd_adj));
                 } else {
-                    vec![(canonical_encoded, fwd_adj), (rc.encoded, rc_adj)]
+                    local_entries.push((canonical_encoded, fwd_adj));
+                    local_entries.push((rc.encoded, rc_adj));
                 }
+                local_entries
             })
-            .collect();
+            .reduce(Vec::new, |mut acc, mut part| {
+                acc.append(&mut part);
+                acc
+            });
 
-        entries.into_iter().collect()
+        let mut adjacency = AHashMap::with_capacity(entries.len());
+        for (kmer, ext) in entries {
+            adjacency.insert(kmer, ext);
+        }
+        adjacency
     }
 
     /// Compute adjacency for a single k-mer orientation
@@ -2277,6 +2286,17 @@ mod tests {
         file
     }
 
+    fn canonicalize_adjacency(
+        adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+    ) -> Vec<(u64, [bool; 4], [bool; 4])> {
+        let mut entries: Vec<(u64, [bool; 4], [bool; 4])> = adjacency
+            .iter()
+            .map(|(&kmer, &(left, right))| (kmer, left, right))
+            .collect();
+        entries.sort_unstable_by_key(|(kmer, _, _)| *kmer);
+        entries
+    }
+
     #[test]
     fn test_large_genome_assembler() {
         let input = create_test_fastq();
@@ -3182,6 +3202,41 @@ mod tests {
             } else {
                 baseline = Some(contigs);
             }
+        }
+    }
+
+    #[test]
+    fn test_build_adjacency_is_stable_under_shuffled_valid_kmer_insertion() {
+        let k = 4;
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: 1,
+            ..Default::default()
+        });
+
+        let mut entries: Vec<u64> = ["AAAT", "AATC", "ATCG", "TCGA", "CGAT", "GATC"]
+            .into_iter()
+            .map(|kmer| KmerU64::from_str(kmer).unwrap().canonical().encoded)
+            .collect();
+        entries.sort_unstable();
+        entries.dedup();
+
+        let mut baseline_set = AHashSet::new();
+        for &kmer in &entries {
+            baseline_set.insert(kmer);
+        }
+        let baseline = canonicalize_adjacency(&assembler.build_adjacency(&baseline_set, k));
+
+        let mut rng = StdRng::seed_from_u64(0xA11A_DA71_u64);
+        for _ in 0..64 {
+            entries.shuffle(&mut rng);
+            let mut valid_kmers = AHashSet::new();
+            for &kmer in &entries {
+                valid_kmers.insert(kmer);
+            }
+            let observed = canonicalize_adjacency(&assembler.build_adjacency(&valid_kmers, k));
+            assert_eq!(observed, baseline);
         }
     }
 }
