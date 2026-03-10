@@ -550,15 +550,20 @@ fn find_bubble_from_branch(
     let mut current2 = branch2;
 
     for _ in 0..max_len {
+        let mut progressed = false;
+
         // Extend path 1
         if let Some(succ) = adjacency.get_successors(current1) {
             if let Some((next, _)) = best_unvisited_neighbor(succ, &visited1) {
+                progressed = true;
                 path1.push(next);
                 visited1.insert(next);
                 current1 = next;
 
                 // Check if paths reconverge
-                if visited2.contains(&next) {
+                if visited2.contains(&next)
+                    && is_valid_reconvergence(start, branch1, branch2, next)
+                {
                     return Some(Bubble {
                         start,
                         end: next,
@@ -574,12 +579,15 @@ fn find_bubble_from_branch(
         // Extend path 2
         if let Some(succ) = adjacency.get_successors(current2) {
             if let Some((next, _)) = best_unvisited_neighbor(succ, &visited2) {
+                progressed = true;
                 path2.push(next);
                 visited2.insert(next);
                 current2 = next;
 
                 // Check if paths reconverge
-                if visited1.contains(&next) {
+                if visited1.contains(&next)
+                    && is_valid_reconvergence(start, branch1, branch2, next)
+                {
                     return Some(Bubble {
                         start,
                         end: next,
@@ -591,9 +599,18 @@ fn find_bubble_from_branch(
                 }
             }
         }
+
+        if !progressed {
+            break;
+        }
     }
 
     None
+}
+
+#[inline]
+fn is_valid_reconvergence(start: u64, branch1: u64, branch2: u64, node: u64) -> bool {
+    node != start && node != branch1 && node != branch2
 }
 
 /// Collapse a bubble by choosing the higher-coverage path.
@@ -983,6 +1000,31 @@ mod tests {
         assert_eq!(bubbles_a[0].path2, bubbles_b[0].path2);
         assert_eq!(bubbles_a[0].path1.first().copied(), Some(aac));
         assert_eq!(bubbles_a[0].path2.first().copied(), Some(aag));
+    }
+
+    #[test]
+    fn detect_bubbles_ignores_cycles_that_only_rejoin_the_branch_start() {
+        let k = 3;
+        let aaa = encode_kmer("AAA").unwrap();
+        let aac = encode_kmer("AAC").unwrap();
+        let aag = encode_kmer("AAG").unwrap();
+        let agt = encode_kmer("AGT").unwrap();
+
+        let mut counts = AHashMap::new();
+        counts.insert(aaa, 20);
+        counts.insert(aac, 10);
+        counts.insert(aag, 10);
+        counts.insert(agt, 9);
+
+        let mut adjacency = AdjacencyTableU64::new(k as u8);
+        adjacency.add_edge(aaa, aac, 10);
+        adjacency.add_edge(aaa, aag, 10);
+        adjacency.add_edge(aac, aaa, 10);
+        adjacency.add_edge(aag, agt, 9);
+        adjacency.add_edge(agt, aaa, 9);
+
+        let bubbles = detect_bubbles(&adjacency, &counts, k, 8);
+        assert!(bubbles.is_empty());
     }
 
     #[test]
