@@ -4176,6 +4176,55 @@ mod tests {
     }
 
     #[test]
+    fn test_repeat_completion_pass_is_stable_under_shuffled_count_insertion() {
+        let k = 3;
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: 1,
+            ..Default::default()
+        });
+
+        let mut entries: Vec<(u64, u32)> = ["AAA", "AAT"]
+            .into_iter()
+            .map(|kmer| (KmerU64::from_str(kmer).unwrap().canonical().encoded, 6u32))
+            .collect();
+        entries.extend(
+            ["CCC", "CCG"]
+                .into_iter()
+                .map(|kmer| (KmerU64::from_str(kmer).unwrap().canonical().encoded, 20u32)),
+        );
+        for decoy in 2_000_000u64..2_000_020u64 {
+            entries.push((decoy, 2));
+        }
+
+        let valid_kmers: AHashSet<u64> = ["AAA", "AAT", "CCC", "CCG"]
+            .into_iter()
+            .map(|kmer| KmerU64::from_str(kmer).unwrap().canonical().encoded)
+            .collect();
+        let adjacency = assembler.build_adjacency(&valid_kmers, k);
+        let branch_support: AHashMap<(u64, u64), u32> = AHashMap::new();
+
+        let mut rng = StdRng::seed_from_u64(0xABC0_1234_u64);
+        let mut baseline: Option<Vec<String>> = None;
+        for _ in 0..64 {
+            entries.shuffle(&mut rng);
+            let mut counts = AHashMap::new();
+            for &(kmer, count) in &entries {
+                counts.insert(kmer, count);
+            }
+
+            let contigs =
+                assembler.build_contigs_from_graph(&counts, &adjacency, &branch_support, k);
+            if let Some(expected) = &baseline {
+                assert_eq!(&contigs, expected);
+            } else {
+                baseline = Some(contigs);
+            }
+        }
+    }
+
+    #[test]
     fn test_build_adjacency_is_stable_under_shuffled_valid_kmer_insertion() {
         let k = 4;
         let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
