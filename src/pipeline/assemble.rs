@@ -65,18 +65,22 @@ struct AssemblyQualitySummary {
     contigs_ge_10kb: usize,
     contigs_ge_50kb: usize,
     contigs_ge_100kb: usize,
+    contigs_ge_1mb: usize,
     bases_ge_1kb: usize,
     bases_ge_10kb: usize,
     bases_ge_50kb: usize,
     bases_ge_100kb: usize,
+    bases_ge_1mb: usize,
     contigs_ge_1kb_frac: f64,
     contigs_ge_10kb_frac: f64,
     contigs_ge_50kb_frac: f64,
     contigs_ge_100kb_frac: f64,
+    contigs_ge_1mb_frac: f64,
     bases_ge_1kb_frac: f64,
     bases_ge_10kb_frac: f64,
     bases_ge_50kb_frac: f64,
     bases_ge_100kb_frac: f64,
+    bases_ge_1mb_frac: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -298,18 +302,22 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
         contigs_ge_10kb: length_stats.contigs_ge_10kb,
         contigs_ge_50kb: length_stats.contigs_ge_50kb,
         contigs_ge_100kb: length_stats.contigs_ge_100kb,
+        contigs_ge_1mb: length_stats.contigs_ge_1mb,
         bases_ge_1kb: length_stats.bases_ge_1kb,
         bases_ge_10kb: length_stats.bases_ge_10kb,
         bases_ge_50kb: length_stats.bases_ge_50kb,
         bases_ge_100kb: length_stats.bases_ge_100kb,
+        bases_ge_1mb: length_stats.bases_ge_1mb,
         contigs_ge_1kb_frac: length_stats.contigs_ge_1kb_frac,
         contigs_ge_10kb_frac: length_stats.contigs_ge_10kb_frac,
         contigs_ge_50kb_frac: length_stats.contigs_ge_50kb_frac,
         contigs_ge_100kb_frac: length_stats.contigs_ge_100kb_frac,
+        contigs_ge_1mb_frac: length_stats.contigs_ge_1mb_frac,
         bases_ge_1kb_frac: length_stats.bases_ge_1kb_frac,
         bases_ge_10kb_frac: length_stats.bases_ge_10kb_frac,
         bases_ge_50kb_frac: length_stats.bases_ge_50kb_frac,
         bases_ge_100kb_frac: length_stats.bases_ge_100kb_frac,
+        bases_ge_1mb_frac: length_stats.bases_ge_1mb_frac,
     }
 }
 
@@ -415,10 +423,12 @@ fn write_assembly_quality_reports(
         ("contigs_ge_10kb", quality.contigs_ge_10kb.to_string()),
         ("contigs_ge_50kb", quality.contigs_ge_50kb.to_string()),
         ("contigs_ge_100kb", quality.contigs_ge_100kb.to_string()),
+        ("contigs_ge_1mb", quality.contigs_ge_1mb.to_string()),
         ("bases_ge_1kb", quality.bases_ge_1kb.to_string()),
         ("bases_ge_10kb", quality.bases_ge_10kb.to_string()),
         ("bases_ge_50kb", quality.bases_ge_50kb.to_string()),
         ("bases_ge_100kb", quality.bases_ge_100kb.to_string()),
+        ("bases_ge_1mb", quality.bases_ge_1mb.to_string()),
         (
             "contigs_ge_1kb_frac",
             format!("{:.12}", quality.contigs_ge_1kb_frac),
@@ -436,6 +446,10 @@ fn write_assembly_quality_reports(
             format!("{:.12}", quality.contigs_ge_100kb_frac),
         ),
         (
+            "contigs_ge_1mb_frac",
+            format!("{:.12}", quality.contigs_ge_1mb_frac),
+        ),
+        (
             "bases_ge_1kb_frac",
             format!("{:.12}", quality.bases_ge_1kb_frac),
         ),
@@ -450,6 +464,10 @@ fn write_assembly_quality_reports(
         (
             "bases_ge_100kb_frac",
             format!("{:.12}", quality.bases_ge_100kb_frac),
+        ),
+        (
+            "bases_ge_1mb_frac",
+            format!("{:.12}", quality.bases_ge_1mb_frac),
         ),
     ];
 
@@ -725,7 +743,7 @@ pub fn assemble_reads_with_gpu(
 
     let quality = summarize_assembly_quality(&contigs);
     info!(
-        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN: {:.1}, Ungapped bases/N50/auN: {}/{}/{:.1}, Longest: {} bp ({:.2}%), GC/N/Ambiguous bases: {}/{}/{} (fractions {:.2}%/{:.2}%/{:.2}%), Contigs with N/Ambiguous/All-ACGT: {}/{}/{} ({:.2}%/{:.2}%/{:.2}%), RLE mean/weighted runs ratio: {:.4}/{:.4} ({} runs), N-runs: count {}, max {}, mean {:.1} bp ({:.1} per 100kb), N/Ambiguous bases per 100kb: {:.1}/{:.1}, >=1kb/10kb/50kb/100kb contigs: {}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%)",
+        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN: {:.1}, Ungapped bases/N50/auN: {}/{}/{:.1}, Longest: {} bp ({:.2}%), GC/N/Ambiguous bases: {}/{}/{} (fractions {:.2}%/{:.2}%/{:.2}%), Contigs with N/Ambiguous/All-ACGT: {}/{}/{} ({:.2}%/{:.2}%/{:.2}%), RLE mean/weighted runs ratio: {:.4}/{:.4} ({} runs), N-runs: count {}, max {}, mean {:.1} bp ({:.1} per 100kb), N/Ambiguous bases per 100kb: {:.1}/{:.1}, >=1kb/10kb/50kb/100kb/1mb contigs: {}/{}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%/{:.1}%)",
         quality.total_contigs,
         quality.total_bases,
         quality.avg_length,
@@ -775,18 +793,22 @@ pub fn assemble_reads_with_gpu(
         quality.contigs_ge_10kb,
         quality.contigs_ge_50kb,
         quality.contigs_ge_100kb,
+        quality.contigs_ge_1mb,
         quality.contigs_ge_1kb_frac * 100.0,
         quality.contigs_ge_10kb_frac * 100.0,
         quality.contigs_ge_50kb_frac * 100.0,
         quality.contigs_ge_100kb_frac * 100.0,
+        quality.contigs_ge_1mb_frac * 100.0,
         quality.bases_ge_1kb,
         quality.bases_ge_10kb,
         quality.bases_ge_50kb,
         quality.bases_ge_100kb,
+        quality.bases_ge_1mb,
         quality.bases_ge_1kb_frac * 100.0,
         quality.bases_ge_10kb_frac * 100.0,
         quality.bases_ge_50kb_frac * 100.0,
-        quality.bases_ge_100kb_frac * 100.0
+        quality.bases_ge_100kb_frac * 100.0,
+        quality.bases_ge_1mb_frac * 100.0
     );
 
     let (quality_json_path, quality_tsv_path) =
@@ -1447,18 +1469,22 @@ mod tests {
         assert_eq!(summary.contigs_ge_10kb, 0);
         assert_eq!(summary.contigs_ge_50kb, 0);
         assert_eq!(summary.contigs_ge_100kb, 0);
+        assert_eq!(summary.contigs_ge_1mb, 0);
         assert_eq!(summary.bases_ge_1kb, 1_200);
         assert_eq!(summary.bases_ge_10kb, 0);
         assert_eq!(summary.bases_ge_50kb, 0);
         assert_eq!(summary.bases_ge_100kb, 0);
+        assert_eq!(summary.bases_ge_1mb, 0);
         assert!((summary.contigs_ge_1kb_frac - 0.5).abs() < 1e-12);
         assert_eq!(summary.contigs_ge_10kb_frac, 0.0);
         assert_eq!(summary.contigs_ge_50kb_frac, 0.0);
         assert_eq!(summary.contigs_ge_100kb_frac, 0.0);
+        assert_eq!(summary.contigs_ge_1mb_frac, 0.0);
         assert!((summary.bases_ge_1kb_frac - 0.6).abs() < 1e-12);
         assert_eq!(summary.bases_ge_10kb_frac, 0.0);
         assert_eq!(summary.bases_ge_50kb_frac, 0.0);
         assert_eq!(summary.bases_ge_100kb_frac, 0.0);
+        assert_eq!(summary.bases_ge_1mb_frac, 0.0);
     }
 
     #[test]
@@ -1511,19 +1537,23 @@ mod tests {
         assert_eq!(summary.contigs_ge_10kb, 3);
         assert_eq!(summary.contigs_ge_50kb, 2);
         assert_eq!(summary.contigs_ge_100kb, 1);
+        assert_eq!(summary.contigs_ge_1mb, 0);
         assert_eq!(summary.bases_ge_1kb, 161_000);
         assert_eq!(summary.bases_ge_10kb, 160_000);
         assert_eq!(summary.bases_ge_50kb, 150_000);
         assert_eq!(summary.bases_ge_100kb, 100_000);
+        assert_eq!(summary.bases_ge_1mb, 0);
         assert!((summary.longest_frac - (100_000.0 / 161_999.0)).abs() < 1e-12);
         assert!((summary.contigs_ge_1kb_frac - 0.8).abs() < 1e-12);
         assert!((summary.contigs_ge_10kb_frac - 0.6).abs() < 1e-12);
         assert!((summary.contigs_ge_50kb_frac - 0.4).abs() < 1e-12);
         assert!((summary.contigs_ge_100kb_frac - 0.2).abs() < 1e-12);
+        assert_eq!(summary.contigs_ge_1mb_frac, 0.0);
         assert!((summary.bases_ge_1kb_frac - (161_000.0 / 161_999.0)).abs() < 1e-12);
         assert!((summary.bases_ge_10kb_frac - (160_000.0 / 161_999.0)).abs() < 1e-12);
         assert!((summary.bases_ge_50kb_frac - (150_000.0 / 161_999.0)).abs() < 1e-12);
         assert!((summary.bases_ge_100kb_frac - (100_000.0 / 161_999.0)).abs() < 1e-12);
+        assert_eq!(summary.bases_ge_1mb_frac, 0.0);
         assert_eq!(summary.contigs_with_n, 1);
         assert_eq!(summary.contigs_with_ambiguous, 0);
         assert_eq!(summary.contigs_all_acgt, 4);
@@ -1717,18 +1747,22 @@ mod tests {
             contigs_ge_10kb: 0,
             contigs_ge_50kb: 0,
             contigs_ge_100kb: 0,
+            contigs_ge_1mb: 0,
             bases_ge_1kb: 1000,
             bases_ge_10kb: 0,
             bases_ge_50kb: 0,
             bases_ge_100kb: 0,
+            bases_ge_1mb: 0,
             contigs_ge_1kb_frac: 0.2,
             contigs_ge_10kb_frac: 0.0,
             contigs_ge_50kb_frac: 0.0,
             contigs_ge_100kb_frac: 0.0,
+            contigs_ge_1mb_frac: 0.0,
             bases_ge_1kb_frac: 0.81,
             bases_ge_10kb_frac: 0.0,
             bases_ge_50kb_frac: 0.0,
             bases_ge_100kb_frac: 0.0,
+            bases_ge_1mb_frac: 0.0,
         };
 
         let (json_path, tsv_path) = write_assembly_quality_reports(
@@ -1801,5 +1835,7 @@ mod tests {
         assert!(tsv.contains("contigs_with_ambiguous_frac\t0.200000000000"));
         assert!(tsv.contains("contigs_all_acgt_frac\t0.400000000000"));
         assert!(tsv.contains("bases_ge_1kb_frac\t0.810000000000"));
+        assert!(tsv.contains("contigs_ge_1mb\t0"));
+        assert!(tsv.contains("bases_ge_1mb\t0"));
     }
 }

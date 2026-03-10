@@ -49,16 +49,20 @@ proptest! {
         prop_assert!(stats.au_n <= stats.longest as f64 + 1e-9);
         prop_assert!(stats.contigs_ge_50kb <= stats.contigs_ge_10kb);
         prop_assert!(stats.contigs_ge_100kb <= stats.contigs_ge_50kb);
+        prop_assert!(stats.contigs_ge_1mb <= stats.contigs_ge_100kb);
         prop_assert!(stats.contigs_ge_10kb <= stats.contigs_ge_1kb);
         prop_assert!(stats.contigs_ge_1kb <= stats.total);
+        prop_assert!(stats.contigs_ge_1mb_frac <= stats.contigs_ge_100kb_frac + 1e-12);
         prop_assert!(stats.contigs_ge_100kb_frac <= stats.contigs_ge_50kb_frac + 1e-12);
         prop_assert!(stats.contigs_ge_50kb_frac <= stats.contigs_ge_10kb_frac + 1e-12);
         prop_assert!(stats.contigs_ge_10kb_frac <= stats.contigs_ge_1kb_frac + 1e-12);
         prop_assert!(stats.contigs_ge_1kb_frac <= 1.0 + 1e-12);
         prop_assert!(stats.bases_ge_50kb <= stats.bases_ge_10kb);
         prop_assert!(stats.bases_ge_100kb <= stats.bases_ge_50kb);
+        prop_assert!(stats.bases_ge_1mb <= stats.bases_ge_100kb);
         prop_assert!(stats.bases_ge_10kb <= stats.bases_ge_1kb);
         prop_assert!(stats.bases_ge_1kb <= stats.total_bases);
+        prop_assert!(stats.bases_ge_1mb_frac <= stats.bases_ge_100kb_frac + 1e-12);
         prop_assert!(stats.bases_ge_100kb_frac <= stats.bases_ge_50kb_frac + 1e-12);
         prop_assert!(stats.bases_ge_50kb_frac <= stats.bases_ge_10kb_frac + 1e-12);
         prop_assert!(stats.bases_ge_10kb_frac <= stats.bases_ge_1kb_frac + 1e-12);
@@ -69,6 +73,7 @@ proptest! {
             prop_assert_eq!(stats.bases_ge_10kb_frac, 0.0);
             prop_assert_eq!(stats.bases_ge_50kb_frac, 0.0);
             prop_assert_eq!(stats.bases_ge_100kb_frac, 0.0);
+            prop_assert_eq!(stats.bases_ge_1mb_frac, 0.0);
         } else {
             prop_assert!((stats.bases_ge_1kb_frac - (stats.bases_ge_1kb as f64 / stats.total_bases as f64)).abs() < 1e-12);
         }
@@ -106,18 +111,22 @@ proptest! {
         prop_assert_eq!(observed.contigs_ge_10kb, baseline.contigs_ge_10kb);
         prop_assert_eq!(observed.contigs_ge_50kb, baseline.contigs_ge_50kb);
         prop_assert_eq!(observed.contigs_ge_100kb, baseline.contigs_ge_100kb);
+        prop_assert_eq!(observed.contigs_ge_1mb, baseline.contigs_ge_1mb);
         prop_assert_eq!(observed.bases_ge_1kb, baseline.bases_ge_1kb);
         prop_assert_eq!(observed.bases_ge_10kb, baseline.bases_ge_10kb);
         prop_assert_eq!(observed.bases_ge_50kb, baseline.bases_ge_50kb);
         prop_assert_eq!(observed.bases_ge_100kb, baseline.bases_ge_100kb);
+        prop_assert_eq!(observed.bases_ge_1mb, baseline.bases_ge_1mb);
         prop_assert!((observed.contigs_ge_1kb_frac - baseline.contigs_ge_1kb_frac).abs() < 1e-12);
         prop_assert!((observed.contigs_ge_10kb_frac - baseline.contigs_ge_10kb_frac).abs() < 1e-12);
         prop_assert!((observed.contigs_ge_50kb_frac - baseline.contigs_ge_50kb_frac).abs() < 1e-12);
         prop_assert!((observed.contigs_ge_100kb_frac - baseline.contigs_ge_100kb_frac).abs() < 1e-12);
+        prop_assert!((observed.contigs_ge_1mb_frac - baseline.contigs_ge_1mb_frac).abs() < 1e-12);
         prop_assert!((observed.bases_ge_1kb_frac - baseline.bases_ge_1kb_frac).abs() < 1e-12);
         prop_assert!((observed.bases_ge_10kb_frac - baseline.bases_ge_10kb_frac).abs() < 1e-12);
         prop_assert!((observed.bases_ge_50kb_frac - baseline.bases_ge_50kb_frac).abs() < 1e-12);
         prop_assert!((observed.bases_ge_100kb_frac - baseline.bases_ge_100kb_frac).abs() < 1e-12);
+        prop_assert!((observed.bases_ge_1mb_frac - baseline.bases_ge_1mb_frac).abs() < 1e-12);
         prop_assert!((observed.avg_length - baseline.avg_length).abs() < 1e-12);
         prop_assert!((observed.au_n - baseline.au_n).abs() < 1e-12);
     }
@@ -175,18 +184,22 @@ proptest! {
         prop_assert_eq!(observed.contigs_ge_10kb, baseline.contigs_ge_10kb);
         prop_assert_eq!(observed.contigs_ge_50kb, baseline.contigs_ge_50kb);
         prop_assert_eq!(observed.contigs_ge_100kb, baseline.contigs_ge_100kb);
+        prop_assert_eq!(observed.contigs_ge_1mb, baseline.contigs_ge_1mb);
         prop_assert_eq!(observed.bases_ge_1kb, baseline.bases_ge_1kb);
         prop_assert_eq!(observed.bases_ge_10kb, baseline.bases_ge_10kb);
         prop_assert_eq!(observed.bases_ge_50kb, baseline.bases_ge_50kb);
         prop_assert_eq!(observed.bases_ge_100kb, baseline.bases_ge_100kb);
+        prop_assert_eq!(observed.bases_ge_1mb, baseline.bases_ge_1mb);
         prop_assert!((observed.contigs_ge_1kb_frac - baseline.contigs_ge_1kb_frac).abs() < 1e-12);
         prop_assert!((observed.contigs_ge_10kb_frac - baseline.contigs_ge_10kb_frac).abs() < 1e-12);
         prop_assert!((observed.contigs_ge_50kb_frac - baseline.contigs_ge_50kb_frac).abs() < 1e-12);
         prop_assert!((observed.contigs_ge_100kb_frac - baseline.contigs_ge_100kb_frac).abs() < 1e-12);
+        prop_assert!((observed.contigs_ge_1mb_frac - baseline.contigs_ge_1mb_frac).abs() < 1e-12);
         prop_assert!((observed.bases_ge_1kb_frac - baseline.bases_ge_1kb_frac).abs() < 1e-12);
         prop_assert!((observed.bases_ge_10kb_frac - baseline.bases_ge_10kb_frac).abs() < 1e-12);
         prop_assert!((observed.bases_ge_50kb_frac - baseline.bases_ge_50kb_frac).abs() < 1e-12);
         prop_assert!((observed.bases_ge_100kb_frac - baseline.bases_ge_100kb_frac).abs() < 1e-12);
+        prop_assert!((observed.bases_ge_1mb_frac - baseline.bases_ge_1mb_frac).abs() < 1e-12);
         prop_assert!((observed.avg_length - baseline.avg_length).abs() < 1e-12);
         prop_assert!((observed.au_n - baseline.au_n).abs() < 1e-12);
     }
@@ -224,18 +237,22 @@ proptest! {
         prop_assert_eq!(observed.get("contigs_ge_10kb").copied().unwrap_or(-1.0) as usize, expected.contigs_ge_10kb);
         prop_assert_eq!(observed.get("contigs_ge_50kb").copied().unwrap_or(-1.0) as usize, expected.contigs_ge_50kb);
         prop_assert_eq!(observed.get("contigs_ge_100kb").copied().unwrap_or(-1.0) as usize, expected.contigs_ge_100kb);
+        prop_assert_eq!(observed.get("contigs_ge_1mb").copied().unwrap_or(-1.0) as usize, expected.contigs_ge_1mb);
         prop_assert_eq!(observed.get("bases_ge_1kb").copied().unwrap_or(-1.0) as usize, expected.bases_ge_1kb);
         prop_assert_eq!(observed.get("bases_ge_10kb").copied().unwrap_or(-1.0) as usize, expected.bases_ge_10kb);
         prop_assert_eq!(observed.get("bases_ge_50kb").copied().unwrap_or(-1.0) as usize, expected.bases_ge_50kb);
         prop_assert_eq!(observed.get("bases_ge_100kb").copied().unwrap_or(-1.0) as usize, expected.bases_ge_100kb);
+        prop_assert_eq!(observed.get("bases_ge_1mb").copied().unwrap_or(-1.0) as usize, expected.bases_ge_1mb);
         prop_assert!((observed.get("contigs_ge_1kb_frac").copied().unwrap_or(-1.0) - expected.contigs_ge_1kb_frac).abs() < 1e-12);
         prop_assert!((observed.get("contigs_ge_10kb_frac").copied().unwrap_or(-1.0) - expected.contigs_ge_10kb_frac).abs() < 1e-12);
         prop_assert!((observed.get("contigs_ge_50kb_frac").copied().unwrap_or(-1.0) - expected.contigs_ge_50kb_frac).abs() < 1e-12);
         prop_assert!((observed.get("contigs_ge_100kb_frac").copied().unwrap_or(-1.0) - expected.contigs_ge_100kb_frac).abs() < 1e-12);
+        prop_assert!((observed.get("contigs_ge_1mb_frac").copied().unwrap_or(-1.0) - expected.contigs_ge_1mb_frac).abs() < 1e-12);
         prop_assert!((observed.get("bases_ge_1kb_frac").copied().unwrap_or(-1.0) - expected.bases_ge_1kb_frac).abs() < 1e-12);
         prop_assert!((observed.get("bases_ge_10kb_frac").copied().unwrap_or(-1.0) - expected.bases_ge_10kb_frac).abs() < 1e-12);
         prop_assert!((observed.get("bases_ge_50kb_frac").copied().unwrap_or(-1.0) - expected.bases_ge_50kb_frac).abs() < 1e-12);
         prop_assert!((observed.get("bases_ge_100kb_frac").copied().unwrap_or(-1.0) - expected.bases_ge_100kb_frac).abs() < 1e-12);
+        prop_assert!((observed.get("bases_ge_1mb_frac").copied().unwrap_or(-1.0) - expected.bases_ge_1mb_frac).abs() < 1e-12);
         prop_assert_eq!(observed.get("acgt_bases").copied().unwrap_or(-1.0) as usize, expected.total_bases);
         prop_assert_eq!(observed.get("n_bases").copied().unwrap_or(-1.0), 0.0);
         prop_assert_eq!(observed.get("ambiguous_bases").copied().unwrap_or(-1.0), 0.0);
@@ -293,18 +310,22 @@ proptest! {
             "contigs_ge_10kb",
             "contigs_ge_50kb",
             "contigs_ge_100kb",
+            "contigs_ge_1mb",
             "bases_ge_1kb",
             "bases_ge_10kb",
             "bases_ge_50kb",
             "bases_ge_100kb",
+            "bases_ge_1mb",
             "contigs_ge_1kb_frac",
             "contigs_ge_10kb_frac",
             "contigs_ge_50kb_frac",
             "contigs_ge_100kb_frac",
+            "contigs_ge_1mb_frac",
             "bases_ge_1kb_frac",
             "bases_ge_10kb_frac",
             "bases_ge_50kb_frac",
             "bases_ge_100kb_frac",
+            "bases_ge_1mb_frac",
             "gc_content",
             "gc_content_acgt",
             "n_content",

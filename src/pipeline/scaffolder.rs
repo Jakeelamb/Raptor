@@ -45,18 +45,22 @@ pub struct ScaffoldStats {
     pub scaffolds_ge_10kb: usize,
     pub scaffolds_ge_50kb: usize,
     pub scaffolds_ge_100kb: usize,
+    pub scaffolds_ge_1mb: usize,
     pub bases_ge_1kb: usize,
     pub bases_ge_10kb: usize,
     pub bases_ge_50kb: usize,
     pub bases_ge_100kb: usize,
+    pub bases_ge_1mb: usize,
     pub scaffolds_ge_1kb_frac: f64,
     pub scaffolds_ge_10kb_frac: f64,
     pub scaffolds_ge_50kb_frac: f64,
     pub scaffolds_ge_100kb_frac: f64,
+    pub scaffolds_ge_1mb_frac: f64,
     pub bases_ge_1kb_frac: f64,
     pub bases_ge_10kb_frac: f64,
     pub bases_ge_50kb_frac: f64,
     pub bases_ge_100kb_frac: f64,
+    pub bases_ge_1mb_frac: f64,
     pub total_length: usize,
     pub total_gaps: usize,
 }
@@ -193,18 +197,22 @@ fn update_scaffold_continuity(stats: &mut ScaffoldStats, scaffold_lengths: &mut 
     stats.scaffolds_ge_10kb = continuity.contigs_ge_10kb;
     stats.scaffolds_ge_50kb = continuity.contigs_ge_50kb;
     stats.scaffolds_ge_100kb = continuity.contigs_ge_100kb;
+    stats.scaffolds_ge_1mb = continuity.contigs_ge_1mb;
     stats.bases_ge_1kb = continuity.bases_ge_1kb;
     stats.bases_ge_10kb = continuity.bases_ge_10kb;
     stats.bases_ge_50kb = continuity.bases_ge_50kb;
     stats.bases_ge_100kb = continuity.bases_ge_100kb;
+    stats.bases_ge_1mb = continuity.bases_ge_1mb;
     stats.scaffolds_ge_1kb_frac = continuity.contigs_ge_1kb_frac;
     stats.scaffolds_ge_10kb_frac = continuity.contigs_ge_10kb_frac;
     stats.scaffolds_ge_50kb_frac = continuity.contigs_ge_50kb_frac;
     stats.scaffolds_ge_100kb_frac = continuity.contigs_ge_100kb_frac;
+    stats.scaffolds_ge_1mb_frac = continuity.contigs_ge_1mb_frac;
     stats.bases_ge_1kb_frac = continuity.bases_ge_1kb_frac;
     stats.bases_ge_10kb_frac = continuity.bases_ge_10kb_frac;
     stats.bases_ge_50kb_frac = continuity.bases_ge_50kb_frac;
     stats.bases_ge_100kb_frac = continuity.bases_ge_100kb_frac;
+    stats.bases_ge_1mb_frac = continuity.bases_ge_1mb_frac;
 }
 
 /// A scaffold is a list of oriented contigs with gaps
@@ -754,6 +762,10 @@ mod tests {
         assert_eq!(stats.bases_ge_1kb, 0);
         assert_eq!(stats.scaffolds_ge_1kb_frac, 0.0);
         assert_eq!(stats.bases_ge_1kb_frac, 0.0);
+        assert_eq!(stats.scaffolds_ge_1mb, 0);
+        assert_eq!(stats.bases_ge_1mb, 0);
+        assert_eq!(stats.scaffolds_ge_1mb_frac, 0.0);
+        assert_eq!(stats.bases_ge_1mb_frac, 0.0);
     }
 
     #[test]
@@ -766,18 +778,22 @@ mod tests {
         assert_eq!(stats.scaffolds_ge_10kb, 0);
         assert_eq!(stats.scaffolds_ge_50kb, 0);
         assert_eq!(stats.scaffolds_ge_100kb, 0);
+        assert_eq!(stats.scaffolds_ge_1mb, 0);
         assert_eq!(stats.bases_ge_1kb, 3_200);
         assert_eq!(stats.bases_ge_10kb, 0);
         assert_eq!(stats.bases_ge_50kb, 0);
         assert_eq!(stats.bases_ge_100kb, 0);
+        assert_eq!(stats.bases_ge_1mb, 0);
         assert!((stats.scaffolds_ge_1kb_frac - 0.5).abs() < 1e-12);
         assert_eq!(stats.scaffolds_ge_10kb_frac, 0.0);
         assert_eq!(stats.scaffolds_ge_50kb_frac, 0.0);
         assert_eq!(stats.scaffolds_ge_100kb_frac, 0.0);
+        assert_eq!(stats.scaffolds_ge_1mb_frac, 0.0);
         assert!((stats.bases_ge_1kb_frac - (3_200.0 / 4_400.0)).abs() < 1e-12);
         assert_eq!(stats.bases_ge_10kb_frac, 0.0);
         assert_eq!(stats.bases_ge_50kb_frac, 0.0);
         assert_eq!(stats.bases_ge_100kb_frac, 0.0);
+        assert_eq!(stats.bases_ge_1mb_frac, 0.0);
     }
 
     fn make_link(a: usize, b: usize, support_count: usize) -> ContigLink {

@@ -23,18 +23,22 @@ pub struct TranscriptStats {
     pub contigs_ge_10kb: usize,
     pub contigs_ge_50kb: usize,
     pub contigs_ge_100kb: usize,
+    pub contigs_ge_1mb: usize,
     pub bases_ge_1kb: usize,
     pub bases_ge_10kb: usize,
     pub bases_ge_50kb: usize,
     pub bases_ge_100kb: usize,
+    pub bases_ge_1mb: usize,
     pub contigs_ge_1kb_frac: f64,
     pub contigs_ge_10kb_frac: f64,
     pub contigs_ge_50kb_frac: f64,
     pub contigs_ge_100kb_frac: f64,
+    pub contigs_ge_1mb_frac: f64,
     pub bases_ge_1kb_frac: f64,
     pub bases_ge_10kb_frac: f64,
     pub bases_ge_50kb_frac: f64,
     pub bases_ge_100kb_frac: f64,
+    pub bases_ge_1mb_frac: f64,
 }
 
 #[inline]
@@ -64,18 +68,22 @@ fn empty_transcript_stats() -> TranscriptStats {
         contigs_ge_10kb: 0,
         contigs_ge_50kb: 0,
         contigs_ge_100kb: 0,
+        contigs_ge_1mb: 0,
         bases_ge_1kb: 0,
         bases_ge_10kb: 0,
         bases_ge_50kb: 0,
         bases_ge_100kb: 0,
+        bases_ge_1mb: 0,
         contigs_ge_1kb_frac: 0.0,
         contigs_ge_10kb_frac: 0.0,
         contigs_ge_50kb_frac: 0.0,
         contigs_ge_100kb_frac: 0.0,
+        contigs_ge_1mb_frac: 0.0,
         bases_ge_1kb_frac: 0.0,
         bases_ge_10kb_frac: 0.0,
         bases_ge_50kb_frac: 0.0,
         bases_ge_100kb_frac: 0.0,
+        bases_ge_1mb_frac: 0.0,
     }
 }
 
@@ -237,10 +245,12 @@ struct LengthBuckets {
     contigs_ge_10kb: usize,
     contigs_ge_50kb: usize,
     contigs_ge_100kb: usize,
+    contigs_ge_1mb: usize,
     bases_ge_1kb: usize,
     bases_ge_10kb: usize,
     bases_ge_50kb: usize,
     bases_ge_100kb: usize,
+    bases_ge_1mb: usize,
 }
 
 #[inline]
@@ -262,6 +272,10 @@ fn compute_length_buckets(lengths: &[usize]) -> LengthBuckets {
                     if len >= 100_000 {
                         buckets.contigs_ge_100kb += 1;
                         buckets.bases_ge_100kb = buckets.bases_ge_100kb.saturating_add(len);
+                        if len >= 1_000_000 {
+                            buckets.contigs_ge_1mb += 1;
+                            buckets.bases_ge_1mb = buckets.bases_ge_1mb.saturating_add(len);
+                        }
                     }
                 }
             }
@@ -301,17 +315,24 @@ pub fn evaluate_lengths_sorted_desc(sorted_lengths: &[usize]) -> TranscriptStats
     let contigs_ge_10kb_frac = length_buckets.contigs_ge_10kb as f64 / total_contigs_f;
     let contigs_ge_50kb_frac = length_buckets.contigs_ge_50kb as f64 / total_contigs_f;
     let contigs_ge_100kb_frac = length_buckets.contigs_ge_100kb as f64 / total_contigs_f;
-    let (bases_ge_1kb_frac, bases_ge_10kb_frac, bases_ge_50kb_frac, bases_ge_100kb_frac) =
-        if total_len > 0 {
-            (
-                length_buckets.bases_ge_1kb as f64 / total_bases_f,
-                length_buckets.bases_ge_10kb as f64 / total_bases_f,
-                length_buckets.bases_ge_50kb as f64 / total_bases_f,
-                length_buckets.bases_ge_100kb as f64 / total_bases_f,
-            )
-        } else {
-            (0.0, 0.0, 0.0, 0.0)
-        };
+    let contigs_ge_1mb_frac = length_buckets.contigs_ge_1mb as f64 / total_contigs_f;
+    let (
+        bases_ge_1kb_frac,
+        bases_ge_10kb_frac,
+        bases_ge_50kb_frac,
+        bases_ge_100kb_frac,
+        bases_ge_1mb_frac,
+    ) = if total_len > 0 {
+        (
+            length_buckets.bases_ge_1kb as f64 / total_bases_f,
+            length_buckets.bases_ge_10kb as f64 / total_bases_f,
+            length_buckets.bases_ge_50kb as f64 / total_bases_f,
+            length_buckets.bases_ge_100kb as f64 / total_bases_f,
+            length_buckets.bases_ge_1mb as f64 / total_bases_f,
+        )
+    } else {
+        (0.0, 0.0, 0.0, 0.0, 0.0)
+    };
 
     TranscriptStats {
         total: sorted_lengths.len(),
@@ -338,18 +359,22 @@ pub fn evaluate_lengths_sorted_desc(sorted_lengths: &[usize]) -> TranscriptStats
         contigs_ge_10kb: length_buckets.contigs_ge_10kb,
         contigs_ge_50kb: length_buckets.contigs_ge_50kb,
         contigs_ge_100kb: length_buckets.contigs_ge_100kb,
+        contigs_ge_1mb: length_buckets.contigs_ge_1mb,
         bases_ge_1kb: length_buckets.bases_ge_1kb,
         bases_ge_10kb: length_buckets.bases_ge_10kb,
         bases_ge_50kb: length_buckets.bases_ge_50kb,
         bases_ge_100kb: length_buckets.bases_ge_100kb,
+        bases_ge_1mb: length_buckets.bases_ge_1mb,
         contigs_ge_1kb_frac,
         contigs_ge_10kb_frac,
         contigs_ge_50kb_frac,
         contigs_ge_100kb_frac,
+        contigs_ge_1mb_frac,
         bases_ge_1kb_frac,
         bases_ge_10kb_frac,
         bases_ge_50kb_frac,
         bases_ge_100kb_frac,
+        bases_ge_1mb_frac,
     }
 }
 
@@ -409,18 +434,22 @@ mod tests {
         assert_eq!(stats.contigs_ge_10kb, 0);
         assert_eq!(stats.contigs_ge_50kb, 0);
         assert_eq!(stats.contigs_ge_100kb, 0);
+        assert_eq!(stats.contigs_ge_1mb, 0);
         assert_eq!(stats.bases_ge_1kb, 0);
         assert_eq!(stats.bases_ge_10kb, 0);
         assert_eq!(stats.bases_ge_50kb, 0);
         assert_eq!(stats.bases_ge_100kb, 0);
+        assert_eq!(stats.bases_ge_1mb, 0);
         assert_eq!(stats.contigs_ge_1kb_frac, 0.0);
         assert_eq!(stats.contigs_ge_10kb_frac, 0.0);
         assert_eq!(stats.contigs_ge_50kb_frac, 0.0);
         assert_eq!(stats.contigs_ge_100kb_frac, 0.0);
+        assert_eq!(stats.contigs_ge_1mb_frac, 0.0);
         assert_eq!(stats.bases_ge_1kb_frac, 0.0);
         assert_eq!(stats.bases_ge_10kb_frac, 0.0);
         assert_eq!(stats.bases_ge_50kb_frac, 0.0);
         assert_eq!(stats.bases_ge_100kb_frac, 0.0);
+        assert_eq!(stats.bases_ge_1mb_frac, 0.0);
     }
 
     #[test]
@@ -439,18 +468,22 @@ mod tests {
         assert_eq!(stats.contigs_ge_10kb, 2);
         assert_eq!(stats.contigs_ge_50kb, 1);
         assert_eq!(stats.contigs_ge_100kb, 0);
+        assert_eq!(stats.contigs_ge_1mb, 0);
         assert_eq!(stats.bases_ge_1kb, 61_000);
         assert_eq!(stats.bases_ge_10kb, 60_000);
         assert_eq!(stats.bases_ge_50kb, 50_000);
         assert_eq!(stats.bases_ge_100kb, 0);
+        assert_eq!(stats.bases_ge_1mb, 0);
         assert!((stats.contigs_ge_1kb_frac - 0.75).abs() < 1e-12);
         assert!((stats.contigs_ge_10kb_frac - 0.5).abs() < 1e-12);
         assert!((stats.contigs_ge_50kb_frac - 0.25).abs() < 1e-12);
         assert_eq!(stats.contigs_ge_100kb_frac, 0.0);
+        assert_eq!(stats.contigs_ge_1mb_frac, 0.0);
         assert!((stats.bases_ge_1kb_frac - (61_000.0 / 61_999.0)).abs() < 1e-12);
         assert!((stats.bases_ge_10kb_frac - (60_000.0 / 61_999.0)).abs() < 1e-12);
         assert!((stats.bases_ge_50kb_frac - (50_000.0 / 61_999.0)).abs() < 1e-12);
         assert_eq!(stats.bases_ge_100kb_frac, 0.0);
+        assert_eq!(stats.bases_ge_1mb_frac, 0.0);
     }
 
     #[test]
@@ -460,6 +493,19 @@ mod tests {
         assert_eq!(stats.bases_ge_100kb, 100_000);
         assert!((stats.contigs_ge_100kb_frac - (1.0 / 3.0)).abs() < 1e-12);
         assert!((stats.bases_ge_100kb_frac - (100_000.0 / 200_999.0)).abs() < 1e-12);
+        assert_eq!(stats.contigs_ge_1mb, 0);
+        assert_eq!(stats.bases_ge_1mb, 0);
+        assert_eq!(stats.contigs_ge_1mb_frac, 0.0);
+        assert_eq!(stats.bases_ge_1mb_frac, 0.0);
+    }
+
+    #[test]
+    fn evaluate_lengths_reports_1mb_bucket_counts_and_spans() {
+        let stats = evaluate_lengths(&[1_500_000, 900_000, 100_000]);
+        assert_eq!(stats.contigs_ge_1mb, 1);
+        assert_eq!(stats.bases_ge_1mb, 1_500_000);
+        assert!((stats.contigs_ge_1mb_frac - (1.0 / 3.0)).abs() < 1e-12);
+        assert!((stats.bases_ge_1mb_frac - (1_500_000.0 / 2_500_000.0)).abs() < 1e-12);
     }
 
     #[test]
@@ -518,10 +564,12 @@ mod tests {
         assert_eq!(observed.contigs_ge_10kb, expected.contigs_ge_10kb);
         assert_eq!(observed.contigs_ge_50kb, expected.contigs_ge_50kb);
         assert_eq!(observed.contigs_ge_100kb, expected.contigs_ge_100kb);
+        assert_eq!(observed.contigs_ge_1mb, expected.contigs_ge_1mb);
         assert_eq!(observed.bases_ge_1kb, expected.bases_ge_1kb);
         assert_eq!(observed.bases_ge_10kb, expected.bases_ge_10kb);
         assert_eq!(observed.bases_ge_50kb, expected.bases_ge_50kb);
         assert_eq!(observed.bases_ge_100kb, expected.bases_ge_100kb);
+        assert_eq!(observed.bases_ge_1mb, expected.bases_ge_1mb);
     }
 
     #[test]
@@ -578,17 +626,21 @@ mod tests {
         assert_eq!(stats.contigs_ge_10kb, 0);
         assert_eq!(stats.contigs_ge_50kb, 0);
         assert_eq!(stats.contigs_ge_100kb, 0);
+        assert_eq!(stats.contigs_ge_1mb, 0);
         assert_eq!(stats.bases_ge_1kb, 0);
         assert_eq!(stats.bases_ge_10kb, 0);
         assert_eq!(stats.bases_ge_50kb, 0);
         assert_eq!(stats.bases_ge_100kb, 0);
+        assert_eq!(stats.bases_ge_1mb, 0);
         assert_eq!(stats.contigs_ge_1kb_frac, 0.0);
         assert_eq!(stats.contigs_ge_10kb_frac, 0.0);
         assert_eq!(stats.contigs_ge_50kb_frac, 0.0);
         assert_eq!(stats.contigs_ge_100kb_frac, 0.0);
+        assert_eq!(stats.contigs_ge_1mb_frac, 0.0);
         assert_eq!(stats.bases_ge_1kb_frac, 0.0);
         assert_eq!(stats.bases_ge_10kb_frac, 0.0);
         assert_eq!(stats.bases_ge_50kb_frac, 0.0);
         assert_eq!(stats.bases_ge_100kb_frac, 0.0);
+        assert_eq!(stats.bases_ge_1mb_frac, 0.0);
     }
 }

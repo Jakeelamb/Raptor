@@ -54,18 +54,22 @@ pub struct Stats {
     pub contigs_ge_10kb: usize,
     pub contigs_ge_50kb: usize,
     pub contigs_ge_100kb: usize,
+    pub contigs_ge_1mb: usize,
     pub bases_ge_1kb: usize,
     pub bases_ge_10kb: usize,
     pub bases_ge_50kb: usize,
     pub bases_ge_100kb: usize,
+    pub bases_ge_1mb: usize,
     pub contigs_ge_1kb_frac: f64,
     pub contigs_ge_10kb_frac: f64,
     pub contigs_ge_50kb_frac: f64,
     pub contigs_ge_100kb_frac: f64,
+    pub contigs_ge_1mb_frac: f64,
     pub bases_ge_1kb_frac: f64,
     pub bases_ge_10kb_frac: f64,
     pub bases_ge_50kb_frac: f64,
     pub bases_ge_100kb_frac: f64,
+    pub bases_ge_1mb_frac: f64,
     // Graph-related stats
     pub path_count: Option<usize>,
     pub avg_path_length: Option<f64>,
@@ -358,18 +362,22 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         contigs_ge_10kb: length_stats.contigs_ge_10kb,
         contigs_ge_50kb: length_stats.contigs_ge_50kb,
         contigs_ge_100kb: length_stats.contigs_ge_100kb,
+        contigs_ge_1mb: length_stats.contigs_ge_1mb,
         bases_ge_1kb: length_stats.bases_ge_1kb,
         bases_ge_10kb: length_stats.bases_ge_10kb,
         bases_ge_50kb: length_stats.bases_ge_50kb,
         bases_ge_100kb: length_stats.bases_ge_100kb,
+        bases_ge_1mb: length_stats.bases_ge_1mb,
         contigs_ge_1kb_frac: length_stats.contigs_ge_1kb_frac,
         contigs_ge_10kb_frac: length_stats.contigs_ge_10kb_frac,
         contigs_ge_50kb_frac: length_stats.contigs_ge_50kb_frac,
         contigs_ge_100kb_frac: length_stats.contigs_ge_100kb_frac,
+        contigs_ge_1mb_frac: length_stats.contigs_ge_1mb_frac,
         bases_ge_1kb_frac: length_stats.bases_ge_1kb_frac,
         bases_ge_10kb_frac: length_stats.bases_ge_10kb_frac,
         bases_ge_50kb_frac: length_stats.bases_ge_50kb_frac,
         bases_ge_100kb_frac: length_stats.bases_ge_100kb_frac,
+        bases_ge_1mb_frac: length_stats.bases_ge_1mb_frac,
         path_count: None,
         avg_path_length: None,
         branch_count: None,
@@ -510,18 +518,22 @@ mod tests {
         assert_eq!(stats.contigs_ge_10kb, 0);
         assert_eq!(stats.contigs_ge_50kb, 0);
         assert_eq!(stats.contigs_ge_100kb, 0);
+        assert_eq!(stats.contigs_ge_1mb, 0);
         assert_eq!(stats.bases_ge_1kb, 0);
         assert_eq!(stats.bases_ge_10kb, 0);
         assert_eq!(stats.bases_ge_50kb, 0);
         assert_eq!(stats.bases_ge_100kb, 0);
+        assert_eq!(stats.bases_ge_1mb, 0);
         assert_eq!(stats.contigs_ge_1kb_frac, 0.0);
         assert_eq!(stats.contigs_ge_10kb_frac, 0.0);
         assert_eq!(stats.contigs_ge_50kb_frac, 0.0);
         assert_eq!(stats.contigs_ge_100kb_frac, 0.0);
+        assert_eq!(stats.contigs_ge_1mb_frac, 0.0);
         assert_eq!(stats.bases_ge_1kb_frac, 0.0);
         assert_eq!(stats.bases_ge_10kb_frac, 0.0);
         assert_eq!(stats.bases_ge_50kb_frac, 0.0);
         assert_eq!(stats.bases_ge_100kb_frac, 0.0);
+        assert_eq!(stats.bases_ge_1mb_frac, 0.0);
     }
 
     #[test]
@@ -582,18 +594,22 @@ mod tests {
         assert_eq!(stats.contigs_ge_10kb, 0);
         assert_eq!(stats.contigs_ge_50kb, 0);
         assert_eq!(stats.contigs_ge_100kb, 0);
+        assert_eq!(stats.contigs_ge_1mb, 0);
         assert_eq!(stats.bases_ge_1kb, 0);
         assert_eq!(stats.bases_ge_10kb, 0);
         assert_eq!(stats.bases_ge_50kb, 0);
         assert_eq!(stats.bases_ge_100kb, 0);
+        assert_eq!(stats.bases_ge_1mb, 0);
         assert_eq!(stats.contigs_ge_1kb_frac, 0.0);
         assert_eq!(stats.contigs_ge_10kb_frac, 0.0);
         assert_eq!(stats.contigs_ge_50kb_frac, 0.0);
         assert_eq!(stats.contigs_ge_100kb_frac, 0.0);
+        assert_eq!(stats.contigs_ge_1mb_frac, 0.0);
         assert_eq!(stats.bases_ge_1kb_frac, 0.0);
         assert_eq!(stats.bases_ge_10kb_frac, 0.0);
         assert_eq!(stats.bases_ge_50kb_frac, 0.0);
         assert_eq!(stats.bases_ge_100kb_frac, 0.0);
+        assert_eq!(stats.bases_ge_1mb_frac, 0.0);
     }
 
     #[test]
@@ -613,18 +629,22 @@ mod tests {
         assert_eq!(stats.contigs_ge_10kb, 2);
         assert_eq!(stats.contigs_ge_50kb, 1);
         assert_eq!(stats.contigs_ge_100kb, 0);
+        assert_eq!(stats.contigs_ge_1mb, 0);
         assert_eq!(stats.bases_ge_1kb, 61_000);
         assert_eq!(stats.bases_ge_10kb, 60_000);
         assert_eq!(stats.bases_ge_50kb, 50_000);
         assert_eq!(stats.bases_ge_100kb, 0);
+        assert_eq!(stats.bases_ge_1mb, 0);
         assert!((stats.contigs_ge_1kb_frac - 0.75).abs() < 1e-12);
         assert!((stats.contigs_ge_10kb_frac - 0.5).abs() < 1e-12);
         assert!((stats.contigs_ge_50kb_frac - 0.25).abs() < 1e-12);
         assert_eq!(stats.contigs_ge_100kb_frac, 0.0);
+        assert_eq!(stats.contigs_ge_1mb_frac, 0.0);
         assert!((stats.bases_ge_1kb_frac - (61_000.0 / 61_999.0)).abs() < 1e-12);
         assert!((stats.bases_ge_10kb_frac - (60_000.0 / 61_999.0)).abs() < 1e-12);
         assert!((stats.bases_ge_50kb_frac - (50_000.0 / 61_999.0)).abs() < 1e-12);
         assert_eq!(stats.bases_ge_100kb_frac, 0.0);
+        assert_eq!(stats.bases_ge_1mb_frac, 0.0);
     }
 
     #[test]
@@ -640,6 +660,27 @@ mod tests {
         assert_eq!(stats.bases_ge_100kb, 100_000);
         assert!((stats.contigs_ge_100kb_frac - 0.5).abs() < 1e-12);
         assert!((stats.bases_ge_100kb_frac - (100_000.0 / 199_999.0)).abs() < 1e-12);
+        assert_eq!(stats.contigs_ge_1mb, 0);
+        assert_eq!(stats.bases_ge_1mb, 0);
+        assert_eq!(stats.contigs_ge_1mb_frac, 0.0);
+        assert_eq!(stats.bases_ge_1mb_frac, 0.0);
+    }
+
+    #[test]
+    fn test_calculate_stats_reports_1mb_bucket_metrics() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, ">contig_1").unwrap();
+        writeln!(file, "{}", "A".repeat(1_500_000)).unwrap();
+        writeln!(file, ">contig_2").unwrap();
+        writeln!(file, "{}", "C".repeat(900_000)).unwrap();
+        writeln!(file, ">contig_3").unwrap();
+        writeln!(file, "{}", "G".repeat(100_000)).unwrap();
+
+        let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(stats.contigs_ge_1mb, 1);
+        assert_eq!(stats.bases_ge_1mb, 1_500_000);
+        assert!((stats.contigs_ge_1mb_frac - (1.0 / 3.0)).abs() < 1e-12);
+        assert!((stats.bases_ge_1mb_frac - (1_500_000.0 / 2_500_000.0)).abs() < 1e-12);
     }
 
     #[test]
@@ -694,18 +735,22 @@ mod tests {
             contigs_ge_10kb: 0,
             contigs_ge_50kb: 0,
             contigs_ge_100kb: 0,
+            contigs_ge_1mb: 0,
             bases_ge_1kb: 0,
             bases_ge_10kb: 0,
             bases_ge_50kb: 0,
             bases_ge_100kb: 0,
+            bases_ge_1mb: 0,
             contigs_ge_1kb_frac: 0.0,
             contigs_ge_10kb_frac: 0.0,
             contigs_ge_50kb_frac: 0.0,
             contigs_ge_100kb_frac: 0.0,
+            contigs_ge_1mb_frac: 0.0,
             bases_ge_1kb_frac: 0.0,
             bases_ge_10kb_frac: 0.0,
             bases_ge_50kb_frac: 0.0,
             bases_ge_100kb_frac: 0.0,
+            bases_ge_1mb_frac: 0.0,
             path_count: None,
             avg_path_length: None,
             branch_count: None,

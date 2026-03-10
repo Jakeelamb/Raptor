@@ -35,18 +35,22 @@ pub const TRANSCRIPT_STATS_KEYS: &[&str] = &[
     "contigs_ge_10kb",
     "contigs_ge_50kb",
     "contigs_ge_100kb",
+    "contigs_ge_1mb",
     "bases_ge_1kb",
     "bases_ge_10kb",
     "bases_ge_50kb",
     "bases_ge_100kb",
+    "bases_ge_1mb",
     "contigs_ge_1kb_frac",
     "contigs_ge_10kb_frac",
     "contigs_ge_50kb_frac",
     "contigs_ge_100kb_frac",
+    "contigs_ge_1mb_frac",
     "bases_ge_1kb_frac",
     "bases_ge_10kb_frac",
     "bases_ge_50kb_frac",
     "bases_ge_100kb_frac",
+    "bases_ge_1mb_frac",
     "non_finite_confidence_count",
     "length_field_mismatch_count",
     "mean_confidence",
@@ -499,6 +503,11 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
     );
     set_transcript_stat(
         &mut stats,
+        "contigs_ge_1mb",
+        length_metrics.contigs_ge_1mb as f64,
+    );
+    set_transcript_stat(
+        &mut stats,
         "bases_ge_1kb",
         length_metrics.bases_ge_1kb as f64,
     );
@@ -516,6 +525,11 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
         &mut stats,
         "bases_ge_100kb",
         length_metrics.bases_ge_100kb as f64,
+    );
+    set_transcript_stat(
+        &mut stats,
+        "bases_ge_1mb",
+        length_metrics.bases_ge_1mb as f64,
     );
     set_transcript_stat(
         &mut stats,
@@ -539,6 +553,11 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
     );
     set_transcript_stat(
         &mut stats,
+        "contigs_ge_1mb_frac",
+        length_metrics.contigs_ge_1mb_frac,
+    );
+    set_transcript_stat(
+        &mut stats,
         "bases_ge_1kb_frac",
         length_metrics.bases_ge_1kb_frac,
     );
@@ -556,6 +575,11 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
         &mut stats,
         "bases_ge_100kb_frac",
         length_metrics.bases_ge_100kb_frac,
+    );
+    set_transcript_stat(
+        &mut stats,
+        "bases_ge_1mb_frac",
+        length_metrics.bases_ge_1mb_frac,
     );
 
     let non_finite_confidence_count = transcripts.len() - finite_confidence_count;
