@@ -209,10 +209,10 @@ fn main() {
                 }
                 "tsv" => {
                     println!(
-                        "contigs\ttotal_len\tavg_len\tn50\tn75\tn90\tn95\tl50\tl90\tl95\taun\tlongest"
+                        "contigs\ttotal_len\tavg_len\tn50\tn75\tn90\tn95\tn99\tl50\tl90\tl95\tl99\taun\tlongest"
                     );
                     println!(
-                        "{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}",
+                        "{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}",
                         stats.total_contigs,
                         stats.total_length,
                         stats.average_length,
@@ -220,9 +220,11 @@ fn main() {
                         stats.n75,
                         stats.n90,
                         stats.n95,
+                        stats.n99,
                         stats.l50,
                         stats.l90,
                         stats.l95,
+                        stats.l99,
                         stats.au_n,
                         stats.longest_contig
                     );

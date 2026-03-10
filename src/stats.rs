@@ -12,9 +12,11 @@ pub struct Stats {
     pub n75: usize,
     pub n90: usize,
     pub n95: usize,
+    pub n99: usize,
     pub l50: usize,
     pub l90: usize,
     pub l95: usize,
+    pub l99: usize,
     pub au_n: f64,
     pub longest_contig: usize,
     // Graph-related stats
@@ -57,9 +59,11 @@ pub fn calculate_stats(path: &str) -> Stats {
         n75: length_stats.n75,
         n90: length_stats.n90,
         n95: length_stats.n95,
+        n99: length_stats.n99,
         l50: length_stats.l50,
         l90: length_stats.l90,
         l95: length_stats.l95,
+        l99: length_stats.l99,
         au_n: length_stats.au_n,
         longest_contig: length_stats.longest,
         path_count: None,
@@ -121,9 +125,11 @@ mod tests {
         assert_eq!(stats.n75, 20);
         assert_eq!(stats.n90, 20);
         assert_eq!(stats.n95, 4);
+        assert_eq!(stats.n99, 4);
         assert_eq!(stats.l50, 1);
         assert_eq!(stats.l90, 2);
         assert_eq!(stats.l95, 3);
+        assert_eq!(stats.l99, 3);
         assert!((stats.au_n - 20.6666666667).abs() < 1e-6);
         assert_eq!(stats.longest_contig, 24);
     }
@@ -144,9 +150,11 @@ mod tests {
         assert_eq!(stats.n75, 12);
         assert_eq!(stats.n90, 4);
         assert_eq!(stats.n95, 4);
+        assert_eq!(stats.n99, 4);
         assert_eq!(stats.l50, 1);
         assert_eq!(stats.l90, 2);
         assert_eq!(stats.l95, 2);
+        assert_eq!(stats.l99, 2);
         assert!((stats.au_n - 10.0).abs() < 1e-6);
         assert_eq!(stats.longest_contig, 12);
     }

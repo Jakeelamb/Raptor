@@ -6,9 +6,11 @@ pub struct TranscriptStats {
     pub n75: usize,
     pub n90: usize,
     pub n95: usize,
+    pub n99: usize,
     pub l50: usize,
     pub l90: usize,
     pub l95: usize,
+    pub l99: usize,
     pub au_n: f64,
     pub longest: usize,
 }
@@ -63,9 +65,11 @@ pub fn evaluate_lengths(lengths: &[usize]) -> TranscriptStats {
             n75: 0,
             n90: 0,
             n95: 0,
+            n99: 0,
             l50: 0,
             l90: 0,
             l95: 0,
+            l99: 0,
             au_n: 0.0,
             longest: 0,
         };
@@ -82,6 +86,7 @@ pub fn evaluate_lengths(lengths: &[usize]) -> TranscriptStats {
     let (n75, _) = nx_lx(&sorted_lengths, total_len, 3, 4);
     let (n90, l90) = nx_lx(&sorted_lengths, total_len, 9, 10);
     let (n95, l95) = nx_lx(&sorted_lengths, total_len, 19, 20);
+    let (n99, l99) = nx_lx(&sorted_lengths, total_len, 99, 100);
     let au_n = compute_au_n(&sorted_lengths, total_len);
     let longest = sorted_lengths.first().copied().unwrap_or(0);
 
@@ -93,9 +98,11 @@ pub fn evaluate_lengths(lengths: &[usize]) -> TranscriptStats {
         n75,
         n90,
         n95,
+        n99,
         l50,
         l90,
         l95,
+        l99,
         au_n,
         longest,
     }
@@ -115,9 +122,11 @@ mod tests {
         assert_eq!(stats.n75, 20);
         assert_eq!(stats.n90, 20);
         assert_eq!(stats.n95, 4);
+        assert_eq!(stats.n99, 4);
         assert_eq!(stats.l50, 1);
         assert_eq!(stats.l90, 2);
         assert_eq!(stats.l95, 3);
+        assert_eq!(stats.l99, 3);
         assert!((stats.au_n - 20.6666666667).abs() < 1e-6);
         assert_eq!(stats.longest, 24);
     }

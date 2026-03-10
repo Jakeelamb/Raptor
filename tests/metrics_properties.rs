@@ -35,8 +35,10 @@ proptest! {
         prop_assert!(stats.n50 >= stats.n75);
         prop_assert!(stats.n75 >= stats.n90);
         prop_assert!(stats.n90 >= stats.n95);
+        prop_assert!(stats.n95 >= stats.n99);
         prop_assert!(stats.l50 <= stats.l90);
         prop_assert!(stats.l90 <= stats.l95);
+        prop_assert!(stats.l95 <= stats.l99);
         prop_assert!(stats.longest >= stats.n50);
         prop_assert!(stats.au_n + 1e-9 >= stats.avg_length);
         prop_assert!(stats.au_n <= stats.longest as f64 + 1e-9);
@@ -60,9 +62,11 @@ proptest! {
         prop_assert_eq!(observed.n75, baseline.n75);
         prop_assert_eq!(observed.n90, baseline.n90);
         prop_assert_eq!(observed.n95, baseline.n95);
+        prop_assert_eq!(observed.n99, baseline.n99);
         prop_assert_eq!(observed.l50, baseline.l50);
         prop_assert_eq!(observed.l90, baseline.l90);
         prop_assert_eq!(observed.l95, baseline.l95);
+        prop_assert_eq!(observed.l99, baseline.l99);
         prop_assert_eq!(observed.longest, baseline.longest);
         prop_assert!((observed.avg_length - baseline.avg_length).abs() < 1e-12);
         prop_assert!((observed.au_n - baseline.au_n).abs() < 1e-12);
@@ -84,9 +88,11 @@ proptest! {
         prop_assert_eq!(observed.get("n75").copied().unwrap_or(-1.0) as usize, expected.n75);
         prop_assert_eq!(observed.get("n90").copied().unwrap_or(-1.0) as usize, expected.n90);
         prop_assert_eq!(observed.get("n95").copied().unwrap_or(-1.0) as usize, expected.n95);
+        prop_assert_eq!(observed.get("n99").copied().unwrap_or(-1.0) as usize, expected.n99);
         prop_assert_eq!(observed.get("l50").copied().unwrap_or(-1.0) as usize, expected.l50);
         prop_assert_eq!(observed.get("l90").copied().unwrap_or(-1.0) as usize, expected.l90);
         prop_assert_eq!(observed.get("l95").copied().unwrap_or(-1.0) as usize, expected.l95);
+        prop_assert_eq!(observed.get("l99").copied().unwrap_or(-1.0) as usize, expected.l99);
         prop_assert!((observed.get("au_n").copied().unwrap_or(-1.0) - expected.au_n).abs() < 1e-12);
 
         let mut shuffled = lengths.clone();
@@ -95,7 +101,21 @@ proptest! {
         let shuffled_transcripts = transcripts_from_lengths(&shuffled);
         let shuffled_stats = calculate_transcript_stats(&shuffled_transcripts);
 
-        for key in ["count", "total_length", "mean_length", "n50", "n75", "n90", "n95", "l50", "l90", "l95", "au_n"] {
+        for key in [
+            "count",
+            "total_length",
+            "mean_length",
+            "n50",
+            "n75",
+            "n90",
+            "n95",
+            "n99",
+            "l50",
+            "l90",
+            "l95",
+            "l99",
+            "au_n",
+        ] {
             let lhs = observed.get(key).copied().unwrap_or(f64::NAN);
             let rhs = shuffled_stats.get(key).copied().unwrap_or(f64::NAN);
             prop_assert!((lhs - rhs).abs() < 1e-12, "metric `{}` differed after permutation: {} vs {}", key, lhs, rhs);
