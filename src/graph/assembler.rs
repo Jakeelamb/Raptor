@@ -599,12 +599,86 @@ pub fn collapse_bubble(adjacency: &mut AdjacencyTableU64, bubble: &Bubble) -> bo
         &bubble.path1
     };
 
-    // Remove k-mers from the low-coverage path
-    for kmer in path_to_remove {
-        remove_kmer_from_graph(adjacency, *kmer);
+    remove_bubble_path_edges(adjacency, bubble.start, bubble.end, path_to_remove)
+}
+
+#[inline]
+fn remove_bubble_path_edges(
+    adjacency: &mut AdjacencyTableU64,
+    start: u64,
+    end: u64,
+    path: &[u64],
+) -> bool {
+    let mut removed_any = false;
+
+    if path.is_empty() {
+        removed_any |= remove_directed_edge(adjacency, start, end);
+        return removed_any;
     }
 
-    true
+    let mut previous = start;
+    for &node in path {
+        removed_any |= remove_directed_edge(adjacency, previous, node);
+        previous = node;
+    }
+    removed_any |= remove_directed_edge(adjacency, previous, end);
+
+    // Remove now-isolated path nodes only; preserve shared nodes used elsewhere.
+    for &node in path {
+        prune_node_if_isolated(adjacency, node);
+    }
+
+    removed_any
+}
+
+#[inline]
+fn remove_directed_edge(adjacency: &mut AdjacencyTableU64, from: u64, to: u64) -> bool {
+    let mut removed = false;
+
+    if let Some(successors) = adjacency.forward.get_mut(&from) {
+        let before = successors.len();
+        successors.retain(|(next, _)| *next != to);
+        removed |= successors.len() != before;
+    }
+    if adjacency
+        .forward
+        .get(&from)
+        .is_some_and(std::vec::Vec::is_empty)
+    {
+        adjacency.forward.remove(&from);
+    }
+
+    if let Some(predecessors) = adjacency.backward.get_mut(&to) {
+        let before = predecessors.len();
+        predecessors.retain(|(pred, _)| *pred != from);
+        removed |= predecessors.len() != before;
+    }
+    if adjacency
+        .backward
+        .get(&to)
+        .is_some_and(std::vec::Vec::is_empty)
+    {
+        adjacency.backward.remove(&to);
+    }
+
+    removed
+}
+
+#[inline]
+fn prune_node_if_isolated(adjacency: &mut AdjacencyTableU64, node: u64) {
+    let has_successors = adjacency
+        .forward
+        .get(&node)
+        .is_some_and(|neighbors| !neighbors.is_empty());
+    let has_predecessors = adjacency
+        .backward
+        .get(&node)
+        .is_some_and(|neighbors| !neighbors.is_empty());
+
+    if !has_successors && !has_predecessors {
+        adjacency.forward.remove(&node);
+        adjacency.backward.remove(&node);
+    }
 }
 
 #[inline]
@@ -895,6 +969,51 @@ mod tests {
         // Reconvergence node must remain in the graph after collapsing one branch.
         assert!(adjacency.get_predecessors(acc).is_some());
         assert!(!adjacency.get_predecessors(acc).unwrap().is_empty());
+    }
+
+    #[test]
+    fn collapse_bubble_preserves_external_edges_of_removed_path_nodes() {
+        let k = 3;
+        let taa = encode_kmer("TAA").unwrap();
+        let aaa = encode_kmer("AAA").unwrap();
+        let aac = encode_kmer("AAC").unwrap();
+        let aag = encode_kmer("AAG").unwrap();
+        let acc = encode_kmer("ACC").unwrap();
+
+        let mut counts = AHashMap::new();
+        counts.insert(taa, 7);
+        counts.insert(aaa, 20);
+        counts.insert(aac, 9);
+        counts.insert(aag, 9);
+        counts.insert(acc, 20);
+
+        let mut adjacency = AdjacencyTableU64::new(k as u8);
+        adjacency.add_edge(taa, aag, 7); // External support to the lower-priority branch node.
+        adjacency.add_edge(aaa, aac, 9);
+        adjacency.add_edge(aaa, aag, 9);
+        adjacency.add_edge(aac, acc, 9);
+        adjacency.add_edge(aag, acc, 9);
+
+        let bubbles = detect_bubbles(&adjacency, &counts, k, 8);
+        assert_eq!(bubbles.len(), 1);
+        assert_eq!(bubbles[0].path1.first().copied(), Some(aac));
+        assert_eq!(bubbles[0].path2.first().copied(), Some(aag));
+
+        assert!(collapse_bubble(&mut adjacency, &bubbles[0]));
+        assert!(!collapse_bubble(&mut adjacency, &bubbles[0]));
+
+        // Bubble edge is removed.
+        let start_successors = adjacency.get_successors(aaa).cloned().unwrap_or_default();
+        assert_eq!(start_successors, vec![(aac, 9)]);
+
+        // External edge into removed path node is preserved.
+        let taa_successors = adjacency.get_successors(taa).cloned().unwrap_or_default();
+        assert_eq!(taa_successors, vec![(aag, 7)]);
+        assert!(adjacency.get_predecessors(aag).is_some());
+
+        // Reconvergence is still reachable from surviving path.
+        let acc_predecessors = adjacency.get_predecessors(acc).cloned().unwrap_or_default();
+        assert_eq!(acc_predecessors, vec![(aac, 9)]);
     }
 
     #[test]
