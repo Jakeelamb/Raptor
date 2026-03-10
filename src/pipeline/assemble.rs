@@ -234,6 +234,23 @@ fn sequence_only_record(record: FastqRecord) -> FastqRecord {
     }
 }
 
+const ESTIMATED_RECORDS_PER_MB: usize = 5_000;
+const DEFAULT_SEQUENCE_CAPACITY: usize = 100_000;
+const MIN_SEQUENCE_CAPACITY: usize = 10_000;
+const MAX_SEQUENCE_CAPACITY: usize = 2_000_000;
+
+#[inline]
+fn estimate_sequence_capacity(file_size_bytes: Option<u64>) -> usize {
+    let estimated = file_size_bytes
+        .map(|bytes| {
+            let mb = (bytes / (1024 * 1024)).min(usize::MAX as u64) as usize;
+            mb.saturating_mul(ESTIMATED_RECORDS_PER_MB)
+        })
+        .unwrap_or(DEFAULT_SEQUENCE_CAPACITY);
+
+    estimated.clamp(MIN_SEQUENCE_CAPACITY, MAX_SEQUENCE_CAPACITY)
+}
+
 pub fn assemble_reads(
     input_path: &str,
     output_path: &str,
@@ -339,14 +356,10 @@ pub fn assemble_reads_with_gpu(
     info!("Streaming FASTQ records for k-mer counting...");
     let reader = try_open_fastq(input_path)?;
 
-    // Pre-size sequences vector based on estimated count
-    // Estimate: assume average 4 lines per record, ~200 bytes per line for typical FASTQ
-    // This reduces reallocation overhead by 10-15%
-    const ESTIMATED_RECORDS_PER_MB: usize = 5000;
-    let estimated_count = std::fs::metadata(input_path)
-        .map(|m| (m.len() as usize / (1024 * 1024)) * ESTIMATED_RECORDS_PER_MB)
-        .unwrap_or(100_000)
-        .max(10_000); // At least 10k capacity
+    // Pre-size sequences vector based on file size, with hard caps to avoid
+    // pathological over-allocation for very large inputs.
+    let estimated_count =
+        estimate_sequence_capacity(std::fs::metadata(input_path).ok().map(|m| m.len()));
 
     let mut sequences: Vec<String> = Vec::with_capacity(estimated_count);
     // First pass: collect sequences for k optimization (sample if large)
@@ -964,8 +977,9 @@ fn derive_contig_expression_map(
 #[cfg(test)]
 mod tests {
     use super::{
-        assemble_reads_with_gpu, derive_contig_expression_map, sequence_only_record,
-        summarize_assembly_quality, write_assembly_quality_reports, AssemblyQualitySummary,
+        assemble_reads_with_gpu, derive_contig_expression_map, estimate_sequence_capacity,
+        sequence_only_record, summarize_assembly_quality, write_assembly_quality_reports,
+        AssemblyQualitySummary,
     };
     use crate::graph::assembler::Contig;
     use crate::io::fastq::FastqRecord;
@@ -1019,6 +1033,19 @@ mod tests {
         assert_eq!(compact.sequence, "ACGT");
         assert!(compact.plus.is_empty());
         assert!(compact.quality.is_empty());
+    }
+
+    #[test]
+    fn estimate_sequence_capacity_applies_floor_default_and_cap() {
+        // Tiny files keep a floor to avoid churn from repeated reallocations.
+        assert_eq!(estimate_sequence_capacity(Some(128 * 1024)), 10_000);
+
+        // Missing metadata falls back to a stable default.
+        assert_eq!(estimate_sequence_capacity(None), 100_000);
+
+        // Very large files are capped to avoid pathological pre-allocation.
+        let two_tb = 2_u64 * 1024 * 1024 * 1024 * 1024;
+        assert_eq!(estimate_sequence_capacity(Some(two_tb)), 2_000_000);
     }
 
     #[test]
