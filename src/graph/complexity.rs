@@ -1,3 +1,4 @@
+use crate::eval::metrics::evaluate_lengths;
 use petgraph::graphmap::DiGraphMap;
 use petgraph::visit::EdgeRef;
 use petgraph::Graph;
@@ -14,6 +15,18 @@ pub struct PathStats {
 
     /// Average path length in segments
     pub average_length: f64,
+
+    /// Median path length in segments
+    pub median_length: f64,
+
+    /// N50 of path lengths in segments
+    pub path_n50: usize,
+
+    /// N90 of path lengths in segments
+    pub path_n90: usize,
+
+    /// auN of path lengths in segments
+    pub path_au_n: f64,
 
     /// Number of shared segments (nodes with multiple incoming/outgoing edges)
     pub branch_count: usize,
@@ -62,10 +75,15 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
                 let path_segments = parts[2].to_string();
                 let path_segments: Vec<String> = path_segments
                     .split(',')
-                    .map(|s| s.trim_end_matches(|c| c == '+' || c == '-').to_string())
+                    .filter_map(|s| {
+                        let segment = s.trim_end_matches(|c| c == '+' || c == '-');
+                        (!segment.is_empty()).then(|| segment.to_string())
+                    })
                     .collect();
 
-                paths.push(path_segments);
+                if !path_segments.is_empty() {
+                    paths.push(path_segments);
+                }
             }
             _ => {}
         }
@@ -153,12 +171,9 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
     // Count bubbles (nodes with multiple paths that converge)
     let bubble_count = count_bubbles_simple(&digraph);
 
-    // Calculate average path length
-    let avg_length = if paths.is_empty() {
-        0.0
-    } else {
-        paths.iter().map(|p| p.len()).sum::<usize>() as f64 / paths.len() as f64
-    };
+    // Calculate path-length distribution metrics.
+    let path_lengths: Vec<usize> = paths.iter().map(|p| p.len()).collect();
+    let path_length_stats = evaluate_lengths(&path_lengths);
 
     // Calculate branchiness
     let branchiness = if segments.is_empty() {
@@ -169,7 +184,11 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
 
     Ok(PathStats {
         total_paths: paths.len(),
-        average_length: avg_length,
+        average_length: path_length_stats.avg_length,
+        median_length: path_length_stats.median_length,
+        path_n50: path_length_stats.n50,
+        path_n90: path_length_stats.n90,
+        path_au_n: path_length_stats.au_n,
         branch_count: branch_nodes.len(),
         max_depth,
         bubble_count,
@@ -348,6 +367,11 @@ mod tests {
 
         // Verify stats
         assert_eq!(stats.total_paths, 3);
+        assert!((stats.average_length - (7.0 / 3.0)).abs() < 1e-12);
+        assert_eq!(stats.median_length, 2.0);
+        assert_eq!(stats.path_n50, 2);
+        assert_eq!(stats.path_n90, 2);
+        assert!((stats.path_au_n - (17.0 / 7.0)).abs() < 1e-12);
         // The branch count should be 3 because:
         // - Node 1 appears in two paths (path1, path2)
         // - Node 2 appears in two paths (path1, path3)
@@ -368,6 +392,11 @@ mod tests {
 
         let stats = compute_path_stats(temp_file.path().to_str().unwrap()).unwrap();
         assert_eq!(stats.total_paths, 1);
+        assert_eq!(stats.average_length, 3.0);
+        assert_eq!(stats.median_length, 3.0);
+        assert_eq!(stats.path_n50, 3);
+        assert_eq!(stats.path_n90, 3);
+        assert_eq!(stats.path_au_n, 3.0);
         assert_eq!(stats.branch_count, 0);
         assert_eq!(stats.max_depth, 2);
         assert_eq!(stats.bubble_count, 0);
@@ -386,9 +415,32 @@ mod tests {
 
         let stats = compute_path_stats(temp_file.path().to_str().unwrap()).unwrap();
         assert_eq!(stats.total_paths, 1);
+        assert_eq!(stats.average_length, 2.0);
+        assert_eq!(stats.median_length, 2.0);
+        assert_eq!(stats.path_n50, 2);
+        assert_eq!(stats.path_n90, 2);
+        assert_eq!(stats.path_au_n, 2.0);
         assert_eq!(stats.branch_count, 0);
         assert_eq!(stats.max_depth, 1);
         assert_eq!(stats.bubble_count, 0);
+    }
+
+    #[test]
+    fn test_compute_path_stats_ignores_empty_path_records() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "H\tVN:Z:1.0").unwrap();
+        writeln!(temp_file, "S\t1\tAAAA").unwrap();
+        writeln!(temp_file, "S\t2\tCCCC").unwrap();
+        writeln!(temp_file, "P\tempty\t\t*").unwrap();
+        writeln!(temp_file, "P\tvalid\t1+,2+\t*").unwrap();
+
+        let stats = compute_path_stats(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(stats.total_paths, 1);
+        assert_eq!(stats.average_length, 2.0);
+        assert_eq!(stats.median_length, 2.0);
+        assert_eq!(stats.path_n50, 2);
+        assert_eq!(stats.path_n90, 2);
+        assert_eq!(stats.path_au_n, 2.0);
     }
 
     #[test]

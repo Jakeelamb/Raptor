@@ -205,6 +205,10 @@ fn main() {
                     println!("Graph analysis:");
                     println!("  Total paths: {}", graph_stats.total_paths);
                     println!("  Average path length: {:.2}", graph_stats.average_length);
+                    println!("  Median path length: {:.2}", graph_stats.median_length);
+                    println!("  Path N50: {}", graph_stats.path_n50);
+                    println!("  Path N90: {}", graph_stats.path_n90);
+                    println!("  Path auN: {:.2}", graph_stats.path_au_n);
                     println!("  Shared segments (branches): {}", graph_stats.branch_count);
                     println!("  Max graph depth: {}", graph_stats.max_depth);
                     println!("  Bubble count: {}", graph_stats.bubble_count);

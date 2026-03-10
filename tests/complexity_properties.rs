@@ -90,6 +90,10 @@ proptest! {
         prop_assert_eq!(stats_a.max_depth, stats_b.max_depth);
         prop_assert_eq!(stats_a.bubble_count, stats_b.bubble_count);
         prop_assert!((stats_a.average_length - stats_b.average_length).abs() < 1e-12);
+        prop_assert!((stats_a.median_length - stats_b.median_length).abs() < 1e-12);
+        prop_assert_eq!(stats_a.path_n50, stats_b.path_n50);
+        prop_assert_eq!(stats_a.path_n90, stats_b.path_n90);
+        prop_assert!((stats_a.path_au_n - stats_b.path_au_n).abs() < 1e-12);
         prop_assert!((stats_a.branchiness - stats_b.branchiness).abs() < 1e-12);
     }
 
@@ -144,6 +148,10 @@ proptest! {
         prop_assert_eq!(stats_with_duplicates.max_depth, stats_deduped.max_depth);
         prop_assert_eq!(stats_with_duplicates.bubble_count, stats_deduped.bubble_count);
         prop_assert!((stats_with_duplicates.average_length - stats_deduped.average_length).abs() < 1e-12);
+        prop_assert!((stats_with_duplicates.median_length - stats_deduped.median_length).abs() < 1e-12);
+        prop_assert_eq!(stats_with_duplicates.path_n50, stats_deduped.path_n50);
+        prop_assert_eq!(stats_with_duplicates.path_n90, stats_deduped.path_n90);
+        prop_assert!((stats_with_duplicates.path_au_n - stats_deduped.path_au_n).abs() < 1e-12);
         prop_assert!((stats_with_duplicates.branchiness - stats_deduped.branchiness).abs() < 1e-12);
     }
 }

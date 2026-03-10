@@ -47,6 +47,10 @@ pub struct Stats {
     pub graph_max_depth: Option<usize>,
     pub graph_bubble_count: Option<usize>,
     pub graph_branchiness: Option<f64>,
+    pub graph_path_median_length: Option<f64>,
+    pub graph_path_n50: Option<usize>,
+    pub graph_path_n90: Option<usize>,
+    pub graph_path_au_n: Option<f64>,
 }
 
 pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
@@ -124,6 +128,10 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         graph_max_depth: None,
         graph_bubble_count: None,
         graph_branchiness: None,
+        graph_path_median_length: None,
+        graph_path_n50: None,
+        graph_path_n90: None,
+        graph_path_au_n: None,
     })
 }
 
@@ -155,6 +163,10 @@ pub fn update_with_graph_stats(
     stats.graph_max_depth = Some(graph_stats.max_depth);
     stats.graph_bubble_count = Some(graph_stats.bubble_count);
     stats.graph_branchiness = Some(graph_stats.branchiness);
+    stats.graph_path_median_length = Some(graph_stats.median_length);
+    stats.graph_path_n50 = Some(graph_stats.path_n50);
+    stats.graph_path_n90 = Some(graph_stats.path_n90);
+    stats.graph_path_au_n = Some(graph_stats.path_au_n);
 }
 
 #[cfg(test)]
@@ -349,10 +361,18 @@ mod tests {
             graph_max_depth: None,
             graph_bubble_count: None,
             graph_branchiness: None,
+            graph_path_median_length: None,
+            graph_path_n50: None,
+            graph_path_n90: None,
+            graph_path_au_n: None,
         };
         let graph_stats = crate::graph::complexity::PathStats {
             total_paths: 7,
             average_length: 3.5,
+            median_length: 3.0,
+            path_n50: 4,
+            path_n90: 2,
+            path_au_n: 3.2,
             branch_count: 2,
             max_depth: 5,
             bubble_count: 1,
@@ -367,6 +387,10 @@ mod tests {
         assert_eq!(stats.graph_max_depth, Some(5));
         assert_eq!(stats.graph_bubble_count, Some(1));
         assert_eq!(stats.graph_branchiness, Some(0.4));
+        assert_eq!(stats.graph_path_median_length, Some(3.0));
+        assert_eq!(stats.graph_path_n50, Some(4));
+        assert_eq!(stats.graph_path_n90, Some(2));
+        assert_eq!(stats.graph_path_au_n, Some(3.2));
     }
 
     #[test]
