@@ -16,3 +16,4 @@ pub mod simplify;
 pub mod stats;
 pub mod stitch;
 pub mod transcript;
+pub mod traverser;
