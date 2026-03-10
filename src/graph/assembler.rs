@@ -106,8 +106,7 @@ pub fn greedy_assembly(
                     match &best_next {
                         None => best_next = Some((next.clone(), *count)),
                         Some((best_kmer, best_count)) => {
-                            if *count > *best_count || (*count == *best_count && next < best_kmer)
-                            {
+                            if *count > *best_count || (*count == *best_count && next < best_kmer) {
                                 best_next = Some((next.clone(), *count));
                             }
                         }
