@@ -18,6 +18,7 @@ pub struct TranscriptStats {
     pub l95: usize,
     pub l99: usize,
     pub au_n: f64,
+    pub effective_count: f64,
     pub longest: usize,
     pub contigs_ge_1kb: usize,
     pub contigs_ge_10kb: usize,
@@ -63,6 +64,7 @@ fn empty_transcript_stats() -> TranscriptStats {
         l95: 0,
         l99: 0,
         au_n: 0.0,
+        effective_count: 0.0,
         longest: 0,
         contigs_ge_1kb: 0,
         contigs_ge_10kb: 0,
@@ -307,6 +309,11 @@ pub fn evaluate_lengths_sorted_desc(sorted_lengths: &[usize]) -> TranscriptStats
     let (n95, l95) = nx_lx[5];
     let (n99, l99) = nx_lx[6];
     let au_n = compute_au_n(sorted_lengths, total_len);
+    let effective_count = if au_n > 0.0 {
+        total_len as f64 / au_n
+    } else {
+        0.0
+    };
     let longest = sorted_lengths.first().copied().unwrap_or(0);
     let length_buckets = compute_length_buckets(sorted_lengths);
     let total_contigs_f = sorted_lengths.len() as f64;
@@ -354,6 +361,7 @@ pub fn evaluate_lengths_sorted_desc(sorted_lengths: &[usize]) -> TranscriptStats
         l95,
         l99,
         au_n,
+        effective_count,
         longest,
         contigs_ge_1kb: length_buckets.contigs_ge_1kb,
         contigs_ge_10kb: length_buckets.contigs_ge_10kb,
@@ -429,6 +437,7 @@ mod tests {
         assert_eq!(stats.l95, 3);
         assert_eq!(stats.l99, 3);
         assert!((stats.au_n - 20.6666666667).abs() < 1e-6);
+        assert!((stats.effective_count - (48.0 / 20.6666666667)).abs() < 1e-6);
         assert_eq!(stats.longest, 24);
         assert_eq!(stats.contigs_ge_1kb, 0);
         assert_eq!(stats.contigs_ge_10kb, 0);
@@ -621,6 +630,7 @@ mod tests {
         assert_eq!(stats.l95, 0);
         assert_eq!(stats.l99, 0);
         assert_eq!(stats.au_n, 0.0);
+        assert_eq!(stats.effective_count, 0.0);
         assert_eq!(stats.longest, 0);
         assert_eq!(stats.contigs_ge_1kb, 0);
         assert_eq!(stats.contigs_ge_10kb, 0);

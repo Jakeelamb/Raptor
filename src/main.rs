@@ -227,7 +227,7 @@ fn main() {
                 }
                 "tsv" => {
                     println!(
-                        "contigs\ttotal_len\tavg_len\tmedian_len\tgc_bases\tacgt_bases\tn_bases\tambiguous_bases\tmean_rle_ratio\tlength_weighted_rle_ratio\ttotal_rle_runs\tgc_content\tn_content\tambiguous_content\tn10\tn25\tn50\tn75\tn90\tn95\tn99\tl10\tl25\tl50\tl75\tl90\tl95\tl99\taun\tlongest\tcontigs_ge_1kb\tcontigs_ge_10kb\tcontigs_ge_50kb\tcontigs_ge_100kb\tcontigs_ge_1mb\tbases_ge_1kb\tbases_ge_10kb\tbases_ge_50kb\tbases_ge_100kb\tbases_ge_1mb\tcontigs_ge_1kb_frac\tcontigs_ge_10kb_frac\tcontigs_ge_50kb_frac\tcontigs_ge_100kb_frac\tcontigs_ge_1mb_frac\tbases_ge_1kb_frac\tbases_ge_10kb_frac\tbases_ge_50kb_frac\tbases_ge_100kb_frac\tbases_ge_1mb_frac\tn_run_count\tmax_n_run\tcontigs_with_n\tcontigs_with_ambiguous\tcontigs_all_acgt\tcontigs_with_n_frac\tcontigs_with_ambiguous_frac\tcontigs_all_acgt_frac"
+                        "contigs\ttotal_len\tavg_len\tmedian_len\tgc_bases\tacgt_bases\tn_bases\tambiguous_bases\tmean_rle_ratio\tlength_weighted_rle_ratio\ttotal_rle_runs\tgc_content\tn_content\tambiguous_content\tn10\tn25\tn50\tn75\tn90\tn95\tn99\tl10\tl25\tl50\tl75\tl90\tl95\tl99\taun\teffective_contig_count\tungapped_effective_contig_count\tlongest\tcontigs_ge_1kb\tcontigs_ge_10kb\tcontigs_ge_50kb\tcontigs_ge_100kb\tcontigs_ge_1mb\tbases_ge_1kb\tbases_ge_10kb\tbases_ge_50kb\tbases_ge_100kb\tbases_ge_1mb\tcontigs_ge_1kb_frac\tcontigs_ge_10kb_frac\tcontigs_ge_50kb_frac\tcontigs_ge_100kb_frac\tcontigs_ge_1mb_frac\tbases_ge_1kb_frac\tbases_ge_10kb_frac\tbases_ge_50kb_frac\tbases_ge_100kb_frac\tbases_ge_1mb_frac\tn_run_count\tmax_n_run\tcontigs_with_n\tcontigs_with_ambiguous\tcontigs_all_acgt\tcontigs_with_n_frac\tcontigs_with_ambiguous_frac\tcontigs_all_acgt_frac"
                     );
                     let row = vec![
                         stats.total_contigs.to_string(),
@@ -259,6 +259,8 @@ fn main() {
                         stats.l95.to_string(),
                         stats.l99.to_string(),
                         format!("{:.2}", stats.au_n),
+                        format!("{:.6}", stats.effective_contig_count),
+                        format!("{:.6}", stats.ungapped_effective_contig_count),
                         stats.longest_contig.to_string(),
                         stats.contigs_ge_1kb.to_string(),
                         stats.contigs_ge_10kb.to_string(),

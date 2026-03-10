@@ -35,8 +35,10 @@ struct AssemblyQualitySummary {
     l95: usize,
     l99: usize,
     au_n: f64,
+    effective_contig_count: f64,
     ungapped_n50: usize,
     ungapped_au_n: f64,
+    ungapped_effective_contig_count: f64,
     longest: usize,
     longest_frac: f64,
     gc_bases: usize,
@@ -272,8 +274,10 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
         l95: length_stats.l95,
         l99: length_stats.l99,
         au_n: length_stats.au_n,
+        effective_contig_count: length_stats.effective_count,
         ungapped_n50: ungapped_length_stats.n50,
         ungapped_au_n: ungapped_length_stats.au_n,
+        ungapped_effective_contig_count: ungapped_length_stats.effective_count,
         longest: length_stats.longest,
         longest_frac,
         gc_bases: composition.gc_bases,
@@ -363,8 +367,16 @@ fn write_assembly_quality_reports(
         ("l95", quality.l95.to_string()),
         ("l99", quality.l99.to_string()),
         ("au_n", format!("{:.12}", quality.au_n)),
+        (
+            "effective_contig_count",
+            format!("{:.12}", quality.effective_contig_count),
+        ),
         ("ungapped_n50", quality.ungapped_n50.to_string()),
         ("ungapped_au_n", format!("{:.12}", quality.ungapped_au_n)),
+        (
+            "ungapped_effective_contig_count",
+            format!("{:.12}", quality.ungapped_effective_contig_count),
+        ),
         ("longest", quality.longest.to_string()),
         ("longest_frac", format!("{:.12}", quality.longest_frac)),
         ("gc_bases", quality.gc_bases.to_string()),
@@ -743,7 +755,7 @@ pub fn assemble_reads_with_gpu(
 
     let quality = summarize_assembly_quality(&contigs);
     info!(
-        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN: {:.1}, Ungapped bases/N50/auN: {}/{}/{:.1}, Longest: {} bp ({:.2}%), GC/N/Ambiguous bases: {}/{}/{} (fractions {:.2}%/{:.2}%/{:.2}%), Contigs with N/Ambiguous/All-ACGT: {}/{}/{} ({:.2}%/{:.2}%/{:.2}%), RLE mean/weighted runs ratio: {:.4}/{:.4} ({} runs), N-runs: count {}, max {}, mean {:.1} bp ({:.1} per 100kb), N/Ambiguous bases per 100kb: {:.1}/{:.1}, >=1kb/10kb/50kb/100kb/1mb contigs: {}/{}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%/{:.1}%)",
+        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN/effective count: {:.1}/{:.2}, Ungapped bases/N50/auN/effective count: {}/{}/{:.1}/{:.2}, Longest: {} bp ({:.2}%), GC/N/Ambiguous bases: {}/{}/{} (fractions {:.2}%/{:.2}%/{:.2}%), Contigs with N/Ambiguous/All-ACGT: {}/{}/{} ({:.2}%/{:.2}%/{:.2}%), RLE mean/weighted runs ratio: {:.4}/{:.4} ({} runs), N-runs: count {}, max {}, mean {:.1} bp ({:.1} per 100kb), N/Ambiguous bases per 100kb: {:.1}/{:.1}, >=1kb/10kb/50kb/100kb/1mb contigs: {}/{}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%/{:.1}%)",
         quality.total_contigs,
         quality.total_bases,
         quality.avg_length,
@@ -763,9 +775,11 @@ pub fn assemble_reads_with_gpu(
         quality.l95,
         quality.l99,
         quality.au_n,
+        quality.effective_contig_count,
         quality.ungapped_total_bases,
         quality.ungapped_n50,
         quality.ungapped_au_n,
+        quality.ungapped_effective_contig_count,
         quality.longest,
         quality.longest_frac * 100.0,
         quality.gc_bases,
@@ -1420,8 +1434,10 @@ mod tests {
         assert!((summary.longest_frac - (1.0 / 3.0)).abs() < 1e-12);
         assert!((summary.avg_length - 4.0).abs() < 1e-12);
         assert!((summary.au_n - 4.0).abs() < 1e-12);
+        assert!((summary.effective_contig_count - 3.0).abs() < 1e-12);
         assert_eq!(summary.ungapped_n50, 4);
         assert!((summary.ungapped_au_n - (41.0 / 11.0)).abs() < 1e-12);
+        assert!((summary.ungapped_effective_contig_count - (11.0 / (41.0 / 11.0))).abs() < 1e-12);
         assert_eq!(summary.gc_bases, 4);
         assert_eq!(summary.acgt_bases, 9);
         assert_eq!(summary.n_bases, 1);
@@ -1568,6 +1584,7 @@ mod tests {
         assert_eq!(summary.total_rle_runs, 5);
         assert_eq!(summary.ungapped_n50, 100_000);
         assert!((summary.ungapped_au_n - (12_601_000_000.0 / 161_000.0)).abs() < 1e-9);
+        assert!((summary.effective_contig_count - (161_999.0 / summary.au_n)).abs() < 1e-9);
     }
 
     #[test]
@@ -1717,8 +1734,10 @@ mod tests {
             l95: 5,
             l99: 5,
             au_n: 260.5,
+            effective_contig_count: 1234.0 / 260.5,
             ungapped_n50: 240,
             ungapped_au_n: 255.25,
+            ungapped_effective_contig_count: 1200.0 / 255.25,
             longest: 420,
             longest_frac: 0.340356564,
             gc_bases: 580,
@@ -1782,6 +1801,8 @@ mod tests {
         assert_eq!(parsed["ungapped_total_bases"], 1200);
         assert_eq!(parsed["ungapped_n50"], 240);
         assert_eq!(parsed["ungapped_au_n"], 255.25);
+        assert_eq!(parsed["effective_contig_count"], 1234.0 / 260.5);
+        assert_eq!(parsed["ungapped_effective_contig_count"], 1200.0 / 255.25);
         assert_eq!(parsed["l10"], 1);
         assert_eq!(parsed["l75"], 3);
         assert_eq!(parsed["acgt_bases"], 1100);
@@ -1814,6 +1835,8 @@ mod tests {
         assert!(tsv.contains("ungapped_total_bases\t1200"));
         assert!(tsv.contains("ungapped_n50\t240"));
         assert!(tsv.contains("ungapped_au_n\t255.250000000000"));
+        assert!(tsv.contains("effective_contig_count\t4.737044145873"));
+        assert!(tsv.contains("ungapped_effective_contig_count\t4.701273261508"));
         assert!(tsv.contains("l10\t1"));
         assert!(tsv.contains("l75\t3"));
         assert!(tsv.contains("acgt_bases\t1100"));

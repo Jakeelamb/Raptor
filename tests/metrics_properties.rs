@@ -47,6 +47,11 @@ proptest! {
         prop_assert!(stats.median_length <= stats.longest as f64 + 1e-9);
         prop_assert!(stats.au_n + 1e-9 >= stats.avg_length);
         prop_assert!(stats.au_n <= stats.longest as f64 + 1e-9);
+        prop_assert!(stats.effective_count >= 1.0 - 1e-9);
+        prop_assert!(stats.effective_count <= stats.total as f64 + 1e-9);
+        prop_assert!(
+            (stats.effective_count * stats.au_n - stats.total_bases as f64).abs() < 1e-6
+        );
         prop_assert!(stats.contigs_ge_50kb <= stats.contigs_ge_10kb);
         prop_assert!(stats.contigs_ge_100kb <= stats.contigs_ge_50kb);
         prop_assert!(stats.contigs_ge_1mb <= stats.contigs_ge_100kb);
@@ -129,6 +134,7 @@ proptest! {
         prop_assert!((observed.bases_ge_1mb_frac - baseline.bases_ge_1mb_frac).abs() < 1e-12);
         prop_assert!((observed.avg_length - baseline.avg_length).abs() < 1e-12);
         prop_assert!((observed.au_n - baseline.au_n).abs() < 1e-12);
+        prop_assert!((observed.effective_count - baseline.effective_count).abs() < 1e-12);
     }
 
     #[test]
@@ -156,6 +162,7 @@ proptest! {
             prop_assert_eq!(baseline.l99, 0);
             prop_assert_eq!(baseline.longest, 0);
             prop_assert_eq!(baseline.au_n, 0.0);
+            prop_assert_eq!(baseline.effective_count, 0.0);
             prop_assert_eq!(baseline.median_length, 0.0);
         }
 
@@ -202,6 +209,7 @@ proptest! {
         prop_assert!((observed.bases_ge_1mb_frac - baseline.bases_ge_1mb_frac).abs() < 1e-12);
         prop_assert!((observed.avg_length - baseline.avg_length).abs() < 1e-12);
         prop_assert!((observed.au_n - baseline.au_n).abs() < 1e-12);
+        prop_assert!((observed.effective_count - baseline.effective_count).abs() < 1e-12);
     }
 
     #[test]
@@ -231,8 +239,22 @@ proptest! {
         prop_assert_eq!(observed.get("l95").copied().unwrap_or(-1.0) as usize, expected.l95);
         prop_assert_eq!(observed.get("l99").copied().unwrap_or(-1.0) as usize, expected.l99);
         prop_assert!((observed.get("au_n").copied().unwrap_or(-1.0) - expected.au_n).abs() < 1e-12);
+        prop_assert!(
+            (observed.get("effective_count").copied().unwrap_or(-1.0) - expected.effective_count)
+                .abs()
+                < 1e-12
+        );
         prop_assert_eq!(observed.get("ungapped_n50").copied().unwrap_or(-1.0) as usize, expected.n50);
         prop_assert!((observed.get("ungapped_au_n").copied().unwrap_or(-1.0) - expected.au_n).abs() < 1e-12);
+        prop_assert!(
+            (observed
+                .get("ungapped_effective_count")
+                .copied()
+                .unwrap_or(-1.0)
+                - expected.effective_count)
+                .abs()
+                < 1e-12
+        );
         prop_assert_eq!(observed.get("contigs_ge_1kb").copied().unwrap_or(-1.0) as usize, expected.contigs_ge_1kb);
         prop_assert_eq!(observed.get("contigs_ge_10kb").copied().unwrap_or(-1.0) as usize, expected.contigs_ge_10kb);
         prop_assert_eq!(observed.get("contigs_ge_50kb").copied().unwrap_or(-1.0) as usize, expected.contigs_ge_50kb);
@@ -304,8 +326,10 @@ proptest! {
             "l95",
             "l99",
             "au_n",
+            "effective_count",
             "ungapped_n50",
             "ungapped_au_n",
+            "ungapped_effective_count",
             "contigs_ge_1kb",
             "contigs_ge_10kb",
             "contigs_ge_50kb",

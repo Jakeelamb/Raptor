@@ -29,8 +29,10 @@ pub const TRANSCRIPT_STATS_KEYS: &[&str] = &[
     "l95",
     "l99",
     "au_n",
+    "effective_count",
     "ungapped_n50",
     "ungapped_au_n",
+    "ungapped_effective_count",
     "contigs_ge_1kb",
     "contigs_ge_10kb",
     "contigs_ge_50kb",
@@ -477,10 +479,20 @@ pub fn calculate_transcript_stats(transcripts: &[Transcript]) -> HashMap<String,
     set_transcript_stat(&mut stats, "au_n", length_metrics.au_n);
     set_transcript_stat(
         &mut stats,
+        "effective_count",
+        length_metrics.effective_count,
+    );
+    set_transcript_stat(
+        &mut stats,
         "ungapped_n50",
         ungapped_length_metrics.n50 as f64,
     );
     set_transcript_stat(&mut stats, "ungapped_au_n", ungapped_length_metrics.au_n);
+    set_transcript_stat(
+        &mut stats,
+        "ungapped_effective_count",
+        ungapped_length_metrics.effective_count,
+    );
     set_transcript_stat(
         &mut stats,
         "contigs_ge_1kb",

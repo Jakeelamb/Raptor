@@ -41,6 +41,7 @@ pub struct Stats {
     pub n99: usize,
     pub ungapped_n50: usize,
     pub ungapped_au_n: f64,
+    pub ungapped_effective_contig_count: f64,
     pub l10: usize,
     pub l25: usize,
     pub l50: usize,
@@ -49,6 +50,7 @@ pub struct Stats {
     pub l95: usize,
     pub l99: usize,
     pub au_n: f64,
+    pub effective_contig_count: f64,
     pub longest_contig: usize,
     pub contigs_ge_1kb: usize,
     pub contigs_ge_10kb: usize,
@@ -349,6 +351,7 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         n99: length_stats.n99,
         ungapped_n50: ungapped_length_stats.n50,
         ungapped_au_n: ungapped_length_stats.au_n,
+        ungapped_effective_contig_count: ungapped_length_stats.effective_count,
         l10: length_stats.l10,
         l25: length_stats.l25,
         l50: length_stats.l50,
@@ -357,6 +360,7 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         l95: length_stats.l95,
         l99: length_stats.l99,
         au_n: length_stats.au_n,
+        effective_contig_count: length_stats.effective_count,
         longest_contig: length_stats.longest,
         contigs_ge_1kb: length_stats.contigs_ge_1kb,
         contigs_ge_10kb: length_stats.contigs_ge_10kb,
@@ -505,6 +509,7 @@ mod tests {
         assert_eq!(stats.n99, 4);
         assert_eq!(stats.ungapped_n50, 24);
         assert!((stats.ungapped_au_n - 20.6666666667).abs() < 1e-6);
+        assert!((stats.ungapped_effective_contig_count - (48.0 / 20.6666666667)).abs() < 1e-6);
         assert_eq!(stats.l10, 1);
         assert_eq!(stats.l25, 1);
         assert_eq!(stats.l50, 1);
@@ -513,6 +518,7 @@ mod tests {
         assert_eq!(stats.l95, 3);
         assert_eq!(stats.l99, 3);
         assert!((stats.au_n - 20.6666666667).abs() < 1e-6);
+        assert!((stats.effective_contig_count - (48.0 / 20.6666666667)).abs() < 1e-6);
         assert_eq!(stats.longest_contig, 24);
         assert_eq!(stats.contigs_ge_1kb, 0);
         assert_eq!(stats.contigs_ge_10kb, 0);
@@ -581,6 +587,7 @@ mod tests {
         assert_eq!(stats.n99, 4);
         assert_eq!(stats.ungapped_n50, 12);
         assert!((stats.ungapped_au_n - 10.0).abs() < 1e-6);
+        assert!((stats.ungapped_effective_contig_count - 1.6).abs() < 1e-12);
         assert_eq!(stats.l10, 1);
         assert_eq!(stats.l25, 1);
         assert_eq!(stats.l50, 1);
@@ -589,6 +596,7 @@ mod tests {
         assert_eq!(stats.l95, 2);
         assert_eq!(stats.l99, 2);
         assert!((stats.au_n - 10.0).abs() < 1e-6);
+        assert!((stats.effective_contig_count - 1.6).abs() < 1e-12);
         assert_eq!(stats.longest_contig, 12);
         assert_eq!(stats.contigs_ge_1kb, 0);
         assert_eq!(stats.contigs_ge_10kb, 0);
@@ -722,6 +730,7 @@ mod tests {
             n99: 0,
             ungapped_n50: 0,
             ungapped_au_n: 0.0,
+            ungapped_effective_contig_count: 0.0,
             l10: 0,
             l25: 0,
             l50: 0,
@@ -730,6 +739,7 @@ mod tests {
             l95: 0,
             l99: 0,
             au_n: 0.0,
+            effective_contig_count: 0.0,
             longest_contig: 0,
             contigs_ge_1kb: 0,
             contigs_ge_10kb: 0,
@@ -854,12 +864,14 @@ mod tests {
         assert_eq!(stats.contigs_all_acgt, 0);
         assert_eq!(stats.ungapped_n50, 4);
         assert!((stats.ungapped_au_n - 4.0).abs() < 1e-12);
+        assert!((stats.ungapped_effective_contig_count - 2.0).abs() < 1e-12);
         assert!((stats.gc_content - (4.0 / 7.0)).abs() < 1e-12);
         assert!((stats.n_content - (4.0 / 12.0)).abs() < 1e-12);
         assert!((stats.ambiguous_content - (1.0 / 12.0)).abs() < 1e-12);
         assert!((stats.contigs_with_n_frac - 0.5).abs() < 1e-12);
         assert!((stats.contigs_with_ambiguous_frac - 0.5).abs() < 1e-12);
         assert_eq!(stats.contigs_all_acgt_frac, 0.0);
+        assert!((stats.effective_contig_count - (12.0 / 6.6666666667)).abs() < 1e-6);
     }
 
     #[test]
@@ -1027,6 +1039,11 @@ mod tests {
             prop_assert_eq!(stats_a.n99, stats_b.n99);
             prop_assert_eq!(stats_a.ungapped_n50, stats_b.ungapped_n50);
             prop_assert!((stats_a.ungapped_au_n - stats_b.ungapped_au_n).abs() < 1e-12);
+            prop_assert!(
+                (stats_a.ungapped_effective_contig_count - stats_b.ungapped_effective_contig_count)
+                    .abs()
+                    < 1e-12
+            );
             prop_assert_eq!(stats_a.l10, stats_b.l10);
             prop_assert_eq!(stats_a.l25, stats_b.l25);
             prop_assert_eq!(stats_a.l50, stats_b.l50);
@@ -1043,6 +1060,9 @@ mod tests {
             prop_assert!((stats_a.contigs_with_ambiguous_frac - stats_b.contigs_with_ambiguous_frac).abs() < 1e-12);
             prop_assert!((stats_a.contigs_all_acgt_frac - stats_b.contigs_all_acgt_frac).abs() < 1e-12);
             prop_assert!((stats_a.au_n - stats_b.au_n).abs() < 1e-12);
+            prop_assert!(
+                (stats_a.effective_contig_count - stats_b.effective_contig_count).abs() < 1e-12
+            );
         }
     }
 }
