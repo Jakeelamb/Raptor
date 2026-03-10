@@ -92,4 +92,58 @@ proptest! {
         prop_assert!((stats_a.average_length - stats_b.average_length).abs() < 1e-12);
         prop_assert!((stats_a.branchiness - stats_b.branchiness).abs() < 1e-12);
     }
+
+    #[test]
+    fn compute_path_stats_is_invariant_to_duplicate_links(
+        segment_count in 1usize..=6,
+        link_items in prop::collection::vec((0usize..6, 0usize..6), 0..16),
+        path_items in prop::collection::vec(prop::collection::vec(0usize..6, 1..6), 0..8),
+        seed in any::<u64>()
+    ) {
+        let segments: Vec<String> = (0..segment_count).map(|i| (i + 1).to_string()).collect();
+
+        let mut links_with_duplicates = Vec::new();
+        let mut unique_links = BTreeSet::new();
+        for (from, to) in link_items {
+            if from < segment_count && to < segment_count && from != to {
+                links_with_duplicates.push((from, to));
+                if ((from + to) & 1) == 0 {
+                    links_with_duplicates.push((from, to));
+                }
+                unique_links.insert((from, to));
+            }
+        }
+        let dedup_links: Vec<(usize, usize)> = unique_links.into_iter().collect();
+
+        let mut paths = Vec::new();
+        for path in path_items {
+            let filtered: Vec<usize> = path
+                .into_iter()
+                .filter(|&node| node < segment_count)
+                .collect();
+            if !filtered.is_empty() {
+                paths.push(filtered);
+            }
+        }
+        if paths.is_empty() {
+            paths.push(vec![0]);
+        }
+
+        let file_with_duplicates = write_gfa(&segments, &links_with_duplicates, &paths, seed);
+        let file_deduped = write_gfa(&segments, &dedup_links, &paths, seed ^ 0xA73C_91E4_6B2F_D0C8);
+
+        let stats_with_duplicates = compute_path_stats(
+            file_with_duplicates.path().to_str().expect("utf8 path")
+        ).expect("compute stats with duplicate links");
+        let stats_deduped = compute_path_stats(
+            file_deduped.path().to_str().expect("utf8 path")
+        ).expect("compute stats with deduplicated links");
+
+        prop_assert_eq!(stats_with_duplicates.total_paths, stats_deduped.total_paths);
+        prop_assert_eq!(stats_with_duplicates.branch_count, stats_deduped.branch_count);
+        prop_assert_eq!(stats_with_duplicates.max_depth, stats_deduped.max_depth);
+        prop_assert_eq!(stats_with_duplicates.bubble_count, stats_deduped.bubble_count);
+        prop_assert!((stats_with_duplicates.average_length - stats_deduped.average_length).abs() < 1e-12);
+        prop_assert!((stats_with_duplicates.branchiness - stats_deduped.branchiness).abs() < 1e-12);
+    }
 }
