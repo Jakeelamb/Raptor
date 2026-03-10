@@ -3,7 +3,24 @@ use crate::io::fasta::try_open_fasta;
 use serde::Serialize;
 use std::io::BufRead;
 
-const TSV_HEADER: &str = "contigs\ttotal_len\tavg_len\tmedian_len\tgc_bases\tacgt_bases\tn_bases\tambiguous_bases\tmean_rle_ratio\tlength_weighted_rle_ratio\ttotal_rle_runs\tgc_content\tn_content\tambiguous_content\tn10\tn25\tn50\tn75\tn90\tn95\tn99\tl10\tl25\tl50\tl75\tl90\tl95\tl99\taun\teffective_contig_count\tungapped_effective_contig_count\tungapped_total_len\tungapped_n50\tungapped_aun\tlongest\tcontigs_ge_1kb\tcontigs_ge_10kb\tcontigs_ge_50kb\tcontigs_ge_100kb\tcontigs_ge_1mb\tbases_ge_1kb\tbases_ge_10kb\tbases_ge_50kb\tbases_ge_100kb\tbases_ge_1mb\tcontigs_ge_1kb_frac\tcontigs_ge_10kb_frac\tcontigs_ge_50kb_frac\tcontigs_ge_100kb_frac\tcontigs_ge_1mb_frac\tbases_ge_1kb_frac\tbases_ge_10kb_frac\tbases_ge_50kb_frac\tbases_ge_100kb_frac\tbases_ge_1mb_frac\tn_run_count\tmax_n_run\tmean_n_run_length\tn_runs_per_100kb\tn_bases_per_100kb\tambiguous_bases_per_100kb\tcontigs_with_n\tcontigs_with_ambiguous\tcontigs_all_acgt\tcontigs_with_n_frac\tcontigs_with_ambiguous_frac\tcontigs_all_acgt_frac";
+const TSV_HEADER: &str = concat!(
+    "contigs\ttotal_len\tavg_len\tmedian_len\tgc_bases\tacgt_bases\tn_bases\tambiguous_bases\t",
+    "mean_rle_ratio\tlength_weighted_rle_ratio\ttotal_rle_runs\tgc_content\tn_content\tambiguous_content\t",
+    "n10\tn25\tn50\tn75\tn90\tn95\tn99\tl10\tl25\tl50\tl75\tl90\tl95\tl99\taun\t",
+    "effective_contig_count\tungapped_effective_contig_count\tungapped_total_len\tungapped_n50\tungapped_aun\t",
+    "longest\tcontigs_ge_1kb\tcontigs_ge_10kb\tcontigs_ge_50kb\tcontigs_ge_100kb\tcontigs_ge_1mb\t",
+    "bases_ge_1kb\tbases_ge_10kb\tbases_ge_50kb\tbases_ge_100kb\tbases_ge_1mb\t",
+    "contigs_ge_1kb_frac\tcontigs_ge_10kb_frac\tcontigs_ge_50kb_frac\tcontigs_ge_100kb_frac\tcontigs_ge_1mb_frac\t",
+    "bases_ge_1kb_frac\tbases_ge_10kb_frac\tbases_ge_50kb_frac\tbases_ge_100kb_frac\tbases_ge_1mb_frac\t",
+    "n_run_count\tmax_n_run\tmean_n_run_length\tn_runs_per_100kb\tn_bases_per_100kb\tambiguous_bases_per_100kb\t",
+    "contigs_with_n\tcontigs_with_ambiguous\tcontigs_all_acgt\tcontigs_with_n_frac\t",
+    "contigs_with_ambiguous_frac\tcontigs_all_acgt_frac\t",
+    "path_count\tavg_path_length\tbranch_count\tgraph_max_depth\tgraph_bubble_count\tgraph_branchiness\t",
+    "graph_path_median_length\tgraph_path_n10\tgraph_path_n25\tgraph_path_n50\tgraph_path_n75\t",
+    "graph_path_n90\tgraph_path_n95\tgraph_path_n99\tgraph_path_l10\tgraph_path_l25\t",
+    "graph_path_l50\tgraph_path_l75\tgraph_path_l90\tgraph_path_l95\tgraph_path_l99\t",
+    "graph_path_au_n\tgraph_path_effective_count"
+);
 
 #[derive(Serialize)]
 pub struct Stats {
@@ -178,6 +195,20 @@ pub fn tsv_row(stats: &Stats) -> String {
             write!(&mut row, $($arg)*).expect("writing to String cannot fail");
         }};
     }
+    macro_rules! push_opt {
+        ($value:expr) => {{
+            match $value {
+                Some(v) => push_fmt!("{}", v),
+                None => push_fmt!(""),
+            }
+        }};
+        ($value:expr, $fmt:literal) => {{
+            match $value {
+                Some(v) => push_fmt!($fmt, v),
+                None => push_fmt!(""),
+            }
+        }};
+    }
 
     push_fmt!("{}", stats.total_contigs);
     push_fmt!("{}", stats.total_length);
@@ -246,6 +277,29 @@ pub fn tsv_row(stats: &Stats) -> String {
     push_fmt!("{:.6}", stats.contigs_with_n_frac);
     push_fmt!("{:.6}", stats.contigs_with_ambiguous_frac);
     push_fmt!("{:.6}", stats.contigs_all_acgt_frac);
+    push_opt!(stats.path_count);
+    push_opt!(stats.avg_path_length, "{:.6}");
+    push_opt!(stats.branch_count);
+    push_opt!(stats.graph_max_depth);
+    push_opt!(stats.graph_bubble_count);
+    push_opt!(stats.graph_branchiness, "{:.6}");
+    push_opt!(stats.graph_path_median_length, "{:.6}");
+    push_opt!(stats.graph_path_n10);
+    push_opt!(stats.graph_path_n25);
+    push_opt!(stats.graph_path_n50);
+    push_opt!(stats.graph_path_n75);
+    push_opt!(stats.graph_path_n90);
+    push_opt!(stats.graph_path_n95);
+    push_opt!(stats.graph_path_n99);
+    push_opt!(stats.graph_path_l10);
+    push_opt!(stats.graph_path_l25);
+    push_opt!(stats.graph_path_l50);
+    push_opt!(stats.graph_path_l75);
+    push_opt!(stats.graph_path_l90);
+    push_opt!(stats.graph_path_l95);
+    push_opt!(stats.graph_path_l99);
+    push_opt!(stats.graph_path_au_n, "{:.6}");
+    push_opt!(stats.graph_path_effective_count, "{:.6}");
 
     row
 }
@@ -741,6 +795,103 @@ mod tests {
         assert_eq!(
             row_by_name.get("ambiguous_bases_per_100kb").copied(),
             Some("12500.000000")
+        );
+    }
+
+    #[test]
+    fn stats_tsv_row_leaves_graph_columns_empty_without_graph_stats() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, ">contig_1").unwrap();
+        writeln!(file, "ACGT").unwrap();
+
+        let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
+        let header_cols: Vec<&str> = tsv_header().split('\t').collect();
+        let row = tsv_row(&stats);
+        let row_cols: Vec<&str> = row.split('\t').collect();
+        let row_by_name: HashMap<&str, &str> = header_cols
+            .iter()
+            .copied()
+            .zip(row_cols.iter().copied())
+            .collect();
+
+        assert_eq!(row_by_name.get("path_count").copied(), Some(""));
+        assert_eq!(row_by_name.get("avg_path_length").copied(), Some(""));
+        assert_eq!(row_by_name.get("graph_branchiness").copied(), Some(""));
+        assert_eq!(row_by_name.get("graph_path_n50").copied(), Some(""));
+        assert_eq!(
+            row_by_name.get("graph_path_effective_count").copied(),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn stats_tsv_row_reports_graph_columns_when_graph_stats_are_present() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, ">contig_1").unwrap();
+        writeln!(file, "ACGT").unwrap();
+
+        let mut stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
+        let graph_stats = crate::graph::complexity::PathStats {
+            total_paths: 7,
+            average_length: 3.5,
+            median_length: 3.0,
+            path_n10: 5,
+            path_n25: 4,
+            path_n50: 4,
+            path_n75: 3,
+            path_n90: 2,
+            path_n95: 2,
+            path_n99: 2,
+            path_l10: 1,
+            path_l25: 2,
+            path_l50: 3,
+            path_l75: 4,
+            path_l90: 6,
+            path_l95: 7,
+            path_l99: 7,
+            path_au_n: 3.2,
+            path_effective_count: 2.1875,
+            branch_count: 2,
+            max_depth: 5,
+            bubble_count: 1,
+            branchiness: 0.4,
+        };
+        update_with_graph_stats(&mut stats, &graph_stats);
+
+        let header_cols: Vec<&str> = tsv_header().split('\t').collect();
+        let row = tsv_row(&stats);
+        let row_cols: Vec<&str> = row.split('\t').collect();
+        let row_by_name: HashMap<&str, &str> = header_cols
+            .iter()
+            .copied()
+            .zip(row_cols.iter().copied())
+            .collect();
+
+        assert_eq!(row_by_name.get("path_count").copied(), Some("7"));
+        assert_eq!(
+            row_by_name.get("avg_path_length").copied(),
+            Some("3.500000")
+        );
+        assert_eq!(row_by_name.get("branch_count").copied(), Some("2"));
+        assert_eq!(row_by_name.get("graph_max_depth").copied(), Some("5"));
+        assert_eq!(row_by_name.get("graph_bubble_count").copied(), Some("1"));
+        assert_eq!(
+            row_by_name.get("graph_branchiness").copied(),
+            Some("0.400000")
+        );
+        assert_eq!(
+            row_by_name.get("graph_path_median_length").copied(),
+            Some("3.000000")
+        );
+        assert_eq!(row_by_name.get("graph_path_n50").copied(), Some("4"));
+        assert_eq!(row_by_name.get("graph_path_l90").copied(), Some("6"));
+        assert_eq!(
+            row_by_name.get("graph_path_au_n").copied(),
+            Some("3.200000")
+        );
+        assert_eq!(
+            row_by_name.get("graph_path_effective_count").copied(),
+            Some("2.187500")
         );
     }
 
