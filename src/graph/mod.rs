@@ -13,5 +13,6 @@ pub mod overlap;
 pub mod partition;
 pub mod polish;
 pub mod simplify;
+pub mod stats;
 pub mod stitch;
 pub mod transcript;
