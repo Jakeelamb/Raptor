@@ -841,7 +841,7 @@ pub fn assemble_reads_with_gpu(
     );
 
     // Write FASTA output
-    let mut writer = FastaWriter::new(output_path);
+    let mut writer = FastaWriter::try_new(output_path)?;
     for (i, contig) in contigs.iter().enumerate() {
         writer.write_contig(contig, i + 1)?;
 
@@ -1170,7 +1170,7 @@ pub fn assemble_reads_with_gpu(
             info!("Writing GFA to: {}", gfa_path);
 
             // Write GFA output
-            let mut gfa_writer = GfaWriter::new(&gfa_path);
+            let mut gfa_writer = GfaWriter::try_new(&gfa_path)?;
 
             if _use_rle {
                 gfa_writer.write_rle_segments(&contigs)?;
@@ -1195,7 +1195,7 @@ pub fn assemble_reads_with_gpu(
             info!("Writing GFA2 to: {}", gfa2_path);
 
             // Write GFA2 output
-            let mut gfa2_writer = Gfa2Writer::new(&gfa2_path);
+            let mut gfa2_writer = Gfa2Writer::try_new(&gfa2_path)?;
             gfa2_writer.write_segments(&contigs)?;
             gfa2_writer.write_links(&links)?;
             gfa2_writer.write_paths(&paths)?;
@@ -1932,6 +1932,52 @@ mod tests {
         )
         .expect_err("truncated FASTQ must return an error");
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn assemble_reads_with_gpu_rejects_directory_output_path() {
+        let mut input = NamedTempFile::new().expect("create input fastq");
+        writeln!(input, "@read_1").expect("write header");
+        writeln!(input, "ACGTACGT").expect("write sequence");
+        writeln!(input, "+").expect("write plus line");
+        writeln!(input, "IIIIIIII").expect("write quality");
+        input.flush().expect("flush input");
+
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let output_dir = temp_dir.path().join("out_dir");
+        std::fs::create_dir_all(&output_dir).expect("create output directory");
+
+        let err = assemble_reads_with_gpu(
+            input.path().to_str().expect("utf8 input path"),
+            output_dir.to_str().expect("utf8 output path"),
+            1,     // min_len
+            false, // output_gfa
+            false, // output_gfa2
+            false, // adaptive_k
+            false, // use_rle
+            false, // collapse_repeats
+            0,     // min_repeat_len
+            false, // polish
+            21,    // polish_window
+            false, // streaming
+            false, // export_metadata
+            None,  // json_metadata
+            None,  // tsv_metadata
+            false, // isoforms
+            None,  // gtf_path
+            None,  // gff3_path
+            100,   // max_path_depth
+            0.0,   // min_confidence
+            false, // compute_tpm
+            false, // polish_isoforms
+            None,  // samples_path
+            0.0,   // min_tpm
+            None,  // long_reads
+            false, // counts_matrix
+            false, // use_gpu
+        )
+        .expect_err("directory output path must return io::Error");
+        assert_eq!(err.kind(), io::ErrorKind::IsADirectory);
     }
 
     #[test]

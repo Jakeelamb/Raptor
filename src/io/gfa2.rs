@@ -12,24 +12,32 @@ pub struct Gfa2Writer {
 }
 
 impl Gfa2Writer {
-    pub fn new(path: &str) -> Self {
-        let file = File::create(path).expect("Failed to create GFA2 file");
+    pub fn try_new(path: &str) -> Result<Self> {
+        let file = File::create(path)?;
         let mut writer = BufWriter::new(file);
-        writeln!(writer, "H\tVN:Z:2.0").unwrap();
-        Self {
+        writeln!(writer, "H\tVN:Z:2.0")?;
+        Ok(Self {
             writer,
             coverage: None,
-        }
+        })
+    }
+
+    pub fn new(path: &str) -> Self {
+        Self::try_new(path).expect("Failed to create GFA2 file")
+    }
+
+    pub fn try_with_coverage(path: &str, coverage: HashMap<usize, f32>) -> Result<Self> {
+        let file = File::create(path)?;
+        let mut writer = BufWriter::new(file);
+        writeln!(writer, "H\tVN:Z:2.0")?;
+        Ok(Self {
+            writer,
+            coverage: Some(coverage),
+        })
     }
 
     pub fn with_coverage(path: &str, coverage: HashMap<usize, f32>) -> Self {
-        let file = File::create(path).expect("Failed to create GFA2 file");
-        let mut writer = BufWriter::new(file);
-        writeln!(writer, "H\tVN:Z:2.0").unwrap();
-        Self {
-            writer,
-            coverage: Some(coverage),
-        }
+        Self::try_with_coverage(path, coverage).expect("Failed to create GFA2 file")
     }
 
     /// Annotate segment with coverage + compression
@@ -123,5 +131,20 @@ impl Gfa2Writer {
             writeln!(self.writer, "O\tpath_{}\t{}\t*", path.id + 1, segs)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Gfa2Writer;
+    use tempfile::TempDir;
+
+    #[test]
+    fn gfa2_writer_try_new_rejects_directory_path() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        match Gfa2Writer::try_new(temp_dir.path().to_str().expect("utf8 path")) {
+            Ok(_) => panic!("directory output path must fail"),
+            Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::IsADirectory),
+        }
     }
 }

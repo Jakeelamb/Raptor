@@ -144,11 +144,15 @@ fn collect_segment_id_map(gfa_path: &str) -> Result<HashMap<String, usize>> {
 }
 
 impl GfaWriter {
-    pub fn new(output_path: &str) -> Self {
-        let file = File::create(output_path).expect("Could not create GFA file");
-        Self {
+    pub fn try_new(output_path: &str) -> Result<Self> {
+        let file = File::create(output_path)?;
+        Ok(Self {
             writer: BufWriter::new(file),
-        }
+        })
+    }
+
+    pub fn new(output_path: &str) -> Self {
+        Self::try_new(output_path).expect("Could not create GFA file")
     }
 
     /// Write segments (contigs)
@@ -320,7 +324,16 @@ mod tests {
     use crate::graph::assembler::Contig;
     use crate::graph::stitch::Path;
     use std::io::Write;
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, TempDir};
+
+    #[test]
+    fn gfa_writer_try_new_rejects_directory_path() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        match GfaWriter::try_new(temp_dir.path().to_str().expect("utf8 path")) {
+            Ok(_) => panic!("directory output path must fail"),
+            Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::IsADirectory),
+        }
+    }
 
     #[test]
     fn read_gfa_contigs_assigns_dense_ids_for_malformed_and_sparse_ids() {
