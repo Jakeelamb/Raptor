@@ -67,6 +67,20 @@ impl CpuBackend {
         }
     }
 
+    #[inline]
+    fn merge_u64_count_maps(
+        mut left: AHashMap<u64, u32>,
+        mut right: AHashMap<u64, u32>,
+    ) -> AHashMap<u64, u32> {
+        if left.len() < right.len() {
+            std::mem::swap(&mut left, &mut right);
+        }
+        for (kmer, count) in right {
+            *left.entry(kmer).or_insert(0) += count;
+        }
+        left
+    }
+
     /// Count k-mers using u64 encoding for maximum performance.
     /// Uses sliding window encoding to avoid redundant work.
     /// Zero allocations in the inner loop.
@@ -75,8 +89,8 @@ impl CpuBackend {
             return AHashMap::new();
         }
 
-        // Parallel k-mer counting with thread-local hashmaps
-        let thread_counts: Vec<AHashMap<u64, u32>> = sequences
+        // Parallel k-mer counting with thread-local hashmaps reduced in place.
+        sequences
             .par_iter()
             .fold(
                 || AHashMap::with_capacity(1024),
@@ -87,20 +101,7 @@ impl CpuBackend {
                     counts
                 },
             )
-            .collect();
-
-        // Pre-size the merged map
-        let total_estimate: usize = thread_counts.iter().map(|m| m.len()).sum();
-        let mut merged = AHashMap::with_capacity(total_estimate);
-
-        // Merge thread-local counts
-        for local in thread_counts {
-            for (kmer, count) in local {
-                *merged.entry(kmer).or_insert(0) += count;
-            }
-        }
-
-        merged
+            .reduce(AHashMap::new, Self::merge_u64_count_maps)
     }
 
     /// Count k-mers with Bloom filter pre-filtering to remove singletons.
@@ -188,7 +189,7 @@ impl CpuBackend {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // Pass 2: Count only k-mers that appear multiple times in Bloom filter
-        let thread_counts: Vec<AHashMap<u64, u32>> = sequences
+        sequences
             .par_iter()
             .fold(
                 || AHashMap::with_capacity(1024),
@@ -201,22 +202,10 @@ impl CpuBackend {
                     counts
                 },
             )
-            .collect();
-
-        // Merge thread-local counts
-        let total_estimate: usize = thread_counts.iter().map(|m| m.len()).sum();
-        let mut merged = AHashMap::with_capacity(total_estimate);
-
-        for local in thread_counts {
-            for (kmer, count) in local {
-                *merged.entry(kmer).or_insert(0) += count;
-            }
-        }
-
-        // Final filter: only keep k-mers with count >= min_count
-        merged.retain(|_, count| *count >= min_count);
-
-        merged
+            .reduce(AHashMap::new, Self::merge_u64_count_maps)
+            .into_iter()
+            .filter(|(_, count)| *count >= min_count)
+            .collect()
     }
 
     /// Build adjacency table using u64-encoded k-mers.
@@ -556,6 +545,34 @@ mod tests {
         expected.retain(|_, count| *count >= 2);
 
         let observed = backend.count_kmers_u64_filtered(&sequences, 1, 2);
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn u64_counting_matches_string_counting_for_valid_dna() {
+        let backend = CpuBackend::new();
+        let sequences = vec![
+            "ACGTACGTACGT".to_string(),
+            "TACGTACGTAAA".to_string(),
+            "GGGGACGTCCCC".to_string(),
+            "ACGTACGTACGT".to_string(),
+        ];
+
+        let legacy = backend.count_kmers(&sequences, 5);
+        let observed = backend.count_kmers_u64(&sequences, 5);
+
+        let expected: AHashMap<u64, u32> = legacy
+            .into_iter()
+            .map(|(kmer, count)| {
+                (
+                    KmerU64::from_str(&kmer)
+                        .expect("legacy canonical k-mer should be valid DNA")
+                        .encoded,
+                    count,
+                )
+            })
+            .collect();
+
         assert_eq!(observed, expected);
     }
 }
