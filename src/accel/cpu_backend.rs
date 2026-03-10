@@ -125,6 +125,8 @@ impl CpuBackend {
         k: usize,
         min_count: u32,
     ) -> AHashMap<u64, u32> {
+        const COUNTING_BLOOM_MAX_COUNT: u32 = 15;
+
         if !(1..=32).contains(&k) || sequences.is_empty() {
             return AHashMap::new();
         }
@@ -135,6 +137,13 @@ impl CpuBackend {
         }
         // For k=1, use exact counting to avoid edge-case discrepancies in ntHash-based filtering.
         if k == 1 {
+            let mut exact = self.count_kmers_u64(sequences, k);
+            exact.retain(|_, count| *count >= min_count);
+            return exact;
+        }
+        // CountingBloomFilter uses 4-bit counters (max 15), so higher thresholds
+        // must use exact counting to avoid dropping valid high-frequency k-mers.
+        if min_count > COUNTING_BLOOM_MAX_COUNT {
             let mut exact = self.count_kmers_u64(sequences, k);
             exact.retain(|_, count| *count >= min_count);
             return exact;
@@ -545,6 +554,18 @@ mod tests {
         expected.retain(|_, count| *count >= 2);
 
         let observed = backend.count_kmers_u64_filtered(&sequences, 1, 2);
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn filtered_counting_high_threshold_matches_exact_thresholding() {
+        let backend = CpuBackend::new();
+        let sequences = vec!["AAAAA".to_string(); 20];
+
+        let mut expected = backend.count_kmers_u64(&sequences, 3);
+        expected.retain(|_, count| *count >= 20);
+
+        let observed = backend.count_kmers_u64_filtered(&sequences, 3, 20);
         assert_eq!(observed, expected);
     }
 

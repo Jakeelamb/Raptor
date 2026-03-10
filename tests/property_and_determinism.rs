@@ -82,6 +82,22 @@ proptest! {
     }
 }
 
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+    #[test]
+    fn filtered_kmer_counting_matches_exact_thresholding_for_high_min_count(
+        sequences in prop::collection::vec(dna_or_n_string(48), 1..32),
+        k in 2usize..16usize,
+        min_count in 16u32..40u32
+    ) {
+        let backend = CpuBackend::new();
+        let observed = backend.count_kmers_u64_filtered(&sequences, k, min_count);
+        let mut expected = backend.count_kmers_u64(&sequences, k);
+        expected.retain(|_, count| *count >= min_count);
+        prop_assert_eq!(observed, expected);
+    }
+}
+
 #[test]
 fn greedy_assembly_is_stable_under_randomized_insertion_order() {
     let k = 3;
