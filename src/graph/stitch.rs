@@ -1,5 +1,5 @@
 use crate::accel::simd::{edit_distance_bp, match_kmers_with_overlap};
-use petgraph::graph::DiGraph;
+use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use std::collections::HashMap;
 
@@ -28,12 +28,11 @@ impl OverlapGraphBuilder {
     /// Find overlaps between sequences and build a directed graph
     pub fn build_overlap_graph(&self, sequences: &[String]) -> DiGraph<String, OverlapInfo> {
         let mut graph = DiGraph::new();
-        let mut seq_to_node = HashMap::new();
+        let mut node_indices = Vec::with_capacity(sequences.len());
 
         // Add all sequences as nodes
         for seq in sequences {
-            let node_idx = graph.add_node(seq.clone());
-            seq_to_node.insert(seq.clone(), node_idx);
+            node_indices.push(graph.add_node(seq.clone()));
         }
 
         // Find overlaps and add edges
@@ -68,8 +67,8 @@ impl OverlapGraphBuilder {
 
                     // Only add edge if edit distance is within threshold
                     if edit_dist <= self.max_edit_dist {
-                        let query_node = seq_to_node[query];
-                        let target_node = seq_to_node[target];
+                        let query_node = node_indices[i];
+                        let target_node = node_indices[j];
 
                         let overlap_info = OverlapInfo {
                             overlap_length: overlap_len,
@@ -91,30 +90,25 @@ impl OverlapGraphBuilder {
         let mut contigs = Vec::new();
         let mut paths = Vec::new();
         let mut visited = vec![false; graph.node_count()];
-        let mut node_to_contig_idx = HashMap::new();
 
         for node_idx in graph.node_indices() {
             if visited[node_idx.index()] {
                 continue;
             }
 
-            let contig_idx = contigs.len();
             let mut contig = graph[node_idx].clone();
             let mut path_segments = vec![node_idx.index()];
             let mut path_overlaps = Vec::new();
 
             visited[node_idx.index()] = true;
-            node_to_contig_idx.insert(node_idx.index(), contig_idx);
 
             // Extend contig by following edges
             let mut current = node_idx;
-            while let Some(edge) = graph.edges(current).next() {
-                let target = edge.target();
-                if visited[target.index()] {
-                    break;
-                }
+            while let Some((target, overlap_info)) =
+                best_unvisited_successor(graph, current, &visited)
+            {
+                debug_assert!(!visited[target.index()]);
 
-                let overlap_info = edge.weight();
                 let target_seq = &graph[target];
 
                 // Merge sequences based on overlap
@@ -126,7 +120,6 @@ impl OverlapGraphBuilder {
                 path_overlaps.push(overlap_info.overlap_length);
 
                 visited[target.index()] = true;
-                node_to_contig_idx.insert(target.index(), contig_idx);
                 current = target;
             }
 
@@ -143,6 +136,41 @@ impl OverlapGraphBuilder {
 
         (contigs, paths)
     }
+}
+
+#[inline]
+fn best_unvisited_successor(
+    graph: &DiGraph<String, OverlapInfo>,
+    node: NodeIndex,
+    visited: &[bool],
+) -> Option<(NodeIndex, OverlapInfo)> {
+    let mut best: Option<(NodeIndex, OverlapInfo)> = None;
+
+    for edge in graph.edges(node) {
+        let target = edge.target();
+        if visited[target.index()] {
+            continue;
+        }
+
+        let info = edge.weight();
+        match best {
+            None => {
+                best = Some((target, info.clone()));
+            }
+            Some((best_target, ref best_info)) => {
+                if info.overlap_length > best_info.overlap_length
+                    || (info.overlap_length == best_info.overlap_length
+                        && (info.distance < best_info.distance
+                            || (info.distance == best_info.distance
+                                && target.index() < best_target.index())))
+                {
+                    best = Some((target, info.clone()));
+                }
+            }
+        }
+    }
+
+    best
 }
 
 #[derive(Debug, Clone)]
@@ -238,6 +266,7 @@ pub fn load_paths_from_gfa(gfa_path: &str) -> Result<Vec<Path>, std::io::Error> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use petgraph::graph::NodeIndex;
 
     #[test]
     fn test_overlap_graph_builder() {
@@ -287,5 +316,79 @@ mod tests {
         assert!(contigs
             .iter()
             .any(|c| c.contains("ATCG") && c.contains("GATC")));
+    }
+
+    #[test]
+    fn build_overlap_graph_preserves_duplicate_sequence_nodes() {
+        let sequences = vec![
+            "AAAAC".to_string(),
+            "AAAAC".to_string(),
+            "AACGG".to_string(),
+        ];
+
+        let builder = OverlapGraphBuilder::new(3, 0, 0);
+        let graph = builder.build_overlap_graph(&sequences);
+
+        assert_eq!(graph.node_count(), 3);
+        let n0 = NodeIndex::new(0);
+        let n1 = NodeIndex::new(1);
+        let n2 = NodeIndex::new(2);
+        assert!(graph.find_edge(n0, n2).is_some());
+        assert!(graph.find_edge(n1, n2).is_some());
+    }
+
+    #[test]
+    fn stitch_contigs_prefers_max_overlap_then_min_distance_deterministically() {
+        let builder = OverlapGraphBuilder::new(3, 0, 0);
+        let mut graph_a: DiGraph<String, OverlapInfo> = DiGraph::new();
+        let n0_a = graph_a.add_node("AAAAAA".to_string());
+        let n1_a = graph_a.add_node("AAATTT".to_string());
+        let n2_a = graph_a.add_node("AAAACC".to_string());
+        graph_a.add_edge(
+            n0_a,
+            n1_a,
+            OverlapInfo {
+                overlap_length: 4,
+                distance: 3,
+                shift: 2,
+            },
+        );
+        graph_a.add_edge(
+            n0_a,
+            n2_a,
+            OverlapInfo {
+                overlap_length: 4,
+                distance: 1,
+                shift: 2,
+            },
+        );
+
+        let mut graph_b: DiGraph<String, OverlapInfo> = DiGraph::new();
+        let n0_b = graph_b.add_node("AAAAAA".to_string());
+        let n1_b = graph_b.add_node("AAATTT".to_string());
+        let n2_b = graph_b.add_node("AAAACC".to_string());
+        graph_b.add_edge(
+            n0_b,
+            n2_b,
+            OverlapInfo {
+                overlap_length: 4,
+                distance: 1,
+                shift: 2,
+            },
+        );
+        graph_b.add_edge(
+            n0_b,
+            n1_b,
+            OverlapInfo {
+                overlap_length: 4,
+                distance: 3,
+                shift: 2,
+            },
+        );
+
+        let (_, paths_a) = builder.stitch_contigs(&graph_a);
+        let (_, paths_b) = builder.stitch_contigs(&graph_b);
+        assert_eq!(paths_a[0].segments, vec![0, 2]);
+        assert_eq!(paths_b[0].segments, vec![0, 2]);
     }
 }
