@@ -43,6 +43,9 @@ struct AssemblyQualitySummary {
     acgt_bases: usize,
     n_bases: usize,
     ambiguous_bases: usize,
+    mean_rle_ratio: f64,
+    length_weighted_rle_ratio: f64,
+    total_rle_runs: usize,
     gc_content: f64,
     n_content: f64,
     ambiguous_content: f64,
@@ -76,6 +79,12 @@ struct NRunSummary {
     longest: usize,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct SequenceAnalysis {
+    ungapped_len: usize,
+    rle_runs: usize,
+}
+
 #[inline]
 fn per_100kb(count: usize, total_bases: usize) -> f64 {
     if total_bases == 0 {
@@ -90,11 +99,18 @@ fn analyze_sequence(
     sequence: &[u8],
     composition: &mut BaseComposition,
     n_runs: &mut NRunSummary,
-) -> usize {
+) -> SequenceAnalysis {
     let mut ungapped_len = sequence.len();
+    let mut rle_runs = 0usize;
+    let mut previous_base = None;
     let mut run_len = 0usize;
 
     for &base in sequence {
+        if previous_base != Some(base) {
+            previous_base = Some(base);
+            rle_runs = rle_runs.saturating_add(1);
+        }
+
         match base {
             b'A' | b'a' | b'T' | b't' | b'U' | b'u' => {
                 composition.acgt_bases += 1;
@@ -134,7 +150,10 @@ fn analyze_sequence(
         n_runs.longest = n_runs.longest.max(run_len);
     }
 
-    ungapped_len
+    SequenceAnalysis {
+        ungapped_len,
+        rle_runs,
+    }
 }
 
 #[inline]
@@ -143,11 +162,25 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
     let mut ungapped_lengths = Vec::with_capacity(contigs.len());
     let mut composition = BaseComposition::default();
     let mut n_runs = NRunSummary::default();
+    let mut total_rle_ratio_scaled = 0u128;
+    let mut total_rle_runs = 0usize;
 
     for contig in contigs {
-        lengths.push(contig.sequence.len());
+        let contig_len = contig.sequence.len();
+        lengths.push(contig_len);
         let sequence = contig.sequence.as_bytes();
-        ungapped_lengths.push(analyze_sequence(sequence, &mut composition, &mut n_runs));
+        let analysis = analyze_sequence(sequence, &mut composition, &mut n_runs);
+        ungapped_lengths.push(analysis.ungapped_len);
+        total_rle_runs = total_rle_runs.saturating_add(analysis.rle_runs);
+        if contig_len == 0 {
+            total_rle_ratio_scaled = total_rle_ratio_scaled.saturating_add(RLE_RATIO_SCALE);
+        } else {
+            let scaled = ((analysis.rle_runs as u128)
+                .saturating_mul(RLE_RATIO_SCALE)
+                .saturating_add((contig_len as u128) / 2))
+                / contig_len as u128;
+            total_rle_ratio_scaled = total_rle_ratio_scaled.saturating_add(scaled);
+        }
     }
 
     let length_stats = evaluate_lengths_in_place(&mut lengths);
@@ -159,6 +192,16 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
     };
     let mean_n_run_length = if n_runs.count > 0 {
         composition.n_bases as f64 / n_runs.count as f64
+    } else {
+        0.0
+    };
+    let mean_rle_ratio = if length_stats.total > 0 {
+        total_rle_ratio_scaled as f64 / (length_stats.total as f64 * RLE_RATIO_SCALE as f64)
+    } else {
+        0.0
+    };
+    let length_weighted_rle_ratio = if length_stats.total_bases > 0 {
+        total_rle_runs as f64 / length_stats.total_bases as f64
     } else {
         0.0
     };
@@ -191,6 +234,9 @@ fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
         acgt_bases: composition.acgt_bases,
         n_bases: composition.n_bases,
         ambiguous_bases: composition.ambiguous_bases,
+        mean_rle_ratio,
+        length_weighted_rle_ratio,
+        total_rle_runs,
         gc_content: composition.gc_content(),
         n_content: composition.n_content(length_stats.total_bases),
         ambiguous_content: composition.ambiguous_content(length_stats.total_bases),
@@ -269,6 +315,12 @@ fn write_assembly_quality_reports(
         ("acgt_bases", quality.acgt_bases.to_string()),
         ("n_bases", quality.n_bases.to_string()),
         ("ambiguous_bases", quality.ambiguous_bases.to_string()),
+        ("mean_rle_ratio", format!("{:.12}", quality.mean_rle_ratio)),
+        (
+            "length_weighted_rle_ratio",
+            format!("{:.12}", quality.length_weighted_rle_ratio),
+        ),
+        ("total_rle_runs", quality.total_rle_runs.to_string()),
         ("gc_content", format!("{:.12}", quality.gc_content)),
         ("n_content", format!("{:.12}", quality.n_content)),
         (
@@ -356,6 +408,7 @@ const ESTIMATED_RECORDS_PER_MB: usize = 5_000;
 const DEFAULT_SEQUENCE_CAPACITY: usize = 100_000;
 const MIN_SEQUENCE_CAPACITY: usize = 10_000;
 const MAX_SEQUENCE_CAPACITY: usize = 2_000_000;
+const RLE_RATIO_SCALE: u128 = 1_000_000_000_000;
 
 #[inline]
 fn estimate_sequence_capacity(file_size_bytes: Option<u64>) -> usize {
@@ -604,7 +657,7 @@ pub fn assemble_reads_with_gpu(
 
     let quality = summarize_assembly_quality(&contigs);
     info!(
-        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN: {:.1}, Ungapped bases/N50/auN: {}/{}/{:.1}, Longest: {} bp ({:.2}%), GC/N/Ambiguous bases: {}/{}/{} (fractions {:.2}%/{:.2}%/{:.2}%), N-runs: count {}, max {}, mean {:.1} bp ({:.1} per 100kb), N/Ambiguous bases per 100kb: {:.1}/{:.1}, >=1kb/10kb/50kb/100kb contigs: {}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%)",
+        "Contig statistics: {} contigs, {} bp total, Mean/Median: {:.1}/{:.1} bp, N10/N25/N50/N75/N90/N95/N99: {}/{}/{}/{}/{}/{}/{} bp, L10/L25/L50/L75/L90/L95/L99: {}/{}/{}/{}/{}/{}/{}, auN: {:.1}, Ungapped bases/N50/auN: {}/{}/{:.1}, Longest: {} bp ({:.2}%), GC/N/Ambiguous bases: {}/{}/{} (fractions {:.2}%/{:.2}%/{:.2}%), RLE mean/weighted runs ratio: {:.4}/{:.4} ({} runs), N-runs: count {}, max {}, mean {:.1} bp ({:.1} per 100kb), N/Ambiguous bases per 100kb: {:.1}/{:.1}, >=1kb/10kb/50kb/100kb contigs: {}/{}/{}/{} ({:.1}%/{:.1}%/{:.1}%/{:.1}%), span: {}/{}/{}/{} bp ({:.1}%/{:.1}%/{:.1}%/{:.1}%)",
         quality.total_contigs,
         quality.total_bases,
         quality.avg_length,
@@ -635,6 +688,9 @@ pub fn assemble_reads_with_gpu(
         quality.gc_content * 100.0,
         quality.n_content * 100.0,
         quality.ambiguous_content * 100.0,
+        quality.mean_rle_ratio,
+        quality.length_weighted_rle_ratio,
+        quality.total_rle_runs,
         quality.n_runs,
         quality.longest_n_run,
         quality.mean_n_run_length,
@@ -1227,6 +1283,9 @@ mod tests {
         assert_eq!(summary.acgt_bases, 9);
         assert_eq!(summary.n_bases, 1);
         assert_eq!(summary.ambiguous_bases, 2);
+        assert!((summary.mean_rle_ratio - 0.75).abs() < 1e-12);
+        assert!((summary.length_weighted_rle_ratio - 0.75).abs() < 1e-12);
+        assert_eq!(summary.total_rle_runs, 9);
         assert!((summary.gc_content - (4.0 / 9.0)).abs() < 1e-12);
         assert!((summary.n_content - (1.0 / 12.0)).abs() < 1e-12);
         assert!((summary.ambiguous_content - (2.0 / 12.0)).abs() < 1e-12);
@@ -1341,6 +1400,9 @@ mod tests {
         assert_eq!(summary.n_runs, 1);
         assert_eq!(summary.longest_n_run, 999);
         assert!((summary.mean_n_run_length - 999.0).abs() < 1e-12);
+        assert!((summary.mean_rle_ratio - 0.0004262002002002).abs() < 1e-12);
+        assert!((summary.length_weighted_rle_ratio - (5.0 / 161_999.0)).abs() < 1e-12);
+        assert_eq!(summary.total_rle_runs, 5);
         assert_eq!(summary.ungapped_n50, 100_000);
         assert!((summary.ungapped_au_n - (12_601_000_000.0 / 161_000.0)).abs() < 1e-9);
     }
@@ -1371,6 +1433,9 @@ mod tests {
         assert_eq!(summary.n_runs, 3);
         assert_eq!(summary.longest_n_run, 3);
         assert!((summary.mean_n_run_length - 2.0).abs() < 1e-12);
+        assert!((summary.mean_rle_ratio - ((3.0 / 7.0 + 3.0 / 6.0 + 1.0) / 3.0)).abs() < 1e-12);
+        assert!((summary.length_weighted_rle_ratio - (9.0 / 16.0)).abs() < 1e-12);
+        assert_eq!(summary.total_rle_runs, 9);
         assert!((summary.n_runs_per_100kb - (3.0 * 100_000.0 / 16.0)).abs() < 1e-12);
         assert_eq!(summary.ungapped_n50, 3);
     }
@@ -1491,6 +1556,9 @@ mod tests {
             acgt_bases: 1100,
             n_bases: 90,
             ambiguous_bases: 44,
+            mean_rle_ratio: 0.75,
+            length_weighted_rle_ratio: 0.8,
+            total_rle_runs: 987,
             gc_content: 0.5,
             n_content: 0.1,
             ambiguous_content: 0.02,
@@ -1540,6 +1608,9 @@ mod tests {
         assert_eq!(parsed["acgt_bases"], 1100);
         assert_eq!(parsed["gc_content"], 0.5);
         assert_eq!(parsed["longest_frac"], 0.340356564);
+        assert_eq!(parsed["mean_rle_ratio"], 0.75);
+        assert_eq!(parsed["length_weighted_rle_ratio"], 0.8);
+        assert_eq!(parsed["total_rle_runs"], 987);
         assert_eq!(parsed["n_runs"], 4);
         assert_eq!(parsed["longest_n_run"], 21);
         assert_eq!(parsed["mean_n_run_length"], 22.5);
@@ -1563,6 +1634,9 @@ mod tests {
         assert!(tsv.contains("acgt_bases\t1100"));
         assert!(tsv.contains("longest_frac\t0.340356564000"));
         assert!(tsv.contains("gc_content\t0.500000000000"));
+        assert!(tsv.contains("mean_rle_ratio\t0.750000000000"));
+        assert!(tsv.contains("length_weighted_rle_ratio\t0.800000000000"));
+        assert!(tsv.contains("total_rle_runs\t987"));
         assert!(tsv.contains("n_runs\t4"));
         assert!(tsv.contains("longest_n_run\t21"));
         assert!(tsv.contains("mean_n_run_length\t22.500000000000"));
