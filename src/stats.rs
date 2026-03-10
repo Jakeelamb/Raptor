@@ -13,6 +13,7 @@ pub struct Stats {
     pub acgt_bases: usize,
     pub n_bases: usize,
     pub ambiguous_bases: usize,
+    pub mean_rle_ratio: f64,
     pub n_run_count: usize,
     pub max_n_run: usize,
     pub contigs_with_n: usize,
@@ -133,6 +134,9 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
     let mut current_contig_composition = BaseComposition::default();
     let mut contig_quality = ContigQualitySummary::default();
     let mut n_runs = NRunSummary::default();
+    let mut total_rle_ratio = 0.0f64;
+    let mut current_rle_len = 0usize;
+    let mut current_rle_last_base: Option<u8> = None;
     let mut line = String::new();
 
     loop {
@@ -148,10 +152,17 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
                 lengths.push(current_len);
                 update_contig_quality(&mut contig_quality, current_contig_composition);
                 n_runs.finish_contig();
+                total_rle_ratio += if current_len == 0 {
+                    1.0
+                } else {
+                    current_rle_len as f64 / current_len as f64
+                };
             }
             in_sequence = true;
             current_len = 0;
             current_contig_composition = BaseComposition::default();
+            current_rle_len = 0;
+            current_rle_last_base = None;
         } else if in_sequence {
             let seq = trimmed_line.trim().as_bytes();
             current_len = current_len.checked_add(seq.len()).ok_or_else(|| {
@@ -163,6 +174,17 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
             composition.add_sequence(seq);
             current_contig_composition.add_sequence(seq);
             n_runs.add_sequence(seq);
+            for &base in seq {
+                if current_rle_last_base != Some(base) {
+                    current_rle_len = current_rle_len.checked_add(1).ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("RLE run count overflow while reading {}", path),
+                        )
+                    })?;
+                    current_rle_last_base = Some(base);
+                }
+            }
         }
     }
 
@@ -171,6 +193,11 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         lengths.push(current_len);
         update_contig_quality(&mut contig_quality, current_contig_composition);
         n_runs.finish_contig();
+        total_rle_ratio += if current_len == 0 {
+            1.0
+        } else {
+            current_rle_len as f64 / current_len as f64
+        };
     }
 
     let length_stats = evaluate_lengths_in_place(&mut lengths);
@@ -188,6 +215,11 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         } else {
             (0.0, 0.0, 0.0)
         };
+    let mean_rle_ratio = if total_contigs > 0.0 {
+        total_rle_ratio / total_contigs
+    } else {
+        0.0
+    };
 
     Ok(Stats {
         total_contigs: length_stats.total,
@@ -198,6 +230,7 @@ pub fn calculate_stats(path: &str) -> std::io::Result<Stats> {
         acgt_bases: composition.acgt_bases,
         n_bases: composition.n_bases,
         ambiguous_bases: composition.ambiguous_bases,
+        mean_rle_ratio,
         n_run_count: n_runs.run_count,
         max_n_run: n_runs.max_run,
         contigs_with_n: contig_quality.with_n,
@@ -326,6 +359,7 @@ mod tests {
         assert_eq!(stats.acgt_bases, 48);
         assert_eq!(stats.n_bases, 0);
         assert_eq!(stats.ambiguous_bases, 0);
+        assert_eq!(stats.mean_rle_ratio, 1.0);
         assert_eq!(stats.n_run_count, 0);
         assert_eq!(stats.max_n_run, 0);
         assert_eq!(stats.contigs_with_n, 0);
@@ -386,6 +420,7 @@ mod tests {
         assert_eq!(stats.acgt_bases, 16);
         assert_eq!(stats.n_bases, 0);
         assert_eq!(stats.ambiguous_bases, 0);
+        assert_eq!(stats.mean_rle_ratio, 1.0);
         assert_eq!(stats.n_run_count, 0);
         assert_eq!(stats.max_n_run, 0);
         assert_eq!(stats.contigs_with_n, 0);
@@ -486,6 +521,7 @@ mod tests {
             acgt_bases: 0,
             n_bases: 0,
             ambiguous_bases: 0,
+            mean_rle_ratio: 0.0,
             n_run_count: 0,
             max_n_run: 0,
             contigs_with_n: 0,
@@ -597,6 +633,7 @@ mod tests {
         assert_eq!(stats.acgt_bases, 7);
         assert_eq!(stats.n_bases, 4);
         assert_eq!(stats.ambiguous_bases, 1);
+        assert!((stats.mean_rle_ratio - 0.8125).abs() < 1e-12);
         assert_eq!(stats.n_run_count, 1);
         assert_eq!(stats.max_n_run, 4);
         assert_eq!(stats.contigs_with_n, 1);
@@ -640,6 +677,7 @@ mod tests {
         assert_eq!(stats.contigs_with_n, 0);
         assert_eq!(stats.contigs_with_ambiguous, 0);
         assert_eq!(stats.contigs_all_acgt, 4);
+        assert_eq!(stats.mean_rle_ratio, 1.0);
         assert_eq!(stats.contigs_with_n_frac, 0.0);
         assert_eq!(stats.contigs_with_ambiguous_frac, 0.0);
         assert_eq!(stats.contigs_all_acgt_frac, 1.0);
@@ -681,6 +719,19 @@ mod tests {
         let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
         assert_eq!(stats.n_run_count, 3);
         assert_eq!(stats.max_n_run, 4);
+    }
+
+    #[test]
+    fn test_calculate_stats_reports_mean_rle_ratio_across_wrapped_lines() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, ">contig_1").unwrap();
+        writeln!(file, "AAA").unwrap();
+        writeln!(file, "AAA").unwrap(); // one run across wrapped lines => 1/6
+        writeln!(file, ">contig_2").unwrap();
+        writeln!(file, "ATAT").unwrap(); // four runs => 4/4
+
+        let stats = calculate_stats(file.path().to_str().unwrap()).unwrap();
+        assert!((stats.mean_rle_ratio - ((1.0 / 6.0 + 1.0) / 2.0)).abs() < 1e-12);
     }
 
     #[test]
@@ -728,6 +779,7 @@ mod tests {
             prop_assert_eq!(stats_a.acgt_bases, stats_b.acgt_bases);
             prop_assert_eq!(stats_a.n_bases, stats_b.n_bases);
             prop_assert_eq!(stats_a.ambiguous_bases, stats_b.ambiguous_bases);
+            prop_assert!((stats_a.mean_rle_ratio - stats_b.mean_rle_ratio).abs() < 1e-12);
             prop_assert_eq!(stats_a.n_run_count, stats_b.n_run_count);
             prop_assert_eq!(stats_a.max_n_run, stats_b.max_n_run);
             prop_assert_eq!(stats_a.contigs_with_n, stats_b.contigs_with_n);
