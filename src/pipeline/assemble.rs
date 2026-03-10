@@ -1,6 +1,6 @@
 use crate::accel::CpuBackend;
-use crate::eval::metrics::evaluate_lengths_in_place;
-use crate::graph::assembler::greedy_assembly_u64;
+use crate::eval::metrics::{evaluate_lengths_in_place, BaseComposition};
+use crate::graph::assembler::{greedy_assembly_u64, Contig};
 use crate::graph::overlap::find_overlaps;
 use crate::graph::stitch::OverlapGraphBuilder;
 use crate::io::fasta::FastaWriter;
@@ -11,6 +11,53 @@ use crate::kmer::variable_k::{kmer_coverage_histogram, optimal_k, select_best_k}
 use std::fs;
 use std::io::{self, Write};
 use tracing::{info, warn};
+
+#[derive(Debug, Clone, Copy)]
+struct AssemblyQualitySummary {
+    total_contigs: usize,
+    total_bases: usize,
+    avg_length: f64,
+    n50: usize,
+    n90: usize,
+    n95: usize,
+    au_n: f64,
+    longest: usize,
+    gc_content: f64,
+    n_content: f64,
+    ambiguous_content: f64,
+    contigs_ge_1kb: usize,
+    contigs_ge_1kb_frac: f64,
+    bases_ge_1kb_frac: f64,
+}
+
+#[inline]
+fn summarize_assembly_quality(contigs: &[Contig]) -> AssemblyQualitySummary {
+    let mut lengths = Vec::with_capacity(contigs.len());
+    let mut composition = BaseComposition::default();
+
+    for contig in contigs {
+        lengths.push(contig.sequence.len());
+        composition.add_sequence(contig.sequence.as_bytes());
+    }
+
+    let length_stats = evaluate_lengths_in_place(&mut lengths);
+    AssemblyQualitySummary {
+        total_contigs: length_stats.total,
+        total_bases: length_stats.total_bases,
+        avg_length: length_stats.avg_length,
+        n50: length_stats.n50,
+        n90: length_stats.n90,
+        n95: length_stats.n95,
+        au_n: length_stats.au_n,
+        longest: length_stats.longest,
+        gc_content: composition.gc_content(),
+        n_content: composition.n_content(length_stats.total_bases),
+        ambiguous_content: composition.ambiguous_content(length_stats.total_bases),
+        contigs_ge_1kb: length_stats.contigs_ge_1kb,
+        contigs_ge_1kb_frac: length_stats.contigs_ge_1kb_frac,
+        bases_ge_1kb_frac: length_stats.bases_ge_1kb_frac,
+    }
+}
 
 pub fn assemble_reads(
     input_path: &str,
@@ -242,6 +289,25 @@ pub fn assemble_reads_with_gpu(
 
         info!("Completed contig polishing");
     }
+
+    let quality = summarize_assembly_quality(&contigs);
+    info!(
+        "Contig statistics: {} contigs, {} bp total, Avg: {:.1} bp, N50/N90/N95: {}/{}/{} bp, auN: {:.1}, Longest: {} bp, GC: {:.2}%, N: {:.2}%, Ambiguous: {:.2}%, >=1kb: {} ({:.1}% contigs, {:.1}% bases)",
+        quality.total_contigs,
+        quality.total_bases,
+        quality.avg_length,
+        quality.n50,
+        quality.n90,
+        quality.n95,
+        quality.au_n,
+        quality.longest,
+        quality.gc_content * 100.0,
+        quality.n_content * 100.0,
+        quality.ambiguous_content * 100.0,
+        quality.contigs_ge_1kb,
+        quality.contigs_ge_1kb_frac * 100.0,
+        quality.bases_ge_1kb_frac * 100.0
+    );
 
     // Write FASTA output
     let mut writer = FastaWriter::new(output_path);
@@ -678,7 +744,7 @@ fn derive_contig_expression_map(
 
 #[cfg(test)]
 mod tests {
-    use super::derive_contig_expression_map;
+    use super::{derive_contig_expression_map, summarize_assembly_quality};
     use crate::graph::assembler::Contig;
     use ahash::AHashMap;
 
@@ -712,5 +778,63 @@ mod tests {
         assert_eq!(expression.get(&7), Some(&4));
         assert!(!expression.contains_key(&8));
         assert!(!expression.contains_key(&9));
+    }
+
+    #[test]
+    fn summarize_assembly_quality_reports_base_composition_and_length_metrics() {
+        let contigs = vec![
+            Contig {
+                id: 0,
+                sequence: "GGCC".to_string(),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 1,
+                sequence: "AANT".to_string(),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 2,
+                sequence: "ARYT".to_string(),
+                kmer_path: vec![],
+            },
+        ];
+
+        let summary = summarize_assembly_quality(&contigs);
+        assert_eq!(summary.total_contigs, 3);
+        assert_eq!(summary.total_bases, 12);
+        assert_eq!(summary.n50, 4);
+        assert_eq!(summary.n90, 4);
+        assert_eq!(summary.n95, 4);
+        assert_eq!(summary.longest, 4);
+        assert!((summary.avg_length - 4.0).abs() < 1e-12);
+        assert!((summary.au_n - 4.0).abs() < 1e-12);
+        assert!((summary.gc_content - (4.0 / 9.0)).abs() < 1e-12);
+        assert!((summary.n_content - (1.0 / 12.0)).abs() < 1e-12);
+        assert!((summary.ambiguous_content - (2.0 / 12.0)).abs() < 1e-12);
+        assert_eq!(summary.contigs_ge_1kb, 0);
+        assert_eq!(summary.contigs_ge_1kb_frac, 0.0);
+        assert_eq!(summary.bases_ge_1kb_frac, 0.0);
+    }
+
+    #[test]
+    fn summarize_assembly_quality_reports_1kb_bucket_fractions() {
+        let contigs = vec![
+            Contig {
+                id: 10,
+                sequence: "A".repeat(1_200),
+                kmer_path: vec![],
+            },
+            Contig {
+                id: 11,
+                sequence: "T".repeat(800),
+                kmer_path: vec![],
+            },
+        ];
+
+        let summary = summarize_assembly_quality(&contigs);
+        assert_eq!(summary.contigs_ge_1kb, 1);
+        assert!((summary.contigs_ge_1kb_frac - 0.5).abs() < 1e-12);
+        assert!((summary.bases_ge_1kb_frac - 0.6).abs() < 1e-12);
     }
 }
