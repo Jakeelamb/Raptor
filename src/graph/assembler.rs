@@ -309,13 +309,17 @@ pub fn remove_tips(
     max_tip_len: usize,
     min_coverage: u32,
 ) -> usize {
-    let mut tips_removed = 0;
-    let mut to_remove: Vec<u64> = Vec::new();
+    let mut to_remove = AHashSet::new();
+
+    let mut kmers: Vec<u64> = kmer_counts.keys().copied().collect();
+    kmers.sort_unstable();
 
     // Find k-mers that are dead-ends (in-degree=0 or out-degree=0)
-    for (&kmer, &count) in kmer_counts {
+    for kmer in kmers {
+        let count = *kmer_counts.get(&kmer).unwrap_or(&0);
+
         // Skip high-coverage k-mers (probably real)
-        if count >= min_coverage {
+        if count >= min_coverage || to_remove.contains(&kmer) {
             continue;
         }
 
@@ -326,93 +330,129 @@ pub fn remove_tips(
         let out_degree = adjacency.get_successors(kmer).map(|v| v.len()).unwrap_or(0);
 
         // Dead-end: only one direction connected
-        if (in_degree == 0 && out_degree > 0) || (in_degree > 0 && out_degree == 0) {
-            // Trace the tip to see if it's short enough to remove
-            let tip_len = trace_tip_length(adjacency, kmer_counts, kmer, k, max_tip_len);
-
-            if tip_len <= max_tip_len {
-                to_remove.push(kmer);
-            }
-        }
-    }
-
-    // Remove the tips
-    for kmer in &to_remove {
-        // Remove from forward adjacency
-        adjacency.forward.remove(kmer);
-
-        // Remove references to this k-mer from backward adjacency
-        for neighbors in adjacency.backward.values_mut() {
-            neighbors.retain(|(k, _)| k != kmer);
-        }
-
-        // Remove from backward adjacency
-        adjacency.backward.remove(kmer);
-
-        // Remove references from forward adjacency
-        for neighbors in adjacency.forward.values_mut() {
-            neighbors.retain(|(k, _)| k != kmer);
-        }
-
-        tips_removed += 1;
-    }
-
-    tips_removed
-}
-
-/// Trace the length of a tip (dead-end path).
-fn trace_tip_length(
-    adjacency: &AdjacencyTableU64,
-    _kmer_counts: &AHashMap<u64, u32>,
-    start: u64,
-    _k: usize,
-    max_len: usize,
-) -> usize {
-    let mut current = start;
-    let mut length = 1;
-    let mut visited = AHashSet::new();
-    visited.insert(start);
-
-    loop {
-        if length > max_len {
-            return length;
-        }
-
-        // Try to extend in the direction with connections
-        let successors = adjacency.get_successors(current);
-        let predecessors = adjacency.get_predecessors(current);
-
-        let next = if let Some(succ) = successors {
-            // Find unvisited successor
-            succ.iter()
-                .find(|(k, _)| !visited.contains(k))
-                .map(|(k, _)| *k)
-        } else if let Some(pred) = predecessors {
-            // Find unvisited predecessor
-            pred.iter()
-                .find(|(k, _)| !visited.contains(k))
-                .map(|(k, _)| *k)
+        let direction = if in_degree == 0 && out_degree > 0 {
+            Some(TipDirection::Forward)
+        } else if in_degree > 0 && out_degree == 0 {
+            Some(TipDirection::Backward)
         } else {
             None
         };
 
-        match next {
-            Some(n) => {
+        if let Some(direction) = direction {
+            if let Some(path) = trace_tip_path(
+                adjacency,
+                kmer_counts,
+                kmer,
+                k,
+                max_tip_len,
+                min_coverage,
+                direction,
+            ) {
+                to_remove.extend(path);
+            }
+        }
+    }
+
+    let mut ordered_to_remove: Vec<u64> = to_remove.into_iter().collect();
+    ordered_to_remove.sort_unstable();
+
+    // Remove the tips
+    for &kmer in &ordered_to_remove {
+        remove_kmer_from_graph(adjacency, kmer);
+    }
+
+    ordered_to_remove.len()
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TipDirection {
+    Forward,
+    Backward,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TipNeighborChoice {
+    None,
+    Multiple,
+    Single(u64),
+}
+
+/// Trace a linear tip path from a dead-end.
+///
+/// Returns `None` if the path is too long, branches before reaching a junction,
+/// or contains high-coverage k-mers that should be retained.
+fn trace_tip_path(
+    adjacency: &AdjacencyTableU64,
+    kmer_counts: &AHashMap<u64, u32>,
+    start: u64,
+    _k: usize,
+    max_len: usize,
+    min_coverage: u32,
+    direction: TipDirection,
+) -> Option<Vec<u64>> {
+    let mut current = start;
+    let mut path = vec![start];
+    let mut visited = AHashSet::new();
+    visited.insert(start);
+
+    loop {
+        if path.len() > max_len {
+            return None;
+        }
+
+        let neighbors = match direction {
+            TipDirection::Forward => adjacency.get_successors(current),
+            TipDirection::Backward => adjacency.get_predecessors(current),
+        };
+
+        match unique_unvisited_neighbor(neighbors, &visited) {
+            TipNeighborChoice::Single(n) => {
                 // Check if this node is a branch point (multiple connections)
                 let in_deg = adjacency.get_predecessors(n).map(|v| v.len()).unwrap_or(0);
                 let out_deg = adjacency.get_successors(n).map(|v| v.len()).unwrap_or(0);
 
                 if in_deg > 1 || out_deg > 1 {
                     // Reached a junction, stop tracing
-                    return length;
+                    return Some(path);
+                }
+
+                if kmer_counts.get(&n).copied().unwrap_or(u32::MAX) >= min_coverage {
+                    return None;
                 }
 
                 visited.insert(n);
                 current = n;
-                length += 1;
+                path.push(n);
             }
-            None => return length,
+            TipNeighborChoice::None => return Some(path),
+            TipNeighborChoice::Multiple => return None,
         }
+    }
+}
+
+#[inline]
+fn unique_unvisited_neighbor(
+    neighbors: Option<&Vec<(u64, u32)>>,
+    visited: &AHashSet<u64>,
+) -> TipNeighborChoice {
+    let Some(neighbors) = neighbors else {
+        return TipNeighborChoice::None;
+    };
+    let mut candidate: Option<u64> = None;
+
+    for &(next, _) in neighbors {
+        if visited.contains(&next) {
+            continue;
+        }
+        match candidate {
+            None => candidate = Some(next),
+            Some(_) => return TipNeighborChoice::Multiple,
+        }
+    }
+
+    match candidate {
+        Some(next) => TipNeighborChoice::Single(next),
+        None => TipNeighborChoice::None,
     }
 }
 
@@ -436,9 +476,11 @@ pub fn detect_bubbles(
     max_bubble_len: usize,
 ) -> Vec<Bubble> {
     let mut bubbles = Vec::new();
+    let mut kmers: Vec<u64> = kmer_counts.keys().copied().collect();
+    kmers.sort_unstable();
 
     // Find branching nodes (out-degree > 1)
-    for (&kmer, _) in kmer_counts {
+    for kmer in kmers {
         if let Some(successors) = adjacency.get_successors(kmer) {
             if successors.len() >= 2 {
                 // Try to find bubbles starting from this branch
@@ -474,7 +516,7 @@ fn find_bubble_from_branch(
 
     // Take the two highest-coverage branches
     let mut sorted_succ: Vec<_> = successors.to_vec();
-    sorted_succ.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted_succ.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
     let (branch1, cov1) = sorted_succ[0];
     let (branch2, cov2) = sorted_succ[1];
@@ -495,18 +537,18 @@ fn find_bubble_from_branch(
     for _ in 0..max_len {
         // Extend path 1
         if let Some(succ) = adjacency.get_successors(current1) {
-            if let Some((next, _)) = succ.iter().find(|(k, _)| !visited1.contains(k)) {
-                path1.push(*next);
-                visited1.insert(*next);
-                current1 = *next;
+            if let Some((next, _)) = best_unvisited_neighbor(succ, &visited1) {
+                path1.push(next);
+                visited1.insert(next);
+                current1 = next;
 
                 // Check if paths reconverge
-                if visited2.contains(next) {
+                if visited2.contains(&next) {
                     return Some(Bubble {
                         start,
-                        end: *next,
+                        end: next,
                         path1,
-                        path2: path2.into_iter().take_while(|k| k != next).collect(),
+                        path2: path2.into_iter().take_while(|k| *k != next).collect(),
                         coverage1: cov1,
                         coverage2: cov2,
                     });
@@ -516,17 +558,17 @@ fn find_bubble_from_branch(
 
         // Extend path 2
         if let Some(succ) = adjacency.get_successors(current2) {
-            if let Some((next, _)) = succ.iter().find(|(k, _)| !visited2.contains(k)) {
-                path2.push(*next);
-                visited2.insert(*next);
-                current2 = *next;
+            if let Some((next, _)) = best_unvisited_neighbor(succ, &visited2) {
+                path2.push(next);
+                visited2.insert(next);
+                current2 = next;
 
                 // Check if paths reconverge
-                if visited1.contains(next) {
+                if visited1.contains(&next) {
                     return Some(Bubble {
                         start,
-                        end: *next,
-                        path1: path1.into_iter().take_while(|k| k != next).collect(),
+                        end: next,
+                        path1: path1.into_iter().take_while(|k| *k != next).collect(),
                         path2,
                         coverage1: cov1,
                         coverage2: cov2,
@@ -557,19 +599,40 @@ pub fn collapse_bubble(adjacency: &mut AdjacencyTableU64, bubble: &Bubble) -> bo
 
     // Remove k-mers from the low-coverage path
     for kmer in path_to_remove {
-        adjacency.forward.remove(kmer);
-        adjacency.backward.remove(kmer);
-
-        // Clean up references
-        for neighbors in adjacency.forward.values_mut() {
-            neighbors.retain(|(k, _)| k != kmer);
-        }
-        for neighbors in adjacency.backward.values_mut() {
-            neighbors.retain(|(k, _)| k != kmer);
-        }
+        remove_kmer_from_graph(adjacency, *kmer);
     }
 
     true
+}
+
+#[inline]
+fn best_unvisited_neighbor(
+    neighbors: &[(u64, u32)],
+    visited: &AHashSet<u64>,
+) -> Option<(u64, u32)> {
+    neighbors
+        .iter()
+        .copied()
+        .filter(|(kmer, _)| !visited.contains(kmer))
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+}
+
+fn remove_kmer_from_graph(adjacency: &mut AdjacencyTableU64, kmer: u64) {
+    if let Some(successors) = adjacency.forward.remove(&kmer) {
+        for (next, _) in successors {
+            if let Some(predecessors) = adjacency.backward.get_mut(&next) {
+                predecessors.retain(|(pred, _)| *pred != kmer);
+            }
+        }
+    }
+
+    if let Some(predecessors) = adjacency.backward.remove(&kmer) {
+        for (prev, _) in predecessors {
+            if let Some(successors) = adjacency.forward.get_mut(&prev) {
+                successors.retain(|(next, _)| *next != kmer);
+            }
+        }
+    }
 }
 
 /// Clean up the assembly graph by removing tips and collapsing bubbles.
@@ -681,5 +744,101 @@ mod tests {
         assert_eq!(contigs.len(), 1);
         assert_eq!(contigs[0].sequence, "TGAAAT");
         assert_eq!(contigs[0].kmer_path, vec![tga, gaa, aaa, aat]);
+    }
+
+    #[test]
+    fn remove_tips_removes_entire_linear_tip_path() {
+        let k = 3;
+        let taa = encode_kmer("TAA").unwrap();
+        let aaa = encode_kmer("AAA").unwrap();
+        let aat = encode_kmer("AAT").unwrap();
+        let atc = encode_kmer("ATC").unwrap();
+        let gtc = encode_kmer("GTC").unwrap();
+
+        let mut counts = AHashMap::new();
+        counts.insert(taa, 1);
+        counts.insert(aaa, 1);
+        counts.insert(aat, 1);
+        counts.insert(atc, 10);
+        counts.insert(gtc, 10);
+
+        let mut adjacency = AdjacencyTableU64::new(k as u8);
+        adjacency.add_edge(taa, aaa, 1);
+        adjacency.add_edge(aaa, aat, 1);
+        adjacency.add_edge(aat, atc, 1);
+        adjacency.add_edge(gtc, atc, 10);
+
+        let removed = remove_tips(&mut adjacency, &counts, k, 8, 3);
+        assert_eq!(removed, 3);
+        assert!(adjacency.get_successors(taa).is_none());
+        assert!(adjacency.get_successors(aaa).is_none());
+        assert!(adjacency.get_successors(aat).is_none());
+
+        let predecessors = adjacency.get_predecessors(atc).cloned().unwrap_or_default();
+        assert_eq!(predecessors, vec![(gtc, 10)]);
+    }
+
+    #[test]
+    fn remove_tips_preserves_path_with_high_coverage_internal_node() {
+        let k = 3;
+        let taa = encode_kmer("TAA").unwrap();
+        let aaa = encode_kmer("AAA").unwrap();
+        let aat = encode_kmer("AAT").unwrap();
+        let atc = encode_kmer("ATC").unwrap();
+        let gtc = encode_kmer("GTC").unwrap();
+
+        let mut counts = AHashMap::new();
+        counts.insert(taa, 1);
+        counts.insert(aaa, 12);
+        counts.insert(aat, 1);
+        counts.insert(atc, 10);
+        counts.insert(gtc, 10);
+
+        let mut adjacency = AdjacencyTableU64::new(k as u8);
+        adjacency.add_edge(taa, aaa, 1);
+        adjacency.add_edge(aaa, aat, 1);
+        adjacency.add_edge(aat, atc, 1);
+        adjacency.add_edge(gtc, atc, 10);
+
+        let removed = remove_tips(&mut adjacency, &counts, k, 8, 3);
+        assert_eq!(removed, 0);
+        let successors = adjacency.get_successors(taa).cloned().unwrap_or_default();
+        assert_eq!(successors, vec![(aaa, 1)]);
+    }
+
+    #[test]
+    fn detect_bubbles_is_deterministic_with_equal_coverage_branches() {
+        let k = 3;
+        let aaa = encode_kmer("AAA").unwrap();
+        let aac = encode_kmer("AAC").unwrap();
+        let aag = encode_kmer("AAG").unwrap();
+        let acc = encode_kmer("ACC").unwrap();
+
+        let mut counts = AHashMap::new();
+        counts.insert(aaa, 20);
+        counts.insert(aac, 8);
+        counts.insert(aag, 8);
+        counts.insert(acc, 20);
+
+        let mut adjacency_a = AdjacencyTableU64::new(k as u8);
+        adjacency_a.add_edge(aaa, aag, 8);
+        adjacency_a.add_edge(aaa, aac, 8);
+        adjacency_a.add_edge(aac, acc, 8);
+        adjacency_a.add_edge(aag, acc, 8);
+
+        let mut adjacency_b = AdjacencyTableU64::new(k as u8);
+        adjacency_b.add_edge(aaa, aac, 8);
+        adjacency_b.add_edge(aaa, aag, 8);
+        adjacency_b.add_edge(aag, acc, 8);
+        adjacency_b.add_edge(aac, acc, 8);
+
+        let bubbles_a = detect_bubbles(&adjacency_a, &counts, k, 8);
+        let bubbles_b = detect_bubbles(&adjacency_b, &counts, k, 8);
+        assert_eq!(bubbles_a.len(), 1);
+        assert_eq!(bubbles_b.len(), 1);
+        assert_eq!(bubbles_a[0].path1, bubbles_b[0].path1);
+        assert_eq!(bubbles_a[0].path2, bubbles_b[0].path2);
+        assert_eq!(bubbles_a[0].path1.first().copied(), Some(aac));
+        assert_eq!(bubbles_a[0].path2.first().copied(), Some(aag));
     }
 }
