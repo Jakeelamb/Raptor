@@ -2180,7 +2180,7 @@ impl LargeGenomeAssembler {
         repeat_kmers: &AHashSet<u64>,
         used: &mut AHashSet<u64>,
     ) -> String {
-        let bases = [b'A', b'C', b'G', b'T'];
+        const BASES: [u8; 4] = [b'A', b'C', b'G', b'T'];
 
         let seed_canonical = KmerU64 {
             encoded: seed_encoded,
@@ -2195,6 +2195,8 @@ impl LargeGenomeAssembler {
 
         let mut right_kmer = seed_encoded;
         let mut left_kmer = seed_encoded;
+        let mut right_candidates = Vec::with_capacity(4);
+        let mut left_candidates = Vec::with_capacity(4);
 
         // Extend right with coverage-guided traversal
         loop {
@@ -2203,82 +2205,23 @@ impl LargeGenomeAssembler {
                 .copied()
                 .unwrap_or(([false; 4], [false; 4]));
 
-            // Find valid extensions with their coverage
-            let mut extensions: Vec<BranchCandidate> = Vec::with_capacity(4);
-            for (i, &valid) in right_ext.iter().enumerate() {
-                if !valid {
-                    continue;
-                }
-                if let Some(next) = extend_right(right_kmer, bases[i], k) {
-                    let next_kmer = KmerU64 {
-                        encoded: next,
-                        len: k as u8,
-                    };
-                    let next_canonical = next_kmer.canonical().encoded;
-                    if !used.contains(&next_canonical) {
-                        let count = kmer_counts.get(&next_canonical).copied().unwrap_or(0);
-                        let is_repeat = repeat_kmers.contains(&next_canonical);
-                        let read_support =
-                            Self::branch_read_support(branch_support, right_kmer, next, k);
-                        extensions.push(BranchCandidate {
-                            base_idx: i,
-                            next,
-                            count,
-                            is_repeat,
-                            read_support,
-                        });
-                    }
-                }
-            }
-
-            if extensions.is_empty() {
-                break; // Dead end
-            }
-
-            // If single extension, take it
-            if extensions.len() == 1 {
-                let extension = extensions[0];
-                let base = bases[extension.base_idx];
-                let next_kmer = KmerU64 {
-                    encoded: extension.next,
-                    len: k as u8,
-                };
-                let next_canonical = next_kmer.canonical().encoded;
-
-                contig.push(base);
-                used.insert(next_canonical);
-                right_kmer = extension.next;
-                continue;
-            }
-
-            // Multiple extensions: use coverage-guided selection
-            // Prefer non-repeat paths with similar coverage to current position
-            let current_count = kmer_counts
-                .get(
-                    &KmerU64 {
-                        encoded: right_kmer,
-                        len: k as u8,
-                    }
-                    .canonical()
-                    .encoded,
-                )
-                .copied()
-                .unwrap_or(1);
-
-            if let Some(best) = self.choose_branch_extension(&extensions, current_count) {
-                let base = bases[best.base_idx];
-                let next_kmer = KmerU64 {
-                    encoded: best.next,
-                    len: k as u8,
-                };
-                let next_canonical = next_kmer.canonical().encoded;
-
-                contig.push(base);
-                used.insert(next_canonical);
-                right_kmer = best.next;
-            } else {
+            let Some(best) = self.select_branch_extension(
+                right_kmer,
+                &right_ext,
+                k,
+                kmer_counts,
+                branch_support,
+                repeat_kmers,
+                used,
+                false,
+                &mut right_candidates,
+            ) else {
                 break;
-            }
+            };
+
+            contig.push(BASES[best.base_idx]);
+            used.insert(Self::canonical_encoded(best.next, k));
+            right_kmer = best.next;
         }
 
         // Extend left with coverage-guided traversal
@@ -2288,79 +2231,23 @@ impl LargeGenomeAssembler {
                 .copied()
                 .unwrap_or(([false; 4], [false; 4]));
 
-            let mut extensions: Vec<BranchCandidate> = Vec::with_capacity(4);
-            for (i, &valid) in left_ext.iter().enumerate() {
-                if !valid {
-                    continue;
-                }
-                if let Some(next) = extend_left(left_kmer, bases[i], k) {
-                    let next_kmer = KmerU64 {
-                        encoded: next,
-                        len: k as u8,
-                    };
-                    let next_canonical = next_kmer.canonical().encoded;
-                    if !used.contains(&next_canonical) {
-                        let count = kmer_counts.get(&next_canonical).copied().unwrap_or(0);
-                        let is_repeat = repeat_kmers.contains(&next_canonical);
-                        let read_support =
-                            Self::branch_read_support(branch_support, next, left_kmer, k);
-                        extensions.push(BranchCandidate {
-                            base_idx: i,
-                            next,
-                            count,
-                            is_repeat,
-                            read_support,
-                        });
-                    }
-                }
-            }
-
-            if extensions.is_empty() {
+            let Some(best) = self.select_branch_extension(
+                left_kmer,
+                &left_ext,
+                k,
+                kmer_counts,
+                branch_support,
+                repeat_kmers,
+                used,
+                true,
+                &mut left_candidates,
+            ) else {
                 break;
-            }
+            };
 
-            if extensions.len() == 1 {
-                let extension = extensions[0];
-                let base = bases[extension.base_idx];
-                let next_kmer = KmerU64 {
-                    encoded: extension.next,
-                    len: k as u8,
-                };
-                let next_canonical = next_kmer.canonical().encoded;
-
-                left_extension.push(base);
-                used.insert(next_canonical);
-                left_kmer = extension.next;
-                continue;
-            }
-
-            // Coverage-guided selection for left extension
-            let current_count = kmer_counts
-                .get(
-                    &KmerU64 {
-                        encoded: left_kmer,
-                        len: k as u8,
-                    }
-                    .canonical()
-                    .encoded,
-                )
-                .copied()
-                .unwrap_or(1);
-
-            if let Some(best) = self.choose_branch_extension(&extensions, current_count) {
-                let base = bases[best.base_idx];
-                let next_kmer = KmerU64 {
-                    encoded: best.next,
-                    len: k as u8,
-                };
-                let next_canonical = next_kmer.canonical().encoded;
-
-                left_extension.push(base);
-                used.insert(next_canonical);
-                left_kmer = best.next;
-            } else {
-                break;
-            }
+            left_extension.push(BASES[best.base_idx]);
+            used.insert(Self::canonical_encoded(best.next, k));
+            left_kmer = best.next;
         }
 
         if !left_extension.is_empty() {
@@ -2371,6 +2258,108 @@ impl LargeGenomeAssembler {
         }
 
         String::from_utf8(contig).unwrap_or_default()
+    }
+
+    #[inline]
+    fn canonical_encoded(encoded: u64, k: usize) -> u64 {
+        KmerU64 {
+            encoded,
+            len: k as u8,
+        }
+        .canonical()
+        .encoded
+    }
+
+    #[inline]
+    fn canonical_count(kmer_counts: &AHashMap<u64, u32>, encoded: u64, k: usize) -> u32 {
+        kmer_counts
+            .get(&Self::canonical_encoded(encoded, k))
+            .copied()
+            .unwrap_or(1)
+    }
+
+    fn collect_branch_candidates(
+        current_kmer: u64,
+        extension_flags: &[bool; 4],
+        k: usize,
+        kmer_counts: &AHashMap<u64, u32>,
+        branch_support: &AHashMap<(u64, u64), u32>,
+        repeat_kmers: &AHashSet<u64>,
+        used: &AHashSet<u64>,
+        going_left: bool,
+        extensions: &mut Vec<BranchCandidate>,
+    ) {
+        const BASES: [u8; 4] = [b'A', b'C', b'G', b'T'];
+        extensions.clear();
+
+        for (base_idx, &valid) in extension_flags.iter().enumerate() {
+            if !valid {
+                continue;
+            }
+
+            let candidate = if going_left {
+                extend_left(current_kmer, BASES[base_idx], k)
+            } else {
+                extend_right(current_kmer, BASES[base_idx], k)
+            };
+
+            let Some(next) = candidate else {
+                continue;
+            };
+
+            let next_canonical = Self::canonical_encoded(next, k);
+            if used.contains(&next_canonical) {
+                continue;
+            }
+
+            let read_support = if going_left {
+                Self::branch_read_support(branch_support, next, current_kmer, k)
+            } else {
+                Self::branch_read_support(branch_support, current_kmer, next, k)
+            };
+
+            extensions.push(BranchCandidate {
+                base_idx,
+                next,
+                count: kmer_counts.get(&next_canonical).copied().unwrap_or(0),
+                is_repeat: repeat_kmers.contains(&next_canonical),
+                read_support,
+            });
+        }
+    }
+
+    fn select_branch_extension(
+        &self,
+        current_kmer: u64,
+        extension_flags: &[bool; 4],
+        k: usize,
+        kmer_counts: &AHashMap<u64, u32>,
+        branch_support: &AHashMap<(u64, u64), u32>,
+        repeat_kmers: &AHashSet<u64>,
+        used: &AHashSet<u64>,
+        going_left: bool,
+        scratch: &mut Vec<BranchCandidate>,
+    ) -> Option<BranchCandidate> {
+        Self::collect_branch_candidates(
+            current_kmer,
+            extension_flags,
+            k,
+            kmer_counts,
+            branch_support,
+            repeat_kmers,
+            used,
+            going_left,
+            scratch,
+        );
+
+        match scratch.len() {
+            0 => None,
+            1 => Some(scratch[0]),
+            _ => self.choose_branch_extension(
+                scratch,
+                Self::canonical_count(kmer_counts, current_kmer, k),
+            ),
+        }
     }
 
     fn choose_branch_extension(
