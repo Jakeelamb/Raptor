@@ -88,24 +88,26 @@ impl Default for AdjacencyTableU64 {
 
 #[inline]
 fn upsert_edge_u64(edges: &mut Vec<(u64, u32)>, node: u64, count: u32) {
-    if let Some((_, existing)) = edges.iter_mut().find(|(n, _)| *n == node) {
-        *existing = (*existing).max(count);
-        return;
+    match edges.binary_search_by_key(&node, |(n, _)| *n) {
+        Ok(idx) => {
+            edges[idx].1 = edges[idx].1.max(count);
+        }
+        Err(idx) => {
+            edges.insert(idx, (node, count));
+        }
     }
-
-    edges.push((node, count));
-    edges.sort_unstable_by_key(|(n, _)| *n);
 }
 
 #[inline]
 fn upsert_edge_string(edges: &mut Vec<(String, u32)>, node: String, count: u32) {
-    if let Some((_, existing)) = edges.iter_mut().find(|(n, _)| *n == node) {
-        *existing = (*existing).max(count);
-        return;
+    match edges.binary_search_by(|(n, _)| n.as_str().cmp(node.as_str())) {
+        Ok(idx) => {
+            edges[idx].1 = edges[idx].1.max(count);
+        }
+        Err(idx) => {
+            edges.insert(idx, (node, count));
+        }
     }
-
-    edges.push((node, count));
-    edges.sort_unstable_by(|a, b| a.0.cmp(&b.0));
 }
 
 /// Overlap between two contigs
@@ -253,5 +255,28 @@ mod tests {
             adjacency.backward.get("AAT"),
             Some(&vec![("AAA".to_string(), 9)])
         );
+    }
+
+    #[test]
+    fn add_edge_string_has_stable_neighbor_order_independent_of_insert_order() {
+        let mut adjacency_a = AdjacencyTable::new();
+        adjacency_a.add_edge("AAA".to_string(), "AAT".to_string(), 1);
+        adjacency_a.add_edge("AAA".to_string(), "AAC".to_string(), 1);
+        adjacency_a.add_edge("AAA".to_string(), "AAG".to_string(), 1);
+
+        let mut adjacency_b = AdjacencyTable::new();
+        adjacency_b.add_edge("AAA".to_string(), "AAC".to_string(), 1);
+        adjacency_b.add_edge("AAA".to_string(), "AAG".to_string(), 1);
+        adjacency_b.add_edge("AAA".to_string(), "AAT".to_string(), 1);
+
+        assert_eq!(
+            adjacency_a.forward.get("AAA"),
+            Some(&vec![
+                ("AAC".to_string(), 1),
+                ("AAG".to_string(), 1),
+                ("AAT".to_string(), 1),
+            ])
+        );
+        assert_eq!(adjacency_a.forward.get("AAA"), adjacency_b.forward.get("AAA"));
     }
 }
