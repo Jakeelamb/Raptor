@@ -451,6 +451,14 @@ fn median_u32_in_place(values: &mut [u32]) -> u32 {
 }
 
 #[inline]
+fn upper_median_u32_in_place(values: &mut [u32]) -> u32 {
+    debug_assert!(!values.is_empty());
+    let mid = values.len() / 2;
+    let (_, upper, _) = values.select_nth_unstable(mid);
+    *upper
+}
+
+#[inline]
 fn median_usize_in_place(values: &mut [usize]) -> usize {
     debug_assert!(!values.is_empty());
     let mid = values.len() / 2;
@@ -1029,8 +1037,7 @@ impl LargeGenomeAssembler {
             return 2;
         }
 
-        non_singleton_counts.sort_unstable();
-        let median = non_singleton_counts[non_singleton_counts.len() / 2];
+        let median = upper_median_u32_in_place(&mut non_singleton_counts);
 
         (median / 10).clamp(2, 5)
     }
@@ -3942,6 +3949,58 @@ mod tests {
         });
 
         assert_eq!(assembler.select_min_count(&counts), 4);
+    }
+
+    #[test]
+    fn test_auto_min_count_uses_upper_median_for_even_non_singleton_counts() {
+        let mut counts = AHashMap::new();
+        counts.insert(0, 2);
+        counts.insert(1, 2);
+        counts.insert(2, 49);
+        counts.insert(3, 50);
+        counts.insert(4, 1); // singleton should be ignored
+
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            min_count: 0,
+            ..Default::default()
+        });
+
+        // Sorted non-singletons: [2, 2, 49, 50], upper median is 49.
+        assert_eq!(assembler.select_min_count(&counts), 4);
+    }
+
+    #[test]
+    fn test_auto_min_count_is_insertion_order_invariant() {
+        let values = [2u32, 2, 2, 8, 12, 24, 40, 60, 1, 1];
+        let base_items: Vec<(u64, u32)> = values
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(idx, count)| (idx as u64, count))
+            .collect();
+
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            min_count: 0,
+            ..Default::default()
+        });
+
+        let mut baseline = AHashMap::new();
+        for &(k, v) in &base_items {
+            baseline.insert(k, v);
+        }
+        let expected = assembler.select_min_count(&baseline);
+
+        let mut rng = StdRng::seed_from_u64(0xA11C_E11E_1234_5678);
+        for _ in 0..64 {
+            let mut shuffled = base_items.clone();
+            shuffled.shuffle(&mut rng);
+
+            let mut observed_map = AHashMap::new();
+            for (k, v) in shuffled {
+                observed_map.insert(k, v);
+            }
+            assert_eq!(assembler.select_min_count(&observed_map), expected);
+        }
     }
 
     #[test]
