@@ -32,6 +32,8 @@ pub struct LargeGenomeConfig {
     pub k: usize,
     /// Minimum k-mer count to use (filters errors). Use 0 for adaptive selection.
     pub min_count: u32,
+    /// Minimum count required for a k-mer to be considered trusted during singleton rescue.
+    pub error_correction_min_trusted_count: u32,
     /// Minimum contig length to output
     pub min_contig_len: usize,
     /// Number of disk buckets (None = auto)
@@ -42,6 +44,20 @@ pub struct LargeGenomeConfig {
     pub max_tip_len: usize,
     /// Remove bubbles shorter than this
     pub max_bubble_len: usize,
+    /// Minimum read support required before branch threading overrides coverage.
+    pub branch_support_min_win: u32,
+    /// Minimum lead over the runner-up support before branch threading overrides coverage.
+    pub branch_support_min_margin: u32,
+    /// Prefer non-repeat branch candidates when read support does not decide.
+    pub prefer_non_repeat_branches: bool,
+    /// Prefer higher-coverage seeds before lower-coverage seeds during contig extraction.
+    pub prefer_high_count_seeds: bool,
+    /// Prefer non-repeat seeds before repeat seeds during contig extraction.
+    pub prefer_non_repeat_seeds: bool,
+    /// Run a second repeat-seed completion pass after the non-repeat extraction pass.
+    pub enable_repeat_seed_completion: bool,
+    /// Suppress redundant contained or same-flank branch-alternative contigs after extraction.
+    pub suppress_redundant_contigs: bool,
 }
 
 impl Default for LargeGenomeConfig {
@@ -49,11 +65,19 @@ impl Default for LargeGenomeConfig {
         Self {
             k: 31,
             min_count: 0,
+            error_correction_min_trusted_count: 4,
             min_contig_len: 200,
             num_buckets: None,
             temp_dir: None,
             max_tip_len: 100,
             max_bubble_len: 50,
+            branch_support_min_win: 1,
+            branch_support_min_margin: 2,
+            prefer_non_repeat_branches: true,
+            prefer_high_count_seeds: true,
+            prefer_non_repeat_seeds: true,
+            enable_repeat_seed_completion: true,
+            suppress_redundant_contigs: false,
         }
     }
 }
@@ -330,11 +354,84 @@ struct SeedCandidate {
     count: u32,
 }
 
+#[derive(Debug, Clone)]
+struct RankedExtractedContig {
+    original_index: usize,
+    sequence: String,
+    total_support: u64,
+    kmer_windows: usize,
+}
+
 #[derive(Debug, Clone, Default)]
 struct ReadThreadingStats {
     ambiguous_edges: usize,
     supported_edges: usize,
     edge_observations: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+struct OrientedBranchEdgeLookup {
+    canonical_by_oriented: AHashMap<(u64, u64), (u64, u64)>,
+    ambiguous_edges: usize,
+}
+
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LargeGenomeBenchBranchThreadingStats {
+    pub ambiguous_edges: usize,
+    pub supported_edges: usize,
+    pub edge_observations: u64,
+}
+
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LargeGenomeBenchBranchCandidate {
+    pub base_idx: usize,
+    pub next: u64,
+    pub count: u32,
+    pub is_repeat: bool,
+    pub read_support: u32,
+}
+
+#[doc(hidden)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LargeGenomeBenchBranchResolutionCase {
+    pub current_count: u32,
+    pub candidates: Vec<LargeGenomeBenchBranchCandidate>,
+}
+
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LargeGenomeBenchErrorCorrectionStats {
+    pub corrected_kmers: u64,
+    pub remaining_kmers: usize,
+}
+
+#[derive(Debug, Default)]
+struct ErrorCorrectionBatch {
+    trusted_increments: AHashMap<u64, u32>,
+    singleton_removals: Vec<u64>,
+    corrected: u64,
+}
+
+#[doc(hidden)]
+pub struct LargeGenomeStageBenchFixture {
+    assembler: LargeGenomeAssembler,
+    k: usize,
+    kmer_counts: AHashMap<u64, u32>,
+    valid_kmers: AHashSet<u64>,
+    adjacency: AHashMap<u64, ([bool; 4], [bool; 4])>,
+    branch_edges: AHashSet<(u64, u64)>,
+    branch_reads: Vec<Vec<u8>>,
+    branch_support: AHashMap<(u64, u64), u32>,
+    expected_contigs: Vec<String>,
+}
+
+#[doc(hidden)]
+pub struct LargeGenomeErrorCorrectionBenchFixture {
+    assembler: LargeGenomeAssembler,
+    k: usize,
+    kmer_counts: AHashMap<u64, u32>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -474,12 +571,345 @@ fn median_usize_in_place(values: &mut [usize]) -> usize {
     }
 }
 
+#[inline]
+fn add_weighted_sequence_counts(
+    counts: &mut AHashMap<u64, u32>,
+    sequence: &[u8],
+    k: usize,
+    weight: u32,
+) {
+    if sequence.len() < k || weight == 0 {
+        return;
+    }
+
+    for window in sequence.windows(k) {
+        if let Some(kmer) = KmerU64::from_slice(window) {
+            let canonical = kmer.canonical().encoded;
+            let entry = counts.entry(canonical).or_insert(0);
+            *entry = entry.saturating_add(weight);
+        }
+    }
+}
+
+fn xorshift64(mut state: u64) -> u64 {
+    state ^= state << 13;
+    state ^= state >> 7;
+    state ^= state << 17;
+    state
+}
+
+fn pseudo_random_dna(seed: u64, len: usize) -> String {
+    const BASES: [char; 4] = ['A', 'C', 'G', 'T'];
+
+    let mut state = seed.max(1);
+    let mut sequence = String::with_capacity(len);
+    for _ in 0..len {
+        state = xorshift64(state);
+        sequence.push(BASES[(state & 0b11) as usize]);
+    }
+    sequence
+}
+
+#[inline]
+fn alternate_dna_base(base: u8, offset: usize) -> u8 {
+    const BASES: [u8; 4] = [b'A', b'C', b'G', b'T'];
+
+    let current = BASES
+        .iter()
+        .position(|&candidate| candidate == base)
+        .unwrap_or(0);
+    BASES[(current + (offset % 3) + 1) % BASES.len()]
+}
+
+impl LargeGenomeBenchBranchThreadingStats {
+    fn from_internal(stats: ReadThreadingStats) -> Self {
+        Self {
+            ambiguous_edges: stats.ambiguous_edges,
+            supported_edges: stats.supported_edges,
+            edge_observations: stats.edge_observations,
+        }
+    }
+}
+
+impl OrientedBranchEdgeLookup {
+    fn new(branch_edges: &AHashSet<(u64, u64)>, k: usize) -> Self {
+        let mut canonical_by_oriented =
+            AHashMap::with_capacity(branch_edges.len().saturating_mul(2));
+
+        for &(from, to) in branch_edges {
+            canonical_by_oriented.insert((from, to), (from, to));
+
+            let reverse = (
+                LargeGenomeAssembler::reverse_complement_kmer(to, k),
+                LargeGenomeAssembler::reverse_complement_kmer(from, k),
+            );
+            canonical_by_oriented.insert(reverse, (from, to));
+        }
+
+        Self {
+            canonical_by_oriented,
+            ambiguous_edges: branch_edges.len(),
+        }
+    }
+
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.canonical_by_oriented.is_empty()
+    }
+}
+
+impl LargeGenomeStageBenchFixture {
+    #[doc(hidden)]
+    pub fn synthetic_branching(
+        k: usize,
+        component_count: usize,
+        primary_reads_per_component: usize,
+        alternate_reads_per_component: usize,
+    ) -> Self {
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: k,
+            ..Default::default()
+        });
+
+        let mut counts = AHashMap::new();
+        let mut branch_reads = Vec::with_capacity(
+            component_count
+                .saturating_mul(primary_reads_per_component + alternate_reads_per_component),
+        );
+        let mut expected_contigs = Vec::with_capacity(component_count);
+        let primary_weight = primary_reads_per_component.max(1) as u32;
+        let alternate_weight = alternate_reads_per_component.max(1) as u32;
+        let prefix_len = k + 12;
+        let suffix_len = k + 12;
+
+        for component_idx in 0..component_count {
+            let component_seed = (component_idx as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let prefix = pseudo_random_dna(component_seed ^ 0xA5A5_5A5A_1234_5678, prefix_len);
+            let suffix = pseudo_random_dna(component_seed ^ 0xC3C3_3C3C_8765_4321, suffix_len);
+            let primary = format!("{prefix}AAGTC{suffix}");
+            let alternate = format!("{prefix}CCGTC{suffix}");
+            expected_contigs.push(primary.clone());
+
+            add_weighted_sequence_counts(&mut counts, primary.as_bytes(), k, primary_weight);
+            add_weighted_sequence_counts(&mut counts, alternate.as_bytes(), k, alternate_weight);
+
+            for _ in 0..primary_reads_per_component {
+                branch_reads.push(primary.as_bytes().to_vec());
+            }
+            for _ in 0..alternate_reads_per_component {
+                branch_reads.push(alternate.as_bytes().to_vec());
+            }
+        }
+
+        let valid_kmers: AHashSet<u64> = counts.keys().copied().collect();
+        let adjacency = assembler.build_adjacency(&valid_kmers, k);
+        let graph = assembler.build_weighted_unitig_graph(&counts, &adjacency, k);
+        let branch_edges = assembler.collect_ambiguous_branch_edges(&graph);
+        let (branch_support, _) = assembler.collect_branch_support_from_sequences(
+            &branch_reads,
+            &adjacency,
+            &branch_edges,
+            k,
+        );
+
+        Self {
+            assembler,
+            k,
+            kmer_counts: counts,
+            valid_kmers,
+            adjacency,
+            branch_edges,
+            branch_reads,
+            branch_support,
+            expected_contigs,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn run_branch_threading(&self) -> LargeGenomeBenchBranchThreadingStats {
+        let (_, stats) = self.assembler.collect_branch_support_from_sequences(
+            &self.branch_reads,
+            &self.adjacency,
+            &self.branch_edges,
+            self.k,
+        );
+        LargeGenomeBenchBranchThreadingStats::from_internal(stats)
+    }
+
+    #[doc(hidden)]
+    pub fn run_contig_extraction(&self) -> Vec<String> {
+        self.assembler.build_contigs_from_graph(
+            &self.kmer_counts,
+            &self.adjacency,
+            &self.branch_support,
+            self.k,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn cloned_kmer_counts(&self) -> AHashMap<u64, u32> {
+        self.kmer_counts.clone()
+    }
+
+    #[doc(hidden)]
+    pub fn valid_kmers(&self) -> AHashSet<u64> {
+        self.valid_kmers.clone()
+    }
+
+    #[doc(hidden)]
+    pub fn branch_support_map(&self) -> AHashMap<(u64, u64), u32> {
+        self.branch_support.clone()
+    }
+
+    #[doc(hidden)]
+    pub fn expected_contigs(&self) -> &[String] {
+        &self.expected_contigs
+    }
+
+    #[doc(hidden)]
+    pub fn total_branch_read_bases(&self) -> usize {
+        self.branch_reads.iter().map(Vec::len).sum()
+    }
+
+    #[doc(hidden)]
+    pub fn graph_node_count(&self) -> usize {
+        self.adjacency.len()
+    }
+
+    #[doc(hidden)]
+    pub fn branch_edge_count(&self) -> usize {
+        self.branch_edges.len()
+    }
+}
+
+impl LargeGenomeErrorCorrectionBenchFixture {
+    #[doc(hidden)]
+    pub fn synthetic_singleton_correction(
+        k: usize,
+        trusted_kmer_count: usize,
+        singletons_per_trusted: usize,
+    ) -> Self {
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: k,
+            ..Default::default()
+        });
+
+        let mut counts = AHashMap::with_capacity(
+            trusted_kmer_count.saturating_mul(singletons_per_trusted.saturating_add(1)),
+        );
+
+        for trusted_idx in 0..trusted_kmer_count {
+            let trusted_seed =
+                (trusted_idx as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xA5A5_5A5A_1234_5678;
+
+            let trusted = loop {
+                let candidate = pseudo_random_dna(trusted_seed ^ counts.len() as u64, k);
+                let encoded = KmerU64::from_str(&candidate).unwrap().canonical().encoded;
+                if let std::collections::hash_map::Entry::Vacant(entry) = counts.entry(encoded) {
+                    entry.insert(16 + (trusted_idx % 11) as u32);
+                    break encoded;
+                }
+            };
+
+            let trusted_template = decode_kmer(trusted, k).into_bytes();
+            let mut generated = 0usize;
+            let mut attempt = 0usize;
+
+            while generated < singletons_per_trusted {
+                let mut singleton = trusted_template.clone();
+                let pos = (attempt * 7 + trusted_idx) % k;
+                singleton[pos] = alternate_dna_base(singleton[pos], attempt + generated);
+
+                let encoded = KmerU64::from_slice(&singleton).unwrap().canonical().encoded;
+                attempt += 1;
+
+                if encoded == trusted || counts.contains_key(&encoded) {
+                    continue;
+                }
+
+                counts.insert(encoded, 1);
+                generated += 1;
+            }
+        }
+
+        Self {
+            assembler,
+            k,
+            kmer_counts: counts,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn cloned_kmer_counts(&self) -> AHashMap<u64, u32> {
+        self.kmer_counts.clone()
+    }
+
+    #[doc(hidden)]
+    pub fn run_error_correction(
+        &self,
+        kmer_counts: AHashMap<u64, u32>,
+    ) -> LargeGenomeBenchErrorCorrectionStats {
+        let (_corrected_counts, stats) = self
+            .assembler
+            .run_error_correction_case(kmer_counts, self.k);
+        stats
+    }
+
+    #[doc(hidden)]
+    pub fn total_kmer_count(&self) -> usize {
+        self.kmer_counts.len()
+    }
+
+    #[doc(hidden)]
+    pub fn singleton_count(&self) -> usize {
+        self.kmer_counts
+            .values()
+            .filter(|&&count| count == 1)
+            .count()
+    }
+}
+
 /// Main large genome assembler
 pub struct LargeGenomeAssembler {
     config: LargeGenomeConfig,
 }
 
 impl LargeGenomeAssembler {
+    const THREADING_BATCH_SIZE: usize = 512;
+    const PARALLEL_THREADING_MIN_BATCH: usize = 256;
+    const ERROR_CORRECTION_BATCH_SIZE: usize = 4_096;
+    const PARALLEL_ERROR_CORRECTION_MIN_BATCH: usize = 8_192;
+
+    #[doc(hidden)]
+    pub fn run_error_correction_case(
+        &self,
+        kmer_counts: AHashMap<u64, u32>,
+        k: usize,
+    ) -> (AHashMap<u64, u32>, LargeGenomeBenchErrorCorrectionStats) {
+        let (corrected_counts, corrected_kmers) = self.error_correct_kmers(kmer_counts, k);
+        let stats = LargeGenomeBenchErrorCorrectionStats {
+            corrected_kmers,
+            remaining_kmers: corrected_counts.len(),
+        };
+        (corrected_counts, stats)
+    }
+
+    #[doc(hidden)]
+    pub fn run_contig_extraction_case(
+        &self,
+        kmer_counts: AHashMap<u64, u32>,
+        valid_kmers: &AHashSet<u64>,
+        branch_support: &AHashMap<(u64, u64), u32>,
+        k: usize,
+    ) -> Vec<String> {
+        let adjacency = self.build_adjacency(valid_kmers, k);
+        self.build_contigs_from_graph(&kmer_counts, &adjacency, branch_support, k)
+    }
+
     pub fn new(config: LargeGenomeConfig) -> Self {
         Self { config }
     }
@@ -519,7 +949,7 @@ impl LargeGenomeAssembler {
 
         // Phase 3: Error correction - rescue low-count k-mers that are 1 edit from high-count
         info!("Phase 3/6: Error correction...");
-        let (corrected_counts, num_corrected) = self.error_correct_kmers(&kmer_counts, k);
+        let (corrected_counts, num_corrected) = self.error_correct_kmers(kmer_counts, k);
         stats.kmers_error_corrected = num_corrected;
         info!("Error-corrected {} k-mers", num_corrected);
 
@@ -641,7 +1071,7 @@ impl LargeGenomeAssembler {
         stats.kmers_unique = kmer_counts.len() as u64;
 
         info!("Phase 3/6: Error correction...");
-        let (corrected_counts, num_corrected) = self.error_correct_kmers(&kmer_counts, k);
+        let (corrected_counts, num_corrected) = self.error_correct_kmers(kmer_counts, k);
         stats.kmers_error_corrected = num_corrected;
         info!("Error-corrected {} k-mers", num_corrected);
 
@@ -928,48 +1358,89 @@ impl LargeGenomeAssembler {
     /// removing real low-coverage k-mers.
     fn error_correct_kmers(
         &self,
-        kmer_counts: &AHashMap<u64, u32>,
+        mut kmer_counts: AHashMap<u64, u32>,
         k: usize,
     ) -> (AHashMap<u64, u32>, u64) {
-        let min_count = self.config.min_count;
-        let mut corrected = kmer_counts.clone();
-        let mut num_corrected = 0u64;
-
         // Build set of high-confidence k-mers (need strong evidence)
-        // Require at least 3x the min_count threshold for "trusted" status
-        let trusted_threshold = (min_count * 3).max(4);
-        let high_conf: AHashSet<u64> = kmer_counts
-            .iter()
-            .filter(|(_, &c)| c >= trusted_threshold)
-            .map(|(&k, _)| k)
-            .collect();
+        // Require at least 3x the min_count threshold and honor the explicit
+        // trusted floor so local optimization can tune both leniency and strictness.
+        let trusted_threshold = self.error_correction_trusted_threshold();
+        let mut trusted_counts = AHashMap::new();
+        let mut singleton_kmers = Vec::new();
 
-        if high_conf.is_empty() {
-            return (corrected, 0);
-        }
-
-        // Only correct singletons (count = 1) - these are almost certainly errors
-        let singleton_kmers: Vec<u64> = kmer_counts
-            .iter()
-            .filter(|(_, &c)| c == 1)
-            .map(|(&k, _)| k)
-            .collect();
-
-        for singleton in singleton_kmers {
-            // Find a trusted neighbor within Hamming distance 1
-            if let Some(trusted_neighbor) =
-                self.find_trusted_neighbor(singleton, k, &high_conf, kmer_counts)
-            {
-                // Transfer count from error k-mer to trusted k-mer
-                if let Some(count) = corrected.get_mut(&trusted_neighbor) {
-                    *count = count.saturating_add(1);
-                }
-                corrected.remove(&singleton);
-                num_corrected += 1;
+        for (&encoded, &count) in &kmer_counts {
+            if count >= trusted_threshold {
+                trusted_counts.insert(encoded, count);
+            } else if count == 1 {
+                singleton_kmers.push(encoded);
             }
         }
 
-        (corrected, num_corrected)
+        if trusted_counts.is_empty() || singleton_kmers.is_empty() {
+            return (kmer_counts, 0);
+        }
+
+        let correction_batches =
+            if singleton_kmers.len() >= Self::PARALLEL_ERROR_CORRECTION_MIN_BATCH {
+                singleton_kmers
+                    .par_chunks(Self::ERROR_CORRECTION_BATCH_SIZE)
+                    .map(|chunk| self.collect_error_correction_batch(chunk, k, &trusted_counts))
+                    .collect::<Vec<_>>()
+            } else {
+                vec![self.collect_error_correction_batch(&singleton_kmers, k, &trusted_counts)]
+            };
+
+        let mut num_corrected = 0u64;
+        for batch in correction_batches {
+            num_corrected += batch.corrected;
+
+            for (trusted_neighbor, increment) in batch.trusted_increments {
+                if let Some(count) = kmer_counts.get_mut(&trusted_neighbor) {
+                    *count = count.saturating_add(increment);
+                }
+            }
+
+            for singleton in batch.singleton_removals {
+                kmer_counts.remove(&singleton);
+            }
+        }
+
+        (kmer_counts, num_corrected)
+    }
+
+    fn error_correction_trusted_threshold(&self) -> u32 {
+        self.config
+            .min_count
+            .saturating_mul(3)
+            .max(self.config.error_correction_min_trusted_count)
+    }
+
+    fn collect_error_correction_batch(
+        &self,
+        singleton_kmers: &[u64],
+        k: usize,
+        trusted_counts: &AHashMap<u64, u32>,
+    ) -> ErrorCorrectionBatch {
+        let mut batch = ErrorCorrectionBatch {
+            trusted_increments: AHashMap::with_capacity(singleton_kmers.len()),
+            singleton_removals: Vec::with_capacity(singleton_kmers.len()),
+            corrected: 0,
+        };
+
+        for &singleton in singleton_kmers {
+            if let Some(trusted_neighbor) = self.find_trusted_neighbor(singleton, k, trusted_counts)
+            {
+                let entry = batch
+                    .trusted_increments
+                    .entry(trusted_neighbor)
+                    .or_insert(0);
+                *entry = entry.saturating_add(1);
+                batch.singleton_removals.push(singleton);
+                batch.corrected += 1;
+            }
+        }
+
+        batch
     }
 
     /// Find a high-confidence k-mer within Hamming distance 1
@@ -977,8 +1448,7 @@ impl LargeGenomeAssembler {
         &self,
         encoded: u64,
         k: usize,
-        trusted: &AHashSet<u64>,
-        kmer_counts: &AHashMap<u64, u32>,
+        trusted_counts: &AHashMap<u64, u32>,
     ) -> Option<u64> {
         let bases: [u64; 4] = [0, 1, 2, 3]; // A, C, G, T in 2-bit encoding
         let mut best: Option<(u32, u64)> = None;
@@ -1004,8 +1474,7 @@ impl LargeGenomeAssembler {
                 };
                 let canonical = variant_kmer.canonical().encoded;
 
-                if trusted.contains(&canonical) {
-                    let count = kmer_counts.get(&canonical).copied().unwrap_or(0);
+                if let Some(&count) = trusted_counts.get(&canonical) {
                     match best {
                         None => best = Some((count, canonical)),
                         Some((best_count, best_kmer)) => {
@@ -1578,25 +2047,27 @@ impl LargeGenomeAssembler {
                 oriented,
                 count,
             };
-            if repeat_kmers.contains(&canonical) {
+            if !self.config.prefer_non_repeat_seeds {
+                preferred.push(entry);
+            } else if repeat_kmers.contains(&canonical) {
                 repeat_fallback.push(entry);
             } else {
                 preferred.push(entry);
             }
         }
 
-        preferred.sort_unstable_by(|a, b| {
-            b.count
-                .cmp(&a.count)
-                .then_with(|| a.canonical.cmp(&b.canonical))
-        });
-        repeat_fallback.sort_unstable_by(|a, b| {
-            b.count
-                .cmp(&a.count)
-                .then_with(|| a.canonical.cmp(&b.canonical))
-        });
+        let seed_order = |left: &SeedCandidate, right: &SeedCandidate| {
+            let count_cmp = if self.config.prefer_high_count_seeds {
+                right.count.cmp(&left.count)
+            } else {
+                left.count.cmp(&right.count)
+            };
+            count_cmp.then_with(|| left.canonical.cmp(&right.canonical))
+        };
+        preferred.sort_unstable_by(seed_order);
+        repeat_fallback.sort_unstable_by(seed_order);
 
-        let using_repeat_fallback = preferred.is_empty();
+        let using_repeat_fallback = self.config.prefer_non_repeat_seeds && preferred.is_empty();
         if using_repeat_fallback {
             info!(
                 "  Non-repeat seeds unavailable after graph cleanup; falling back to {} repeat seeds",
@@ -1610,6 +2081,12 @@ impl LargeGenomeAssembler {
 
         for seed in preferred {
             if used.contains(&seed.canonical) {
+                continue;
+            }
+
+            if self.config.suppress_redundant_contigs
+                && self.mark_enclosed_seed_component_used(seed.oriented, k, adjacency, &mut used)
+            {
                 continue;
             }
 
@@ -1639,7 +2116,10 @@ impl LargeGenomeAssembler {
 
         // Quality/completeness pass: if repeat components remain disconnected from
         // non-repeat seeds, extend them deterministically as a second pass.
-        if !using_repeat_fallback && !repeat_fallback.is_empty() {
+        if self.config.enable_repeat_seed_completion
+            && !using_repeat_fallback
+            && !repeat_fallback.is_empty()
+        {
             info!(
                 "  Running repeat-seed completion pass on {} seeds...",
                 repeat_fallback.len()
@@ -1647,6 +2127,17 @@ impl LargeGenomeAssembler {
             let contigs_before = contigs.len();
             for seed in repeat_fallback {
                 if used.contains(&seed.canonical) {
+                    continue;
+                }
+
+                if self.config.suppress_redundant_contigs
+                    && self.mark_enclosed_seed_component_used(
+                        seed.oriented,
+                        k,
+                        adjacency,
+                        &mut used,
+                    )
+                {
                     continue;
                 }
 
@@ -1670,7 +2161,218 @@ impl LargeGenomeAssembler {
             );
         }
 
+        if self.config.suppress_redundant_contigs && contigs.len() > 1 {
+            let contigs_before = contigs.len();
+            contigs = self.suppress_redundant_contigs(contigs, kmer_counts, k);
+            info!(
+                "  Redundant-contig suppression removed {} contigs",
+                contigs_before.saturating_sub(contigs.len())
+            );
+        }
+
         contigs
+    }
+
+    fn mark_enclosed_seed_component_used(
+        &self,
+        seed_encoded: u64,
+        k: usize,
+        adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+        used: &mut AHashSet<u64>,
+    ) -> bool {
+        let seed_canonical = Self::canonical_encoded(seed_encoded, k);
+        if used.contains(&seed_canonical) {
+            return false;
+        }
+
+        let Some((left_path, left_enclosed)) =
+            Self::walk_linear_unused_path(seed_encoded, k, adjacency, used, true)
+        else {
+            return false;
+        };
+        let Some((right_path, right_enclosed)) =
+            Self::walk_linear_unused_path(seed_encoded, k, adjacency, used, false)
+        else {
+            return false;
+        };
+
+        if !left_enclosed || !right_enclosed {
+            return false;
+        }
+
+        used.insert(seed_canonical);
+        for kmer in left_path.into_iter().chain(right_path.into_iter()) {
+            used.insert(kmer);
+        }
+        true
+    }
+
+    fn walk_linear_unused_path(
+        start: u64,
+        k: usize,
+        adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+        used: &AHashSet<u64>,
+        going_left: bool,
+    ) -> Option<(Vec<u64>, bool)> {
+        const BASES: [u8; 4] = [b'A', b'C', b'G', b'T'];
+
+        let mut current = start;
+        let mut traversed = Vec::new();
+        let mut local_seen = AHashSet::new();
+        local_seen.insert(Self::canonical_encoded(start, k));
+
+        loop {
+            let current_oriented = Self::resolve_adjacency_orientation(current, k, adjacency)?;
+            let extensions = if going_left {
+                adjacency.get(&current_oriented)?.0
+            } else {
+                adjacency.get(&current_oriented)?.1
+            };
+
+            let mut used_boundary = false;
+            let mut next_unused = None;
+
+            for (base_idx, valid) in extensions.iter().copied().enumerate() {
+                if !valid {
+                    continue;
+                }
+
+                let next = if going_left {
+                    extend_left(current_oriented, BASES[base_idx], k)
+                } else {
+                    extend_right(current_oriented, BASES[base_idx], k)
+                }?;
+                let next_canonical = Self::canonical_encoded(next, k);
+
+                if used.contains(&next_canonical) {
+                    used_boundary = true;
+                    continue;
+                }
+
+                if next_unused.is_some() || !local_seen.insert(next_canonical) {
+                    return None;
+                }
+                next_unused = Some(next_canonical);
+                current = next;
+            }
+
+            match next_unused {
+                Some(next_canonical) => traversed.push(next_canonical),
+                None => return Some((traversed, used_boundary)),
+            }
+        }
+    }
+
+    fn suppress_redundant_contigs(
+        &self,
+        contigs: Vec<String>,
+        kmer_counts: &AHashMap<u64, u32>,
+        k: usize,
+    ) -> Vec<String> {
+        let mut ranked = contigs
+            .into_iter()
+            .enumerate()
+            .map(|(original_index, sequence)| {
+                let (total_support, kmer_windows) =
+                    Self::contig_support_profile(&sequence, kmer_counts, k);
+                RankedExtractedContig {
+                    original_index,
+                    sequence,
+                    total_support,
+                    kmer_windows,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        ranked.sort_unstable_by(|left, right| {
+            (right.total_support as u128 * left.kmer_windows as u128)
+                .cmp(&(left.total_support as u128 * right.kmer_windows as u128))
+                .then_with(|| right.total_support.cmp(&left.total_support))
+                .then_with(|| right.sequence.len().cmp(&left.sequence.len()))
+                .then_with(|| left.sequence.cmp(&right.sequence))
+                .then_with(|| left.original_index.cmp(&right.original_index))
+        });
+
+        let mut kept: Vec<RankedExtractedContig> = Vec::with_capacity(ranked.len());
+        for candidate in ranked {
+            if kept.iter().any(|existing| {
+                Self::is_redundant_contig(
+                    existing.sequence.as_str(),
+                    candidate.sequence.as_str(),
+                    k,
+                )
+            }) {
+                continue;
+            }
+            kept.push(candidate);
+        }
+
+        kept.sort_unstable_by_key(|contig| contig.original_index);
+        kept.into_iter().map(|contig| contig.sequence).collect()
+    }
+
+    fn contig_support_profile(
+        sequence: &str,
+        kmer_counts: &AHashMap<u64, u32>,
+        k: usize,
+    ) -> (u64, usize) {
+        if sequence.len() < k {
+            return (0, 1);
+        }
+
+        let mut total_support = 0u64;
+        let mut kmer_windows = 0usize;
+        for window in sequence.as_bytes().windows(k) {
+            if let Some(kmer) = KmerU64::from_slice(window) {
+                total_support = total_support.saturating_add(
+                    kmer_counts
+                        .get(&kmer.canonical().encoded)
+                        .copied()
+                        .unwrap_or(0) as u64,
+                );
+                kmer_windows += 1;
+            }
+        }
+
+        (total_support, kmer_windows.max(1))
+    }
+
+    fn is_redundant_contig(existing: &str, candidate: &str, k: usize) -> bool {
+        if existing == candidate {
+            return true;
+        }
+
+        if existing.len() >= candidate.len() && existing.contains(candidate) {
+            return true;
+        }
+
+        let min_len = existing.len().min(candidate.len());
+        if min_len < k.saturating_mul(2).saturating_add(1) {
+            return false;
+        }
+
+        let shared_prefix = Self::shared_prefix_bases(existing.as_bytes(), candidate.as_bytes());
+        if shared_prefix < k {
+            return false;
+        }
+
+        let shared_suffix = Self::shared_suffix_bases(existing.as_bytes(), candidate.as_bytes());
+        shared_suffix >= k && shared_prefix.saturating_add(shared_suffix) < min_len
+    }
+
+    fn shared_prefix_bases(left: &[u8], right: &[u8]) -> usize {
+        left.iter()
+            .zip(right.iter())
+            .take_while(|(left_base, right_base)| left_base == right_base)
+            .count()
+    }
+
+    fn shared_suffix_bases(left: &[u8], right: &[u8]) -> usize {
+        left.iter()
+            .rev()
+            .zip(right.iter().rev())
+            .take_while(|(left_base, right_base)| left_base == right_base)
+            .count()
     }
 
     #[inline]
@@ -1779,14 +2481,30 @@ impl LargeGenomeAssembler {
             return Ok((edge_support, stats));
         }
 
+        let branch_edge_lookup = OrientedBranchEdgeLookup::new(branch_edges, k);
         let reader = try_open_fastq(path)?;
+        let mut batch = Vec::with_capacity(Self::THREADING_BATCH_SIZE);
         for record in stream_fastq_records_checked(reader) {
             let record = record?;
-            stats.edge_observations += Self::thread_branch_edges_in_sequence(
-                record.sequence.as_bytes(),
+            batch.push(record.sequence.into_bytes());
+            if batch.len() >= Self::THREADING_BATCH_SIZE {
+                stats.edge_observations += Self::accumulate_branch_support_batch(
+                    &batch,
+                    k,
+                    adjacency,
+                    &branch_edge_lookup,
+                    &mut edge_support,
+                );
+                batch.clear();
+            }
+        }
+
+        if !batch.is_empty() {
+            stats.edge_observations += Self::accumulate_branch_support_batch(
+                &batch,
                 k,
                 adjacency,
-                branch_edges,
+                &branch_edge_lookup,
                 &mut edge_support,
             );
         }
@@ -1813,28 +2531,153 @@ impl LargeGenomeAssembler {
             return Ok((edge_support, stats));
         }
 
+        let branch_edge_lookup = OrientedBranchEdgeLookup::new(branch_edges, k);
         let reader1 = try_open_fastq(path1)?;
         let reader2 = try_open_fastq(path2)?;
+        let mut batch = Vec::with_capacity(Self::THREADING_BATCH_SIZE);
         for pair in stream_paired_fastq_records_checked(reader1, reader2) {
             let (r1, r2) = pair?;
-            stats.edge_observations += Self::thread_branch_edges_in_sequence(
-                r1.sequence.as_bytes(),
+            batch.push(r1.sequence.into_bytes());
+            if batch.len() >= Self::THREADING_BATCH_SIZE {
+                stats.edge_observations += Self::accumulate_branch_support_batch(
+                    &batch,
+                    k,
+                    adjacency,
+                    &branch_edge_lookup,
+                    &mut edge_support,
+                );
+                batch.clear();
+            }
+
+            batch.push(r2.sequence.into_bytes());
+            if batch.len() >= Self::THREADING_BATCH_SIZE {
+                stats.edge_observations += Self::accumulate_branch_support_batch(
+                    &batch,
+                    k,
+                    adjacency,
+                    &branch_edge_lookup,
+                    &mut edge_support,
+                );
+                batch.clear();
+            }
+        }
+
+        if !batch.is_empty() {
+            stats.edge_observations += Self::accumulate_branch_support_batch(
+                &batch,
                 k,
                 adjacency,
-                branch_edges,
-                &mut edge_support,
-            );
-            stats.edge_observations += Self::thread_branch_edges_in_sequence(
-                r2.sequence.as_bytes(),
-                k,
-                adjacency,
-                branch_edges,
+                &branch_edge_lookup,
                 &mut edge_support,
             );
         }
 
         stats.supported_edges = edge_support.len();
         Ok((edge_support, stats))
+    }
+
+    fn collect_branch_support_from_sequences(
+        &self,
+        sequences: &[Vec<u8>],
+        adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+        branch_edges: &AHashSet<(u64, u64)>,
+        k: usize,
+    ) -> (AHashMap<(u64, u64), u32>, ReadThreadingStats) {
+        let mut edge_support = AHashMap::with_capacity(branch_edges.len());
+        let branch_edge_lookup = OrientedBranchEdgeLookup::new(branch_edges, k);
+        let mut stats = ReadThreadingStats {
+            ambiguous_edges: branch_edge_lookup.ambiguous_edges,
+            ..Default::default()
+        };
+
+        if branch_edge_lookup.is_empty() {
+            return (edge_support, stats);
+        }
+
+        stats.edge_observations = Self::accumulate_branch_support_batch(
+            sequences,
+            k,
+            adjacency,
+            &branch_edge_lookup,
+            &mut edge_support,
+        );
+
+        stats.supported_edges = edge_support.len();
+        (edge_support, stats)
+    }
+
+    fn accumulate_branch_support_batch(
+        sequences: &[Vec<u8>],
+        k: usize,
+        adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+        branch_edge_lookup: &OrientedBranchEdgeLookup,
+        edge_support: &mut AHashMap<(u64, u64), u32>,
+    ) -> u64 {
+        if sequences.is_empty() || branch_edge_lookup.is_empty() {
+            return 0;
+        }
+
+        if sequences.len() < Self::PARALLEL_THREADING_MIN_BATCH {
+            let mut observations = 0u64;
+            for sequence in sequences {
+                observations =
+                    observations.saturating_add(Self::thread_branch_edges_in_sequence_with_lookup(
+                        sequence,
+                        k,
+                        adjacency,
+                        branch_edge_lookup,
+                        edge_support,
+                    ));
+            }
+            return observations;
+        }
+
+        let (batch_support, observations) = sequences
+            .par_chunks(Self::THREADING_BATCH_SIZE)
+            .map(|chunk| {
+                let mut local_support = AHashMap::with_capacity(
+                    branch_edge_lookup
+                        .ambiguous_edges
+                        .min(chunk.len() * 16)
+                        .max(16),
+                );
+                let mut local_observations = 0u64;
+                for sequence in chunk {
+                    local_observations = local_observations.saturating_add(
+                        Self::thread_branch_edges_in_sequence_with_lookup(
+                            sequence,
+                            k,
+                            adjacency,
+                            branch_edge_lookup,
+                            &mut local_support,
+                        ),
+                    );
+                }
+                (local_support, local_observations)
+            })
+            .reduce(
+                || (AHashMap::new(), 0u64),
+                |(mut left_support, left_observations), (right_support, right_observations)| {
+                    Self::merge_edge_support_counts(&mut left_support, right_support);
+                    (
+                        left_support,
+                        left_observations.saturating_add(right_observations),
+                    )
+                },
+            );
+
+        Self::merge_edge_support_counts(edge_support, batch_support);
+        observations
+    }
+
+    fn merge_edge_support_counts(
+        edge_support: &mut AHashMap<(u64, u64), u32>,
+        additions: AHashMap<(u64, u64), u32>,
+    ) {
+        for (edge, count) in additions {
+            let entry = edge_support.entry(edge).or_insert(0);
+            *entry = entry.saturating_add(count);
+        }
     }
 
     fn thread_branch_edges_in_sequence(
@@ -1844,7 +2687,24 @@ impl LargeGenomeAssembler {
         branch_edges: &AHashSet<(u64, u64)>,
         edge_support: &mut AHashMap<(u64, u64), u32>,
     ) -> u64 {
-        if branch_edges.is_empty() || sequence.len() < k {
+        let branch_edge_lookup = OrientedBranchEdgeLookup::new(branch_edges, k);
+        Self::thread_branch_edges_in_sequence_with_lookup(
+            sequence,
+            k,
+            adjacency,
+            &branch_edge_lookup,
+            edge_support,
+        )
+    }
+
+    fn thread_branch_edges_in_sequence_with_lookup(
+        sequence: &[u8],
+        k: usize,
+        adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+        branch_edge_lookup: &OrientedBranchEdgeLookup,
+        edge_support: &mut AHashMap<(u64, u64), u32>,
+    ) -> u64 {
+        if branch_edge_lookup.is_empty() || sequence.len() < k {
             return 0;
         }
 
@@ -1859,12 +2719,13 @@ impl LargeGenomeAssembler {
         };
 
         for &base in sequence {
-            let Some(base_bits) = Self::encode_dna_base_2bit(base) else {
+            let base_bits = Self::encode_dna_base_2bit(base);
+            if base_bits > 3 {
                 prev_node = None;
                 rolling = 0;
                 valid_run = 0;
                 continue;
-            };
+            }
 
             rolling = ((rolling << 2) | base_bits) & rolling_mask;
             valid_run += 1;
@@ -1872,11 +2733,14 @@ impl LargeGenomeAssembler {
                 continue;
             }
 
-            if let Some(current_node) = Self::resolve_threaded_node(rolling, adjacency, k) {
+            if adjacency.contains_key(&rolling) {
+                let current_node = rolling;
                 if let Some(prev) = prev_node {
-                    let edge = Self::canonical_edge_key(prev, current_node, k);
-                    if branch_edges.contains(&edge) {
-                        let support = edge_support.entry(edge).or_insert(0);
+                    if let Some(&canonical_edge) = branch_edge_lookup
+                        .canonical_by_oriented
+                        .get(&(prev, current_node))
+                    {
+                        let support = edge_support.entry(canonical_edge).or_insert(0);
                         *support = support.saturating_add(1);
                         observations = observations.saturating_add(1);
                     }
@@ -1950,32 +2814,22 @@ impl LargeGenomeAssembler {
     }
 
     #[inline]
-    fn encode_dna_base_2bit(base: u8) -> Option<u64> {
+    fn encode_dna_base_2bit(base: u8) -> u64 {
         match base {
-            b'A' | b'a' => Some(0),
-            b'C' | b'c' => Some(1),
-            b'G' | b'g' => Some(2),
-            b'T' | b't' => Some(3),
-            _ => None,
+            b'A' | b'a' => 0,
+            b'C' | b'c' => 1,
+            b'G' | b'g' => 2,
+            b'T' | b't' => 3,
+            _ => 4,
         }
     }
 
     fn resolve_threaded_node(
         encoded: u64,
         adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
-        k: usize,
+        _k: usize,
     ) -> Option<u64> {
-        if adjacency.contains_key(&encoded) {
-            return Some(encoded);
-        }
-
-        let canonical = KmerU64 {
-            encoded,
-            len: k as u8,
-        }
-        .canonical()
-        .encoded;
-        adjacency.contains_key(&canonical).then_some(canonical)
+        adjacency.contains_key(&encoded).then_some(encoded)
     }
 
     #[inline]
@@ -2612,6 +3466,35 @@ impl LargeGenomeAssembler {
         }
     }
 
+    #[doc(hidden)]
+    pub fn run_branch_resolution_case(
+        &self,
+        case: &LargeGenomeBenchBranchResolutionCase,
+    ) -> Option<LargeGenomeBenchBranchCandidate> {
+        let mut scratch = Vec::with_capacity(case.candidates.len());
+        scratch.extend(
+            case.candidates
+                .iter()
+                .copied()
+                .map(|candidate| BranchCandidate {
+                    base_idx: candidate.base_idx,
+                    next: candidate.next,
+                    count: candidate.count,
+                    is_repeat: candidate.is_repeat,
+                    read_support: candidate.read_support,
+                }),
+        );
+
+        self.choose_branch_extension(&scratch, case.current_count)
+            .map(|selected| LargeGenomeBenchBranchCandidate {
+                base_idx: selected.base_idx,
+                next: selected.next,
+                count: selected.count,
+                is_repeat: selected.is_repeat,
+                read_support: selected.read_support,
+            })
+    }
+
     fn choose_branch_extension(
         &self,
         extensions: &[BranchCandidate],
@@ -2623,22 +3506,42 @@ impl LargeGenomeAssembler {
 
         let (best_support, second_support, supported_extension) =
             Self::best_read_supported_extension(extensions);
-        if best_support >= 2 && best_support > second_support {
+        if best_support >= self.config.branch_support_min_win
+            && best_support.saturating_sub(second_support) >= self.config.branch_support_min_margin
+        {
             return Some(supported_extension);
         }
 
-        let non_repeat = extensions.iter().copied().filter(|ext| !ext.is_repeat);
-        let best_non_repeat = non_repeat.min_by(|left, right| {
-            Self::compare_coverage_ratio(current_count, left.count, right.count)
-                .then_with(|| {
-                    Self::coverage_distance(current_count, left.count)
-                        .cmp(&Self::coverage_distance(current_count, right.count))
-                })
-                .then_with(|| right.read_support.cmp(&left.read_support))
-                .then_with(|| right.count.cmp(&left.count))
-                .then_with(|| left.base_idx.cmp(&right.base_idx))
-                .then_with(|| left.next.cmp(&right.next))
-        });
+        let best_by_coverage = |candidates: &[BranchCandidate]| {
+            candidates.iter().copied().min_by(|left, right| {
+                Self::compare_coverage_ratio(current_count, left.count, right.count)
+                    .then_with(|| {
+                        Self::coverage_distance(current_count, left.count)
+                            .cmp(&Self::coverage_distance(current_count, right.count))
+                    })
+                    .then_with(|| right.read_support.cmp(&left.read_support))
+                    .then_with(|| right.count.cmp(&left.count))
+                    .then_with(|| left.base_idx.cmp(&right.base_idx))
+                    .then_with(|| left.next.cmp(&right.next))
+            })
+        };
+
+        let best_non_repeat = if self.config.prefer_non_repeat_branches {
+            let non_repeat = extensions.iter().copied().filter(|ext| !ext.is_repeat);
+            non_repeat.min_by(|left, right| {
+                Self::compare_coverage_ratio(current_count, left.count, right.count)
+                    .then_with(|| {
+                        Self::coverage_distance(current_count, left.count)
+                            .cmp(&Self::coverage_distance(current_count, right.count))
+                    })
+                    .then_with(|| right.read_support.cmp(&left.read_support))
+                    .then_with(|| right.count.cmp(&left.count))
+                    .then_with(|| left.base_idx.cmp(&right.base_idx))
+                    .then_with(|| left.next.cmp(&right.next))
+            })
+        } else {
+            best_by_coverage(extensions)
+        };
 
         best_non_repeat.or_else(|| {
             extensions.iter().copied().max_by_key(|ext| {
@@ -2905,6 +3808,41 @@ mod tests {
         entries
     }
 
+    fn reference_error_correct_kmers(
+        assembler: &LargeGenomeAssembler,
+        kmer_counts: &AHashMap<u64, u32>,
+        k: usize,
+    ) -> (AHashMap<u64, u32>, u64) {
+        let trusted_threshold = assembler.error_correction_trusted_threshold();
+        let mut trusted_counts = AHashMap::new();
+        let mut singleton_kmers = Vec::new();
+
+        for (&encoded, &count) in kmer_counts {
+            if count >= trusted_threshold {
+                trusted_counts.insert(encoded, count);
+            } else if count == 1 {
+                singleton_kmers.push(encoded);
+            }
+        }
+
+        let mut corrected = kmer_counts.clone();
+        let mut num_corrected = 0u64;
+
+        for singleton in singleton_kmers {
+            if let Some(trusted_neighbor) =
+                assembler.find_trusted_neighbor(singleton, k, &trusted_counts)
+            {
+                if let Some(count) = corrected.get_mut(&trusted_neighbor) {
+                    *count = count.saturating_add(1);
+                }
+                corrected.remove(&singleton);
+                num_corrected += 1;
+            }
+        }
+
+        (corrected, num_corrected)
+    }
+
     fn simple_pop_bubble_fixture() -> (usize, [u64; 7], AHashMap<u64, ([bool; 4], [bool; 4])>) {
         let k = 3;
         let aaa = KmerU64::from_str("AAA").unwrap().encoded;
@@ -3136,17 +4074,12 @@ mod tests {
         let low = KmerU64::from_str("AAAT").unwrap().canonical().encoded;
         let high = KmerU64::from_str("AACA").unwrap().canonical().encoded;
 
-        let mut trusted = AHashSet::new();
-        trusted.insert(low);
-        trusted.insert(high);
-
-        let mut counts = AHashMap::new();
-        counts.insert(singleton, 1);
-        counts.insert(low, 9);
-        counts.insert(high, 25);
+        let mut trusted_counts = AHashMap::new();
+        trusted_counts.insert(low, 9);
+        trusted_counts.insert(high, 25);
 
         let picked = assembler
-            .find_trusted_neighbor(singleton, k, &trusted, &counts)
+            .find_trusted_neighbor(singleton, k, &trusted_counts)
             .unwrap();
         assert_eq!(picked, high);
     }
@@ -3161,19 +4094,34 @@ mod tests {
         let second = KmerU64::from_str("AACA").unwrap().canonical().encoded;
         let expected = first.min(second);
 
-        let mut trusted = AHashSet::new();
-        trusted.insert(first);
-        trusted.insert(second);
-
-        let mut counts = AHashMap::new();
-        counts.insert(singleton, 1);
-        counts.insert(first, 12);
-        counts.insert(second, 12);
+        let mut trusted_counts = AHashMap::new();
+        trusted_counts.insert(first, 12);
+        trusted_counts.insert(second, 12);
 
         let picked = assembler
-            .find_trusted_neighbor(singleton, k, &trusted, &counts)
+            .find_trusted_neighbor(singleton, k, &trusted_counts)
             .unwrap();
         assert_eq!(picked, expected);
+    }
+
+    #[test]
+    fn test_error_correct_kmers_matches_serial_reference() {
+        let k = 15;
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: k,
+            ..Default::default()
+        });
+        let fixture =
+            LargeGenomeErrorCorrectionBenchFixture::synthetic_singleton_correction(k, 512, 3);
+        let counts = fixture.cloned_kmer_counts();
+
+        let expected = reference_error_correct_kmers(&assembler, &counts, k);
+        let observed = assembler.error_correct_kmers(counts, k);
+
+        assert_eq!(observed.1, expected.1);
+        assert_eq!(observed.0, expected.0);
     }
 
     /// Test graph cleaning with tip-inducing reads
@@ -4486,6 +5434,60 @@ mod tests {
     }
 
     #[test]
+    fn test_choose_branch_extension_respects_configured_support_margin() {
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            branch_support_min_margin: 3,
+            ..Default::default()
+        });
+        let extensions = [
+            BranchCandidate {
+                base_idx: 0,
+                next: 11,
+                count: 30,
+                is_repeat: false,
+                read_support: 5,
+            },
+            BranchCandidate {
+                base_idx: 1,
+                next: 22,
+                count: 20,
+                is_repeat: false,
+                read_support: 3,
+            },
+        ];
+
+        let best = assembler.choose_branch_extension(&extensions, 20).unwrap();
+        assert_eq!(best.next, 22);
+    }
+
+    #[test]
+    fn test_choose_branch_extension_can_disable_non_repeat_preference() {
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            prefer_non_repeat_branches: false,
+            ..Default::default()
+        });
+        let extensions = [
+            BranchCandidate {
+                base_idx: 0,
+                next: 11,
+                count: 19,
+                is_repeat: false,
+                read_support: 0,
+            },
+            BranchCandidate {
+                base_idx: 1,
+                next: 22,
+                count: 20,
+                is_repeat: true,
+                read_support: 0,
+            },
+        ];
+
+        let best = assembler.choose_branch_extension(&extensions, 20).unwrap();
+        assert_eq!(best.next, 22);
+    }
+
+    #[test]
     fn test_choose_branch_extension_is_order_invariant_under_randomized_inputs() {
         let assembler = LargeGenomeAssembler::new(LargeGenomeConfig::default());
         let mut rng = StdRng::seed_from_u64(0xC0FFEE);
@@ -4521,6 +5523,34 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_run_branch_resolution_case_exposes_branch_chooser() {
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig::default());
+        let selected = assembler
+            .run_branch_resolution_case(&LargeGenomeBenchBranchResolutionCase {
+                current_count: 20,
+                candidates: vec![
+                    LargeGenomeBenchBranchCandidate {
+                        base_idx: 0,
+                        next: 11,
+                        count: 18,
+                        is_repeat: false,
+                        read_support: 5,
+                    },
+                    LargeGenomeBenchBranchCandidate {
+                        base_idx: 1,
+                        next: 22,
+                        count: 20,
+                        is_repeat: false,
+                        read_support: 1,
+                    },
+                ],
+            })
+            .unwrap();
+        assert_eq!(selected.next, 11);
+        assert_eq!(selected.base_idx, 0);
     }
 
     #[test]
@@ -4779,6 +5809,82 @@ mod tests {
             let observed = canonicalize_adjacency(&assembler.build_adjacency(&valid_kmers, k));
             assert_eq!(observed, baseline);
         }
+    }
+
+    #[test]
+    fn test_stage_bench_fixture_generates_branch_support() {
+        let fixture = LargeGenomeStageBenchFixture::synthetic_branching(11, 8, 5, 2);
+        let stats = fixture.run_branch_threading();
+
+        assert!(fixture.total_branch_read_bases() > 0);
+        assert!(fixture.branch_edge_count() > 0);
+        assert_eq!(stats.ambiguous_edges, fixture.branch_edge_count());
+        assert!(stats.supported_edges > 0);
+        assert!(stats.edge_observations > 0);
+    }
+
+    #[test]
+    fn test_stage_bench_fixture_extracts_contigs() {
+        let fixture = LargeGenomeStageBenchFixture::synthetic_branching(11, 6, 4, 1);
+        let contigs = fixture.run_contig_extraction();
+
+        assert!(fixture.graph_node_count() > 0);
+        assert!(!contigs.is_empty());
+        assert!(contigs.iter().all(|contig| contig.len() >= 11));
+    }
+
+    #[test]
+    fn test_build_contigs_from_graph_can_suppress_redundant_branch_alternatives() {
+        let fixture = LargeGenomeStageBenchFixture::synthetic_branching(11, 6, 4, 1);
+        let baseline = fixture.run_contig_extraction();
+
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k: 11,
+            min_count: 1,
+            min_contig_len: 11,
+            suppress_redundant_contigs: true,
+            ..Default::default()
+        });
+        let suppressed = assembler.run_contig_extraction_case(
+            fixture.cloned_kmer_counts(),
+            &fixture.valid_kmers(),
+            &fixture.branch_support_map(),
+            11,
+        );
+
+        let canonicalize = |sequence: &str| {
+            let reverse = reverse_complement(sequence);
+            if reverse.as_str() < sequence {
+                reverse
+            } else {
+                sequence.to_string()
+            }
+        };
+        let expected = fixture
+            .expected_contigs()
+            .iter()
+            .map(|sequence| canonicalize(sequence))
+            .collect::<std::collections::BTreeSet<_>>();
+        let observed = suppressed
+            .iter()
+            .map(|sequence| canonicalize(sequence))
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert!(baseline.len() > suppressed.len());
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn test_error_correction_stage_bench_fixture_corrects_singletons() {
+        let fixture =
+            LargeGenomeErrorCorrectionBenchFixture::synthetic_singleton_correction(21, 128, 2);
+        let initial_kmers = fixture.total_kmer_count();
+        let singleton_count = fixture.singleton_count();
+        let stats = fixture.run_error_correction(fixture.cloned_kmer_counts());
+
+        assert!(singleton_count > 0);
+        assert_eq!(stats.corrected_kmers, singleton_count as u64);
+        assert!(stats.remaining_kmers < initial_kmers);
     }
 
     #[test]

@@ -21,12 +21,17 @@ where
     let total_paths = items.len();
     let mut all_segments = HashSet::new();
     let mut segment_usage = HashMap::new();
-    let mut path_lengths = Vec::with_capacity(items.len());
+    let mut total_path_length = 0usize;
+    let mut min_path_length = usize::MAX;
+    let mut max_path_length = 0usize;
     let mut unique_segments_in_path = HashSet::new();
 
     for item in items {
         let segments = segments_of(item);
-        path_lengths.push(segments.len());
+        let path_len = segments.len();
+        total_path_length = total_path_length.saturating_add(path_len);
+        min_path_length = min_path_length.min(path_len);
+        max_path_length = max_path_length.max(path_len);
         unique_segments_in_path.clear();
         for &segment in segments {
             all_segments.insert(segment);
@@ -45,13 +50,12 @@ where
     } else {
         0.0
     };
-    let average_path_length = if path_lengths.is_empty() {
+    let average_path_length = if total_paths == 0 {
         0.0
     } else {
-        path_lengths.iter().sum::<usize>() as f32 / path_lengths.len() as f32
+        total_path_length as f32 / total_paths as f32
     };
-    let max_path_length = path_lengths.iter().max().copied().unwrap_or(0);
-    let min_path_length = path_lengths.iter().min().copied().unwrap_or(0);
+    let min_path_length = if total_paths == 0 { 0 } else { min_path_length };
 
     GraphComplexityMetrics {
         total_segments,
@@ -148,23 +152,38 @@ where
     N: petgraph::graphmap::NodeTrait + std::hash::Hash + Eq + Copy,
 {
     let mut bubble_count = 0;
+    let mut reachable_from_primary = HashSet::new();
+    let mut visited_secondary = HashSet::new();
+    let mut stack = Vec::new();
 
     for source in graph.nodes() {
         let successors: Vec<_> = graph
             .neighbors_directed(source, petgraph::Direction::Outgoing)
             .collect();
 
-        if successors.len() >= 2 {
-            // Find all paths from each successor to see if they reconverge
-            for i in 0..successors.len() {
-                for j in i + 1..successors.len() {
-                    let mut visited = HashSet::new();
-                    let has_common_target =
-                        find_common_successor(graph, successors[i], successors[j], &mut visited);
+        if successors.len() < 2 {
+            continue;
+        }
 
-                    if has_common_target {
-                        bubble_count += 1;
-                    }
+        // For each alternative outgoing branch pair, count a bubble when both
+        // branches can reach at least one common downstream node.
+        for i in 0..successors.len() {
+            collect_reachable_outgoing(
+                graph,
+                successors[i],
+                &mut reachable_from_primary,
+                &mut stack,
+            );
+
+            for j in i + 1..successors.len() {
+                if path_intersects_reachable(
+                    graph,
+                    successors[j],
+                    &reachable_from_primary,
+                    &mut visited_secondary,
+                    &mut stack,
+                ) {
+                    bubble_count += 1;
                 }
             }
         }
@@ -173,46 +192,56 @@ where
     bubble_count
 }
 
-/// Helper function to find if two nodes have a common successor
-fn find_common_successor<N, E>(
+#[inline]
+fn collect_reachable_outgoing<N, E>(
     graph: &DiGraphMap<N, E>,
-    node1: N,
-    node2: N,
+    start: N,
+    reachable: &mut HashSet<N>,
+    stack: &mut Vec<N>,
+) where
+    N: petgraph::graphmap::NodeTrait + std::hash::Hash + Eq + Copy,
+{
+    reachable.clear();
+    stack.clear();
+    stack.push(start);
+
+    while let Some(node) = stack.pop() {
+        if !reachable.insert(node) {
+            continue;
+        }
+        for next in graph.neighbors_directed(node, petgraph::Direction::Outgoing) {
+            if !reachable.contains(&next) {
+                stack.push(next);
+            }
+        }
+    }
+}
+
+#[inline]
+fn path_intersects_reachable<N, E>(
+    graph: &DiGraphMap<N, E>,
+    start: N,
+    reachable: &HashSet<N>,
     visited: &mut HashSet<N>,
+    stack: &mut Vec<N>,
 ) -> bool
 where
     N: petgraph::graphmap::NodeTrait + std::hash::Hash + Eq + Copy,
 {
-    // Get successors of both nodes
-    let successors1: HashSet<_> = graph
-        .neighbors_directed(node1, petgraph::Direction::Outgoing)
-        .collect();
-    let successors2: HashSet<_> = graph
-        .neighbors_directed(node2, petgraph::Direction::Outgoing)
-        .collect();
+    visited.clear();
+    stack.clear();
+    stack.push(start);
 
-    // Check for direct common successor
-    if !successors1.is_disjoint(&successors2) {
-        return true;
-    }
-
-    // Mark both nodes as visited
-    visited.insert(node1);
-    visited.insert(node2);
-
-    // Recursively check further successors (with cycle detection)
-    for succ1 in successors1 {
-        if visited.contains(&succ1) {
+    while let Some(node) = stack.pop() {
+        if !visited.insert(node) {
             continue;
         }
-
-        for succ2 in &successors2 {
-            if visited.contains(succ2) {
-                continue;
-            }
-
-            if find_common_successor(graph, succ1, *succ2, visited) {
-                return true;
+        if reachable.contains(&node) {
+            return true;
+        }
+        for next in graph.neighbors_directed(node, petgraph::Direction::Outgoing) {
+            if !visited.contains(&next) {
+                stack.push(next);
             }
         }
     }
@@ -360,5 +389,62 @@ mod tests {
         assert_eq!(*in_degree.get(&0).unwrap_or(&0), 1); // 1 node with in-degree 0
         assert_eq!(*in_degree.get(&1).unwrap_or(&0), 2); // 2 nodes with in-degree 1
         assert_eq!(*in_degree.get(&2).unwrap_or(&0), 1); // 1 node with in-degree 2
+    }
+
+    #[test]
+    fn test_count_bubbles_detects_reconverging_paths() {
+        let mut graph = DiGraphMap::<u8, ()>::new();
+        // 0 -> {1,2}, both branches converge at 5.
+        graph.add_edge(0, 1, ());
+        graph.add_edge(0, 2, ());
+        graph.add_edge(1, 3, ());
+        graph.add_edge(2, 4, ());
+        graph.add_edge(3, 5, ());
+        graph.add_edge(4, 5, ());
+
+        assert_eq!(count_bubbles(&graph), 1);
+    }
+
+    #[test]
+    fn test_count_bubbles_is_invariant_to_edge_insertion_order_regression() {
+        // Regression case discovered by randomized search where the previous
+        // recursive implementation under-counted bubbles and varied by insertion order.
+        let edges = vec![
+            (0u8, 3u8),
+            (1, 2),
+            (1, 3),
+            (1, 6),
+            (2, 1),
+            (2, 3),
+            (2, 4),
+            (2, 6),
+            (3, 1),
+            (3, 4),
+            (3, 5),
+            (4, 2),
+            (4, 3),
+            (5, 0),
+            (5, 1),
+            (5, 2),
+            (5, 3),
+            (5, 6),
+            (6, 0),
+        ];
+
+        let mut graph_a = DiGraphMap::<u8, ()>::new();
+        let mut graph_b = DiGraphMap::<u8, ()>::new();
+        for node in 0u8..=6 {
+            graph_a.add_node(node);
+            graph_b.add_node(node);
+        }
+        for &(u, v) in &edges {
+            graph_a.add_edge(u, v, ());
+        }
+        for &(u, v) in edges.iter().rev() {
+            graph_b.add_edge(u, v, ());
+        }
+
+        assert_eq!(count_bubbles(&graph_a), 23);
+        assert_eq!(count_bubbles(&graph_b), 23);
     }
 }

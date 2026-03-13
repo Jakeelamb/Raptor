@@ -190,7 +190,7 @@ pub fn compute_path_stats(gfa_path: &str) -> Result<PathStats, std::io::Error> {
     let max_depth = calculate_max_depth(&digraph);
 
     // Count bubbles (nodes with multiple paths that converge)
-    let bubble_count = count_bubbles_simple(&digraph);
+    let bubble_count = crate::graph::stats::count_bubbles(&digraph);
 
     // Calculate path-length distribution metrics.
     let path_length_stats = evaluate_lengths_in_place(&mut path_lengths);
@@ -370,111 +370,6 @@ fn calculate_max_depth(graph: &DiGraphMap<usize, ()>) -> usize {
         .max()
         .unwrap_or(0)
         .saturating_sub(1)
-}
-
-/// A simple bubble counting function
-fn count_bubbles_simple<N, E>(graph: &DiGraphMap<N, E>) -> usize
-where
-    N: petgraph::graphmap::NodeTrait + std::hash::Hash + Eq + Copy,
-{
-    let mut bubble_count = 0;
-    let mut reachable_from_primary = HashSet::new();
-    let mut visited_secondary = HashSet::new();
-    let mut stack = Vec::new();
-
-    // For each node with multiple outgoing edges (potential bubble start)
-    for node in graph.nodes() {
-        let out_neighbors: Vec<_> = graph
-            .neighbors_directed(node, petgraph::Direction::Outgoing)
-            .collect();
-
-        if out_neighbors.len() < 2 {
-            continue;
-        }
-
-        // For each pair of alternative paths
-        for i in 0..out_neighbors.len() {
-            collect_reachable_outgoing(
-                graph,
-                out_neighbors[i],
-                &mut reachable_from_primary,
-                &mut stack,
-            );
-
-            for j in i + 1..out_neighbors.len() {
-                if path_intersects_reachable(
-                    graph,
-                    out_neighbors[j],
-                    &reachable_from_primary,
-                    &mut visited_secondary,
-                    &mut stack,
-                ) {
-                    bubble_count += 1;
-                }
-            }
-        }
-    }
-
-    bubble_count
-}
-
-/// Collect all nodes reachable from `start` by following outgoing edges.
-fn collect_reachable_outgoing<N, E>(
-    graph: &DiGraphMap<N, E>,
-    start: N,
-    reachable: &mut HashSet<N>,
-    stack: &mut Vec<N>,
-) where
-    N: petgraph::graphmap::NodeTrait + std::hash::Hash + Eq + Copy,
-{
-    reachable.clear();
-    stack.clear();
-    stack.push(start);
-
-    while let Some(node) = stack.pop() {
-        if !reachable.insert(node) {
-            continue;
-        }
-
-        for neighbor in graph.neighbors_directed(node, petgraph::Direction::Outgoing) {
-            if !reachable.contains(&neighbor) {
-                stack.push(neighbor);
-            }
-        }
-    }
-}
-
-/// Check whether the outgoing traversal from `start` intersects `reachable`.
-fn path_intersects_reachable<N, E>(
-    graph: &DiGraphMap<N, E>,
-    start: N,
-    reachable: &HashSet<N>,
-    visited: &mut HashSet<N>,
-    stack: &mut Vec<N>,
-) -> bool
-where
-    N: petgraph::graphmap::NodeTrait + std::hash::Hash + Eq + Copy,
-{
-    visited.clear();
-    stack.clear();
-    stack.push(start);
-
-    while let Some(node) = stack.pop() {
-        if !visited.insert(node) {
-            continue;
-        }
-        if reachable.contains(&node) {
-            return true;
-        }
-
-        for neighbor in graph.neighbors_directed(node, petgraph::Direction::Outgoing) {
-            if !visited.contains(&neighbor) {
-                stack.push(neighbor);
-            }
-        }
-    }
-
-    false
 }
 
 #[cfg(test)]
@@ -775,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    fn test_count_bubbles_simple_detects_reconvergence_beyond_depth_ten() {
+    fn test_count_bubbles_detects_reconvergence_beyond_depth_ten() {
         let mut graph = DiGraphMap::<usize, ()>::new();
         // Bubble start with two outgoing choices.
         graph.add_edge(0, 1, ());
@@ -797,11 +692,11 @@ mod tests {
         }
         graph.add_edge(second, 100, ());
 
-        assert_eq!(count_bubbles_simple(&graph), 1);
+        assert_eq!(crate::graph::stats::count_bubbles(&graph), 1);
     }
 
     #[test]
-    fn test_count_bubbles_simple_handles_cycles_without_recursion() {
+    fn test_count_bubbles_handles_cycles_without_recursion() {
         let mut graph = DiGraphMap::<usize, ()>::new();
         graph.add_edge(0, 1, ());
         graph.add_edge(0, 2, ());
@@ -812,6 +707,6 @@ mod tests {
         graph.add_edge(3, 5, ());
         graph.add_edge(4, 5, ());
 
-        assert!(count_bubbles_simple(&graph) >= 1);
+        assert!(crate::graph::stats::count_bubbles(&graph) >= 1);
     }
 }

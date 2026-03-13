@@ -40,7 +40,7 @@
 
 use clap::Parser;
 use ndarray::Array2;
-use raptor::cli_main::{Cli, Commands};
+use raptor::cli_main::{Cli, Commands, ComponentBenchCommands};
 use raptor::{eval, io, pipeline, stats, visualize};
 use rayon::ThreadPoolBuilder;
 use std::collections::HashMap;
@@ -251,6 +251,378 @@ fn main() {
 
             raptor::cli::benchmark::benchmark_kmer_counting(&input, k);
         }
+
+        Commands::ComponentBench { command } => match command {
+            ComponentBenchCommands::ReadMapping {
+                task,
+                k,
+                w,
+                min_primary_matches,
+                min_scaffold_matches,
+                position_tolerance,
+                json,
+                output,
+            } => {
+                if let Err(err) = raptor::cli::component_bench::run_read_mapping_bench(
+                    &task,
+                    k,
+                    w,
+                    min_primary_matches,
+                    min_scaffold_matches,
+                    position_tolerance,
+                    json,
+                    output.as_deref(),
+                ) {
+                    eprintln!("Read-mapping component bench failed: {}", err);
+                }
+            }
+            ComponentBenchCommands::BranchResolution {
+                task,
+                branch_support_min_win,
+                branch_support_min_margin,
+                disable_prefer_non_repeat,
+                json,
+                output,
+            } => {
+                if let Err(err) = raptor::cli::component_bench::run_branch_resolution_bench(
+                    &task,
+                    branch_support_min_win,
+                    branch_support_min_margin,
+                    !disable_prefer_non_repeat,
+                    json,
+                    output.as_deref(),
+                ) {
+                    eprintln!("Branch-resolution component bench failed: {}", err);
+                }
+            }
+            ComponentBenchCommands::ScaffoldPolish {
+                task,
+                min_scaffold_links,
+                min_primary_matches,
+                min_scaffold_matches,
+                json,
+                output,
+            } => {
+                if let Err(err) = raptor::cli::component_bench::run_scaffold_polish_bench(
+                    &task,
+                    min_scaffold_links,
+                    min_primary_matches,
+                    min_scaffold_matches,
+                    json,
+                    output.as_deref(),
+                ) {
+                    eprintln!("Scaffold+polish component bench failed: {}", err);
+                }
+            }
+            ComponentBenchCommands::ErrorCorrection {
+                task,
+                min_count,
+                min_trusted_count,
+                json,
+                output,
+            } => {
+                if let Err(err) = raptor::cli::component_bench::run_error_correction_bench(
+                    &task,
+                    min_count,
+                    min_trusted_count,
+                    json,
+                    output.as_deref(),
+                ) {
+                    eprintln!("Error-correction component bench failed: {}", err);
+                }
+            }
+            ComponentBenchCommands::ContigExtraction {
+                task,
+                disable_prefer_high_count_seeds,
+                disable_prefer_non_repeat_seeds,
+                disable_repeat_seed_completion,
+                suppress_redundant_contigs,
+                json,
+                output,
+            } => {
+                if let Err(err) = raptor::cli::component_bench::run_contig_extraction_bench(
+                    &task,
+                    !disable_prefer_high_count_seeds,
+                    !disable_prefer_non_repeat_seeds,
+                    !disable_repeat_seed_completion,
+                    suppress_redundant_contigs,
+                    json,
+                    output.as_deref(),
+                ) {
+                    eprintln!("Contig-extraction component bench failed: {}", err);
+                }
+            }
+            ComponentBenchCommands::PrepareReadMapping {
+                output,
+                paired,
+                num_contigs,
+                contig_len,
+                read_len,
+                reads,
+                insert_size,
+                repeat_len,
+                error_rate,
+                decoy_rate,
+                ambiguous_repeat_decoy_rate,
+                seed,
+                k,
+                w,
+            } => {
+                if let Err(err) = raptor::cli::component_bench::prepare_read_mapping_task(
+                    &output,
+                    paired,
+                    num_contigs,
+                    contig_len,
+                    read_len,
+                    reads,
+                    insert_size,
+                    repeat_len,
+                    error_rate,
+                    decoy_rate,
+                    ambiguous_repeat_decoy_rate,
+                    seed,
+                    k,
+                    w,
+                ) {
+                    eprintln!("Preparing read-mapping task failed: {}", err);
+                }
+            }
+            ComponentBenchCommands::PrepareBranchResolution {
+                output,
+                cases,
+                seed,
+                scenario_profile,
+            } => {
+                if let Err(err) =
+                    raptor::cli::component_bench::prepare_branch_resolution_task_with_profile(
+                        &output,
+                        cases,
+                        seed,
+                        &scenario_profile,
+                    )
+                {
+                    eprintln!("Preparing branch-resolution task failed: {}", err);
+                }
+            }
+            ComponentBenchCommands::PrepareScaffoldPolish {
+                output,
+                scaffold_groups,
+                contigs_per_scaffold,
+                contig_len,
+                read_len,
+                insert_size,
+                internal_pairs_per_contig,
+                true_link_pairs,
+                decoy_link_pairs,
+                mutations_per_contig,
+                seed,
+            } => {
+                if let Err(err) = raptor::cli::component_bench::prepare_scaffold_polish_task(
+                    &output,
+                    scaffold_groups,
+                    contigs_per_scaffold,
+                    contig_len,
+                    read_len,
+                    insert_size,
+                    internal_pairs_per_contig,
+                    true_link_pairs,
+                    decoy_link_pairs,
+                    mutations_per_contig,
+                    seed,
+                ) {
+                    eprintln!("Preparing scaffold+polish task failed: {}", err);
+                }
+            }
+            ComponentBenchCommands::PrepareErrorCorrection {
+                output,
+                k,
+                trusted_roots,
+                weak_roots,
+                correctable_singletons_per_trusted,
+                protected_singletons_per_weak,
+                seed,
+            } => {
+                if let Err(err) = raptor::cli::component_bench::prepare_error_correction_task(
+                    &output,
+                    k,
+                    trusted_roots,
+                    weak_roots,
+                    correctable_singletons_per_trusted,
+                    protected_singletons_per_weak,
+                    seed,
+                ) {
+                    eprintln!("Preparing error-correction task failed: {}", err);
+                }
+            }
+            ComponentBenchCommands::PrepareContigExtraction {
+                output,
+                profile,
+                k,
+                component_count,
+                primary_reads_per_component,
+                alternate_reads_per_component,
+                seed,
+            } => {
+                if let Err(err) =
+                    raptor::cli::component_bench::prepare_contig_extraction_task_with_profile(
+                        &output,
+                        k,
+                        component_count,
+                        primary_reads_per_component,
+                        alternate_reads_per_component,
+                        seed,
+                        &profile,
+                    )
+                {
+                    eprintln!("Preparing contig-extraction task failed: {}", err);
+                }
+            }
+            ComponentBenchCommands::PrepareReadMappingPanel {
+                output,
+                tasks,
+                paired,
+                num_contigs,
+                contig_len,
+                read_len,
+                reads,
+                insert_size,
+                repeat_len,
+                error_rate,
+                decoy_rate,
+                ambiguous_repeat_decoy_rate,
+                seed,
+                seed_step,
+                k,
+                w,
+            } => {
+                if let Err(err) = raptor::cli::component_bench::prepare_read_mapping_panel(
+                    &output,
+                    tasks,
+                    paired,
+                    num_contigs,
+                    contig_len,
+                    read_len,
+                    reads,
+                    insert_size,
+                    repeat_len,
+                    error_rate,
+                    decoy_rate,
+                    ambiguous_repeat_decoy_rate,
+                    seed,
+                    seed_step,
+                    k,
+                    w,
+                ) {
+                    eprintln!("Preparing read-mapping panel failed: {}", err);
+                }
+            }
+            ComponentBenchCommands::PrepareBranchResolutionPanel {
+                output,
+                tasks,
+                cases_per_task,
+                seed,
+                seed_step,
+                scenario_profile,
+            } => {
+                if let Err(err) =
+                    raptor::cli::component_bench::prepare_branch_resolution_panel_with_profile(
+                        &output,
+                        tasks,
+                        cases_per_task,
+                        seed,
+                        seed_step,
+                        &scenario_profile,
+                    )
+                {
+                    eprintln!("Preparing branch-resolution panel failed: {}", err);
+                }
+            }
+            ComponentBenchCommands::PrepareScaffoldPolishPanel {
+                output,
+                tasks,
+                scaffold_groups,
+                contigs_per_scaffold,
+                contig_len,
+                read_len,
+                insert_size,
+                internal_pairs_per_contig,
+                true_link_pairs,
+                decoy_link_pairs,
+                mutations_per_contig,
+                seed,
+                seed_step,
+            } => {
+                if let Err(err) = raptor::cli::component_bench::prepare_scaffold_polish_panel(
+                    &output,
+                    tasks,
+                    scaffold_groups,
+                    contigs_per_scaffold,
+                    contig_len,
+                    read_len,
+                    insert_size,
+                    internal_pairs_per_contig,
+                    true_link_pairs,
+                    decoy_link_pairs,
+                    mutations_per_contig,
+                    seed,
+                    seed_step,
+                ) {
+                    eprintln!("Preparing scaffold+polish panel failed: {}", err);
+                }
+            }
+            ComponentBenchCommands::PrepareErrorCorrectionPanel {
+                output,
+                tasks,
+                k,
+                trusted_roots,
+                weak_roots,
+                correctable_singletons_per_trusted,
+                protected_singletons_per_weak,
+                seed,
+                seed_step,
+            } => {
+                if let Err(err) = raptor::cli::component_bench::prepare_error_correction_panel(
+                    &output,
+                    tasks,
+                    k,
+                    trusted_roots,
+                    weak_roots,
+                    correctable_singletons_per_trusted,
+                    protected_singletons_per_weak,
+                    seed,
+                    seed_step,
+                ) {
+                    eprintln!("Preparing error-correction panel failed: {}", err);
+                }
+            }
+            ComponentBenchCommands::PrepareContigExtractionPanel {
+                output,
+                tasks,
+                profile,
+                k,
+                component_count,
+                primary_reads_per_component,
+                alternate_reads_per_component,
+                seed,
+                seed_step,
+            } => {
+                if let Err(err) =
+                    raptor::cli::component_bench::prepare_contig_extraction_panel_with_profile(
+                        &output,
+                        tasks,
+                        k,
+                        component_count,
+                        primary_reads_per_component,
+                        alternate_reads_per_component,
+                        seed,
+                        seed_step,
+                        &profile,
+                    )
+                {
+                    eprintln!("Preparing contig-extraction panel failed: {}", err);
+                }
+            }
+        },
 
         Commands::Isoform {
             input,
@@ -692,16 +1064,28 @@ fn main() {
             output,
             kmer,
             min_count,
+            error_correction_min_trusted_count,
             min_contig,
             threads,
             temp_dir,
             num_buckets,
             max_tip_len,
             max_bubble_len,
+            branch_support_min_win,
+            branch_support_min_margin,
+            disable_prefer_non_repeat,
+            disable_prefer_high_count_seeds,
+            disable_prefer_non_repeat_seeds,
+            disable_repeat_seed_completion,
+            suppress_redundant_contigs,
             scaffold,
             min_scaffold_links,
             polish,
             polish_iterations,
+            read_mapping_k,
+            read_mapping_w,
+            read_mapping_min_primary_matches,
+            read_mapping_min_scaffold_matches,
             long_reads,
             min_long_read_len,
             compress_buckets: _,
@@ -719,14 +1103,29 @@ fn main() {
             let config = pipeline::large_genome_assembler::LargeGenomeConfig {
                 k: kmer,
                 min_count,
+                error_correction_min_trusted_count,
                 min_contig_len: min_contig,
                 num_buckets,
                 temp_dir,
                 max_tip_len,
                 max_bubble_len,
+                branch_support_min_win,
+                branch_support_min_margin,
+                prefer_non_repeat_branches: !disable_prefer_non_repeat,
+                prefer_high_count_seeds: !disable_prefer_high_count_seeds,
+                prefer_non_repeat_seeds: !disable_prefer_non_repeat_seeds,
+                enable_repeat_seed_completion: !disable_repeat_seed_completion,
+                suppress_redundant_contigs,
+                ..Default::default()
             };
 
             let assembler = pipeline::large_genome_assembler::LargeGenomeAssembler::new(config);
+            let read_mapping_config = pipeline::polisher::ReadMappingConfig {
+                minimizer_k: read_mapping_k,
+                minimizer_w: read_mapping_w,
+                min_primary_matches: read_mapping_min_primary_matches,
+                min_scaffold_matches: read_mapping_min_scaffold_matches,
+            };
 
             // Check for paired-end input
             let is_paired = input2.is_some();
@@ -749,20 +1148,28 @@ fn main() {
                 Ok(stats) => {
                     println!("{}", stats);
 
-                    // Optional: scaffolding with paired-end reads
-                    if scaffold && is_paired {
-                        info!("Scaffolding with paired-end reads...");
-                        let scaffold_output = output
-                            .replace(".fa", ".scaffolds.fa")
-                            .replace(".fasta", ".scaffolds.fasta");
-                        match pipeline::scaffolder::scaffold_contigs(
+                    let scaffold_output = output
+                        .replace(".fa", ".scaffolds.fa")
+                        .replace(".fasta", ".scaffolds.fasta");
+                    let polish_output = output
+                        .replace(".fa", ".polished.fa")
+                        .replace(".fasta", ".polished.fasta");
+
+                    let use_shared_postprocess =
+                        scaffold && polish && is_paired && polish_iterations == 1;
+
+                    if use_shared_postprocess {
+                        info!("Scaffolding and polishing with shared paired-end mapping...");
+                        match pipeline::scaffolder::scaffold_and_polish_contigs(
                             &output,
                             &input,
                             input2.as_ref().unwrap(),
                             &scaffold_output,
+                            &polish_output,
                             min_scaffold_links,
+                            read_mapping_config,
                         ) {
-                            Ok(scaffold_stats) => {
+                            Ok((scaffold_stats, polish_stats)) => {
                                 println!("Scaffolding completed:");
                                 println!("  Scaffolds: {}", scaffold_stats.num_scaffolds);
                                 println!("  N25: {} bp", scaffold_stats.scaffold_n25);
@@ -786,31 +1193,72 @@ fn main() {
                                     scaffold_stats.bases_ge_1kb,
                                     scaffold_stats.bases_ge_1kb_frac * 100.0
                                 );
-                            }
-                            Err(e) => eprintln!("Scaffolding failed: {}", e),
-                        }
-                    } else if scaffold && !is_paired {
-                        eprintln!("Warning: Scaffolding requires paired-end reads (--input2)");
-                    }
 
-                    // Optional: polishing
-                    if polish {
-                        info!("Polishing contigs...");
-                        let polish_output = output
-                            .replace(".fa", ".polished.fa")
-                            .replace(".fasta", ".polished.fasta");
-                        match pipeline::polisher::polish_contigs(
-                            &output,
-                            &input,
-                            input2.as_deref(),
-                            &polish_output,
-                            polish_iterations,
-                        ) {
-                            Ok(polish_stats) => {
                                 println!("Polishing completed:");
                                 println!("  Corrections: {}", polish_stats.corrections);
                             }
-                            Err(e) => eprintln!("Polishing failed: {}", e),
+                            Err(e) => eprintln!("Shared post-processing failed: {}", e),
+                        }
+                    } else {
+                        // Optional: scaffolding with paired-end reads
+                        if scaffold && is_paired {
+                            info!("Scaffolding with paired-end reads...");
+                            match pipeline::scaffolder::scaffold_contigs(
+                                &output,
+                                &input,
+                                input2.as_ref().unwrap(),
+                                &scaffold_output,
+                                min_scaffold_links,
+                                read_mapping_config,
+                            ) {
+                                Ok(scaffold_stats) => {
+                                    println!("Scaffolding completed:");
+                                    println!("  Scaffolds: {}", scaffold_stats.num_scaffolds);
+                                    println!("  N25: {} bp", scaffold_stats.scaffold_n25);
+                                    println!("  N50: {} bp", scaffold_stats.scaffold_n50);
+                                    println!("  N75: {} bp", scaffold_stats.scaffold_n75);
+                                    println!("  N90: {} bp", scaffold_stats.scaffold_n90);
+                                    println!("  N95: {} bp", scaffold_stats.scaffold_n95);
+                                    println!("  N99: {} bp", scaffold_stats.scaffold_n99);
+                                    println!("  L50: {}", scaffold_stats.scaffold_l50);
+                                    println!(
+                                        "  Mean/Median: {:.2}/{:.2} bp",
+                                        scaffold_stats.scaffold_avg_len,
+                                        scaffold_stats.scaffold_median_len
+                                    );
+                                    println!("  auN: {:.2} bp", scaffold_stats.scaffold_au_n);
+                                    println!("  Longest: {} bp", scaffold_stats.longest_scaffold);
+                                    println!(
+                                        "  >=1kb scaffolds/span: {} ({:.2}%) / {} bp ({:.2}%)",
+                                        scaffold_stats.scaffolds_ge_1kb,
+                                        scaffold_stats.scaffolds_ge_1kb_frac * 100.0,
+                                        scaffold_stats.bases_ge_1kb,
+                                        scaffold_stats.bases_ge_1kb_frac * 100.0
+                                    );
+                                }
+                                Err(e) => eprintln!("Scaffolding failed: {}", e),
+                            }
+                        } else if scaffold && !is_paired {
+                            eprintln!("Warning: Scaffolding requires paired-end reads (--input2)");
+                        }
+
+                        // Optional: polishing
+                        if polish {
+                            info!("Polishing contigs...");
+                            match pipeline::polisher::polish_contigs(
+                                &output,
+                                &input,
+                                input2.as_deref(),
+                                &polish_output,
+                                polish_iterations,
+                                read_mapping_config,
+                            ) {
+                                Ok(polish_stats) => {
+                                    println!("Polishing completed:");
+                                    println!("  Corrections: {}", polish_stats.corrections);
+                                }
+                                Err(e) => eprintln!("Polishing failed: {}", e),
+                            }
                         }
                     }
 

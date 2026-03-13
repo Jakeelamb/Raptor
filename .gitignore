@@ -96,6 +96,8 @@ Thumbs.db
 .idea/
 *.swp
 *~
+__pycache__/
+*.pyc
 
 # Miscellaneous #
 # ==================================

@@ -11,6 +11,10 @@
 use crate::eval::metrics::evaluate_lengths_sorted_desc;
 use crate::io::fasta::{open_fasta, FastaWriter};
 use crate::io::fastq::{stream_paired_fastq_records_checked, try_open_fastq};
+use crate::pipeline::polisher::{
+    add_to_pileup, apply_corrections, read_contigs as read_contigs_bytes, write_contigs,
+    MinimizerIndex as PolishMinimizerIndex, PileupColumn, PolishStats, ReadMappingConfig,
+};
 use ahash::{AHashMap, AHashSet};
 use std::cmp::Ordering;
 use std::io::{BufRead, Result};
@@ -120,13 +124,6 @@ fn median_i32_in_place(values: &mut [i32]) -> i32 {
 }
 
 #[inline]
-fn compare_mapping_hits(a: &(usize, usize, bool), b: &(usize, usize, bool)) -> Ordering {
-    b.1.cmp(&a.1)
-        .then_with(|| a.0.cmp(&b.0))
-        .then_with(|| a.2.cmp(&b.2))
-}
-
-#[inline]
 fn other_contig_id(link: &ContigLink, current: usize) -> usize {
     if link.contig_a == current {
         link.contig_b
@@ -222,115 +219,6 @@ pub struct Scaffold {
     pub gaps: Vec<i32>,
 }
 
-/// Minimizer index for fast contig mapping
-struct MinimizerIndex {
-    /// Map from minimizer hash to (contig_id, position, is_reverse)
-    index: AHashMap<u64, Vec<(usize, usize, bool)>>,
-    k: usize,
-    w: usize, // window size
-}
-
-impl MinimizerIndex {
-    fn new(k: usize, w: usize) -> Self {
-        Self {
-            index: AHashMap::new(),
-            k,
-            w,
-        }
-    }
-
-    fn add_contig(&mut self, contig_id: usize, sequence: &[u8]) {
-        if sequence.len() < self.k {
-            return;
-        }
-
-        // Extract minimizers from forward strand
-        for (pos, minimizer) in self.extract_minimizers(sequence) {
-            self.index
-                .entry(minimizer)
-                .or_default()
-                .push((contig_id, pos, false));
-        }
-
-        // Extract minimizers from reverse complement
-        let rc = reverse_complement(sequence);
-        for (pos, minimizer) in self.extract_minimizers(&rc) {
-            let orig_pos = sequence.len() - pos - self.k;
-            self.index
-                .entry(minimizer)
-                .or_default()
-                .push((contig_id, orig_pos, true));
-        }
-    }
-
-    fn extract_minimizers(&self, seq: &[u8]) -> Vec<(usize, u64)> {
-        let mut minimizers = Vec::new();
-        if seq.len() < self.k + self.w - 1 {
-            return minimizers;
-        }
-
-        for window_start in 0..=(seq.len() - self.k - self.w + 1) {
-            let mut min_hash = u64::MAX;
-            let mut min_pos = 0;
-
-            for i in 0..self.w {
-                let pos = window_start + i;
-                if pos + self.k <= seq.len() {
-                    let hash = hash_kmer(&seq[pos..pos + self.k]);
-                    if hash < min_hash {
-                        min_hash = hash;
-                        min_pos = pos;
-                    }
-                }
-            }
-
-            if minimizers.is_empty() || minimizers.last().map(|(p, _)| *p) != Some(min_pos) {
-                minimizers.push((min_pos, min_hash));
-            }
-        }
-
-        minimizers
-    }
-
-    fn query(&self, sequence: &[u8]) -> Vec<(usize, usize, bool)> {
-        let mut hits: AHashMap<(usize, bool), usize> = AHashMap::new();
-
-        for (_, minimizer) in self.extract_minimizers(sequence) {
-            if let Some(entries) = self.index.get(&minimizer) {
-                for &(contig_id, _pos, is_rev) in entries {
-                    *hits.entry((contig_id, is_rev)).or_default() += 1;
-                }
-            }
-        }
-
-        // Return hits with sufficient support (at least 2 minimizer matches).
-        // Sort for deterministic tie-breaking across runs and hash seeds.
-        let mut result: Vec<(usize, usize, bool)> = hits
-            .into_iter()
-            .filter(|(_, count)| *count >= 2)
-            .map(|((contig_id, is_rev), count)| (contig_id, count, is_rev))
-            .collect();
-        result.sort_unstable_by(compare_mapping_hits);
-        result
-    }
-}
-
-/// Hash a k-mer using simple polynomial rolling hash
-fn hash_kmer(kmer: &[u8]) -> u64 {
-    let mut hash = 0u64;
-    for &base in kmer {
-        let val = match base {
-            b'A' | b'a' => 0u64,
-            b'C' | b'c' => 1u64,
-            b'G' | b'g' => 2u64,
-            b'T' | b't' => 3u64,
-            _ => continue,
-        };
-        hash = hash.wrapping_mul(4).wrapping_add(val);
-    }
-    hash
-}
-
 /// Compute reverse complement
 fn reverse_complement(seq: &[u8]) -> Vec<u8> {
     seq.iter()
@@ -383,6 +271,7 @@ pub fn scaffold_contigs(
     reads2_path: &str,
     output_path: &str,
     min_links: usize,
+    mapping_config: ReadMappingConfig,
 ) -> Result<ScaffoldStats> {
     let mut stats = ScaffoldStats::default();
 
@@ -397,7 +286,8 @@ pub fn scaffold_contigs(
 
     // Build minimizer index
     info!("Building minimizer index...");
-    let mut index = MinimizerIndex::new(15, 10);
+    let mut index =
+        PolishMinimizerIndex::new(mapping_config.minimizer_k, mapping_config.minimizer_w);
     for (i, (_header, seq)) in contigs.iter().enumerate() {
         index.add_contig(i, seq.as_bytes());
     }
@@ -414,29 +304,46 @@ pub fn scaffold_contigs(
     const INSERT_SAMPLE_SIZE: usize = 10000;
     const INSERT_MEDIAN_REFRESH: usize = 256;
     let mut estimated_insert = 500i32;
+    let mut hits = AHashMap::new();
+    let mut contig_hits = AHashMap::new();
+    let mut reverse_scratch = Vec::new();
 
     for pair in stream_paired_fastq_records_checked(reader1, reader2) {
         let (r1, r2) = pair?;
         stats.reads_processed += 2;
 
-        let hits1 = index.query(r1.sequence.as_bytes());
-        let hits2 = index.query(r2.sequence.as_bytes());
+        let sequence1 = r1.sequence.into_bytes();
+        let sequence2 = r2.sequence.into_bytes();
+        let scaffold_hit1 = index
+            .map_read_with_scaffold_support_thresholds(
+                &sequence1,
+                &mut hits,
+                &mut contig_hits,
+                &mut reverse_scratch,
+                mapping_config.min_primary_matches,
+                mapping_config.min_scaffold_matches,
+            )
+            .1;
+        let scaffold_hit2 = index
+            .map_read_with_scaffold_support_thresholds(
+                &sequence2,
+                &mut hits,
+                &mut contig_hits,
+                &mut reverse_scratch,
+                mapping_config.min_primary_matches,
+                mapping_config.min_scaffold_matches,
+            )
+            .1;
 
-        if hits1.is_empty() || hits2.is_empty() {
-            continue;
-        }
+        if let (Some((contig1, _support1, rev1)), Some((contig2, _support2, rev2))) =
+            (scaffold_hit1, scaffold_hit2)
+        {
+            stats.reads_mapped += 2;
 
-        stats.reads_mapped += 2;
-
-        // Query results are pre-sorted by score and deterministic tiebreakers.
-        let best1 = hits1.first().copied();
-        let best2 = hits2.first().copied();
-
-        if let (Some((contig1, _, rev1)), Some((contig2, _, rev2))) = (best1, best2) {
             // Skip if both reads map to the same contig (used for insert size estimation)
             if contig1 == contig2 && insert_sizes.len() < INSERT_SAMPLE_SIZE {
                 // Rough insert size estimate based on read lengths
-                insert_sizes.push((r1.sequence.len() + r2.sequence.len()) as i32);
+                insert_sizes.push((sequence1.len() + sequence2.len()) as i32);
                 if insert_sizes.len() == 1
                     || insert_sizes.len() % INSERT_MEDIAN_REFRESH == 0
                     || insert_sizes.len() == INSERT_SAMPLE_SIZE
@@ -472,7 +379,7 @@ pub fn scaffold_contigs(
                 });
 
                 // Estimate gap (negative means overlap)
-                let gap = estimated_insert - (r1.sequence.len() + r2.sequence.len()) as i32;
+                let gap = estimated_insert - (sequence1.len() + sequence2.len()) as i32;
                 link.gap_estimates.push(gap);
                 link.support_count += 1;
             }
@@ -502,17 +409,25 @@ pub fn scaffold_contigs(
         min_links
     );
 
-    // Build scaffold graph and extract paths
-    let scaffolds = build_scaffolds(&contigs, &filtered_links);
+    write_scaffold_output(&contigs, &filtered_links, output_path, &mut stats)?;
+    Ok(stats)
+}
+
+fn write_scaffold_output<T: AsRef<[u8]>>(
+    contigs: &[(String, T)],
+    filtered_links: &[ContigLink],
+    output_path: &str,
+    stats: &mut ScaffoldStats,
+) -> Result<()> {
+    let scaffolds = build_scaffolds(contigs, filtered_links);
     stats.num_scaffolds = scaffolds.len();
 
-    // Write output
     info!("Writing {} scaffolds to {}", scaffolds.len(), output_path);
     let mut writer = FastaWriter::try_new(output_path)?;
-    let mut scaffold_lengths: Vec<usize> = Vec::new();
+    let mut scaffold_lengths = Vec::with_capacity(scaffolds.len());
 
     for (i, scaffold) in scaffolds.iter().enumerate() {
-        let (sequence, gaps) = assemble_scaffold(scaffold, &contigs);
+        let (sequence, gaps) = assemble_scaffold(scaffold, contigs);
         stats.total_gaps += gaps;
         stats.total_length += sequence.len();
         scaffold_lengths.push(sequence.len());
@@ -526,18 +441,202 @@ pub fn scaffold_contigs(
         writer.write_record(&header, &sequence)?;
     }
 
-    // Calculate scaffold continuity metrics.
-    update_scaffold_continuity(&mut stats, &mut scaffold_lengths);
-
+    update_scaffold_continuity(stats, &mut scaffold_lengths);
     info!(
         "Scaffolding complete: {} scaffolds, N50 = {} bp, N90 = {} bp, N95 = {} bp",
         stats.num_scaffolds, stats.scaffold_n50, stats.scaffold_n90, stats.scaffold_n95
     );
-    Ok(stats)
+    Ok(())
+}
+
+pub fn scaffold_and_polish_contigs(
+    contigs_path: &str,
+    reads1_path: &str,
+    reads2_path: &str,
+    scaffold_output_path: &str,
+    polish_output_path: &str,
+    min_links: usize,
+    mapping_config: ReadMappingConfig,
+) -> Result<(ScaffoldStats, PolishStats)> {
+    let mut scaffold_stats = ScaffoldStats::default();
+    let mut polish_stats = PolishStats::default();
+
+    info!("Reading contigs from {}", contigs_path);
+    let mut contigs = read_contigs_bytes(contigs_path)?;
+    scaffold_stats.contigs_input = contigs.len();
+    polish_stats.contigs_input = contigs.len();
+    info!("Loaded {} contigs", contigs.len());
+
+    if contigs.is_empty() {
+        write_scaffold_output(&contigs, &[], scaffold_output_path, &mut scaffold_stats)?;
+        info!("Writing polished contigs to {}", polish_output_path);
+        write_contigs(&contigs, polish_output_path)?;
+        return Ok((scaffold_stats, polish_stats));
+    }
+
+    info!("Building shared minimizer index...");
+    let mut index =
+        PolishMinimizerIndex::new(mapping_config.minimizer_k, mapping_config.minimizer_w);
+    for (contig_id, (_, sequence)) in contigs.iter().enumerate() {
+        index.add_contig(contig_id, sequence);
+    }
+
+    let mut pileups: Vec<Vec<PileupColumn>> = contigs
+        .iter()
+        .map(|(_, sequence)| vec![PileupColumn::default(); sequence.len()])
+        .collect();
+    let mut links: AHashMap<(usize, usize), ContigLink> = AHashMap::new();
+
+    let reader1 = try_open_fastq(reads1_path)?;
+    let reader2 = try_open_fastq(reads2_path)?;
+    let mut hits = AHashMap::new();
+    let mut contig_hits = AHashMap::new();
+    let mut reverse_scratch = Vec::new();
+
+    let mut insert_sizes = Vec::new();
+    const INSERT_SAMPLE_SIZE: usize = 10000;
+    const INSERT_MEDIAN_REFRESH: usize = 256;
+    let mut estimated_insert = 500i32;
+
+    info!("Mapping paired-end reads once for scaffolding and polishing...");
+    for pair in stream_paired_fastq_records_checked(reader1, reader2) {
+        let (r1, r2) = pair?;
+        scaffold_stats.reads_processed += 2;
+        polish_stats.reads_processed += 2;
+
+        let sequence1 = r1.sequence.into_bytes();
+        let (mapping1, scaffold_hit1) = index.map_read_with_scaffold_support_thresholds(
+            &sequence1,
+            &mut hits,
+            &mut contig_hits,
+            &mut reverse_scratch,
+            mapping_config.min_primary_matches,
+            mapping_config.min_scaffold_matches,
+        );
+        if let Some((contig_id, start, is_reverse)) = mapping1 {
+            polish_stats.reads_mapped += 1;
+            let read_sequence = if is_reverse {
+                reverse_scratch.as_slice()
+            } else {
+                sequence1.as_slice()
+            };
+            add_to_pileup(&mut pileups[contig_id], start, read_sequence);
+        }
+
+        let sequence2 = r2.sequence.into_bytes();
+        let (mapping2, scaffold_hit2) = index.map_read_with_scaffold_support_thresholds(
+            &sequence2,
+            &mut hits,
+            &mut contig_hits,
+            &mut reverse_scratch,
+            mapping_config.min_primary_matches,
+            mapping_config.min_scaffold_matches,
+        );
+        if let Some((contig_id, start, is_reverse)) = mapping2 {
+            polish_stats.reads_mapped += 1;
+            let read_sequence = if is_reverse {
+                reverse_scratch.as_slice()
+            } else {
+                sequence2.as_slice()
+            };
+            add_to_pileup(&mut pileups[contig_id], start, read_sequence);
+        }
+
+        if let (Some((contig1, _support1, rev1)), Some((contig2, _support2, rev2))) =
+            (scaffold_hit1, scaffold_hit2)
+        {
+            scaffold_stats.reads_mapped += 2;
+
+            if contig1 == contig2 && insert_sizes.len() < INSERT_SAMPLE_SIZE {
+                insert_sizes.push((sequence1.len() + sequence2.len()) as i32);
+                if insert_sizes.len() == 1
+                    || insert_sizes.len() % INSERT_MEDIAN_REFRESH == 0
+                    || insert_sizes.len() == INSERT_SAMPLE_SIZE
+                {
+                    estimated_insert = median_i32(&insert_sizes);
+                }
+                continue;
+            }
+
+            if contig1 != contig2 {
+                let key = if contig1 < contig2 {
+                    (contig1, contig2)
+                } else {
+                    (contig2, contig1)
+                };
+
+                let link = links.entry(key).or_insert_with(|| ContigLink {
+                    contig_a: key.0,
+                    contig_b: key.1,
+                    orientation_a: if rev1 {
+                        Orientation::Reverse
+                    } else {
+                        Orientation::Forward
+                    },
+                    orientation_b: if rev2 {
+                        Orientation::Reverse
+                    } else {
+                        Orientation::Forward
+                    },
+                    gap_estimates: Vec::new(),
+                    support_count: 0,
+                });
+
+                let gap = estimated_insert - (sequence1.len() + sequence2.len()) as i32;
+                link.gap_estimates.push(gap);
+                link.support_count += 1;
+            }
+        }
+
+        if scaffold_stats.reads_processed % 1_000_000 == 0 {
+            info!(
+                "  Processed {} million read pairs...",
+                scaffold_stats.reads_processed / 2_000_000
+            );
+        }
+    }
+
+    scaffold_stats.links_found = links.len();
+    info!("Found {} potential links", links.len());
+
+    let mut filtered_links: Vec<ContigLink> = links
+        .into_values()
+        .filter(|link| link.support_count >= min_links)
+        .collect();
+    filtered_links.sort_unstable_by(compare_links);
+    scaffold_stats.links_after_filter = filtered_links.len();
+    info!(
+        "Retained {} links with >= {} supporting pairs",
+        filtered_links.len(),
+        min_links
+    );
+
+    write_scaffold_output(
+        &contigs,
+        &filtered_links,
+        scaffold_output_path,
+        &mut scaffold_stats,
+    )?;
+
+    info!("Calling consensus...");
+    let corrections = apply_corrections(&mut contigs, &pileups, &mut polish_stats);
+    info!("Made {} corrections", corrections);
+
+    info!("Writing polished contigs to {}", polish_output_path);
+    write_contigs(&contigs, polish_output_path)?;
+    info!(
+        "Polishing complete: {} corrections ({} substitutions, {} insertions, {} deletions)",
+        polish_stats.corrections,
+        polish_stats.substitutions,
+        polish_stats.insertions,
+        polish_stats.deletions
+    );
+
+    Ok((scaffold_stats, polish_stats))
 }
 
 /// Build scaffolds from filtered links using greedy path extension
-fn build_scaffolds(contigs: &[(String, String)], links: &[ContigLink]) -> Vec<Scaffold> {
+fn build_scaffolds<T: AsRef<[u8]>>(contigs: &[(String, T)], links: &[ContigLink]) -> Vec<Scaffold> {
     let n = contigs.len();
     let mut used: AHashSet<usize> = AHashSet::new();
     let mut scaffolds = Vec::new();
@@ -554,8 +653,9 @@ fn build_scaffolds(contigs: &[(String, String)], links: &[ContigLink]) -> Vec<Sc
     contig_order.sort_unstable_by(|&a, &b| {
         contigs[b]
             .1
+            .as_ref()
             .len()
-            .cmp(&contigs[a].1.len())
+            .cmp(&contigs[a].1.as_ref().len())
             .then_with(|| a.cmp(&b))
     });
 
@@ -645,16 +745,21 @@ fn build_scaffolds(contigs: &[(String, String)], links: &[ContigLink]) -> Vec<Sc
 }
 
 /// Assemble a scaffold sequence from its contigs
-fn assemble_scaffold(scaffold: &Scaffold, contigs: &[(String, String)]) -> (String, usize) {
+fn assemble_scaffold<T: AsRef<[u8]>>(
+    scaffold: &Scaffold,
+    contigs: &[(String, T)],
+) -> (String, usize) {
     let mut sequence = String::new();
     let mut gap_count = 0;
 
     for (i, &(contig_id, orientation)) in scaffold.contigs.iter().enumerate() {
-        let contig_seq = &contigs[contig_id].1;
+        let contig_seq = contigs[contig_id].1.as_ref();
         match orientation {
-            Orientation::Forward => sequence.push_str(contig_seq),
+            Orientation::Forward => sequence.push_str(
+                std::str::from_utf8(contig_seq).expect("scaffold contigs must remain ASCII DNA"),
+            ),
             Orientation::Reverse => {
-                let rc = reverse_complement(contig_seq.as_bytes());
+                let rc = reverse_complement(contig_seq);
                 sequence.push_str(
                     std::str::from_utf8(&rc).expect("reverse complement must remain ASCII DNA"),
                 );
@@ -689,25 +794,6 @@ mod tests {
     }
 
     #[test]
-    fn test_minimizer_index() {
-        let mut index = MinimizerIndex::new(11, 5);
-        index.add_contig(0, b"ACGTACGTACGTACGTACGTACGTACGTACGT");
-
-        let hits = index.query(b"ACGTACGTACGTACGTACGT");
-        assert!(!hits.is_empty());
-    }
-
-    #[test]
-    fn test_hash_kmer() {
-        let h1 = hash_kmer(b"ACGT");
-        let h2 = hash_kmer(b"ACGT");
-        assert_eq!(h1, h2);
-
-        let h3 = hash_kmer(b"TGCA");
-        assert_ne!(h1, h3);
-    }
-
-    #[test]
     fn test_median_i32_even_sample_uses_midpoint() {
         let values = [100, 200, 300, 400];
         assert_eq!(median_i32(&values), 250);
@@ -724,16 +810,6 @@ mod tests {
             support_count: 4,
         };
         assert_eq!(link.median_gap(), 250);
-    }
-
-    #[test]
-    fn test_compare_mapping_hits_applies_deterministic_tiebreakers() {
-        let mut hits = vec![(2, 5, true), (1, 5, false), (3, 7, false), (0, 5, false)];
-        hits.sort_unstable_by(compare_mapping_hits);
-        assert_eq!(
-            hits,
-            vec![(3, 7, false), (0, 5, false), (1, 5, false), (2, 5, true)]
-        );
     }
 
     #[test]
@@ -888,7 +964,153 @@ mod tests {
             reads2.path().to_str().unwrap(),
             output_dir.path().to_str().unwrap(),
             1,
+            ReadMappingConfig::default(),
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn scaffold_contigs_respects_configured_scaffold_support_threshold() {
+        let contigs = NamedTempFile::new().unwrap();
+        std::fs::write(
+            contigs.path(),
+            b">contig_1\nACGTTGCATGCAAGTCGATCGTACCGTTAAGGCTAACGTA\n>contig_2\nTTAACCGGATCCGTTAGGCCAATTCGATGGCCTTAAGGCC\n",
+        )
+        .unwrap();
+
+        let mut reads1 = NamedTempFile::new().unwrap();
+        let mut reads2 = NamedTempFile::new().unwrap();
+        let quality = "I".repeat(30);
+        for idx in 0..2 {
+            writeln!(reads1, "@r{}_1", idx).unwrap();
+            writeln!(reads1, "ACGTTGCATGCAAGTCGATCGTACCGTTAA").unwrap();
+            writeln!(reads1, "+").unwrap();
+            writeln!(reads1, "{}", quality).unwrap();
+
+            writeln!(reads2, "@r{}_2", idx).unwrap();
+            writeln!(reads2, "TTAACCGGATCCGTTAGGCCAATTCGATGG").unwrap();
+            writeln!(reads2, "+").unwrap();
+            writeln!(reads2, "{}", quality).unwrap();
+        }
+
+        let low_threshold_output = NamedTempFile::new().unwrap();
+        let high_threshold_output = NamedTempFile::new().unwrap();
+        let low_threshold_stats = scaffold_contigs(
+            contigs.path().to_str().unwrap(),
+            reads1.path().to_str().unwrap(),
+            reads2.path().to_str().unwrap(),
+            low_threshold_output.path().to_str().unwrap(),
+            1,
+            ReadMappingConfig::default(),
+        )
+        .unwrap();
+        let high_threshold_stats = scaffold_contigs(
+            contigs.path().to_str().unwrap(),
+            reads1.path().to_str().unwrap(),
+            reads2.path().to_str().unwrap(),
+            high_threshold_output.path().to_str().unwrap(),
+            1,
+            ReadMappingConfig {
+                min_scaffold_matches: 64,
+                ..ReadMappingConfig::default()
+            },
+        )
+        .unwrap();
+
+        assert!(low_threshold_stats.links_after_filter > 0);
+        assert_eq!(high_threshold_stats.links_after_filter, 0);
+    }
+
+    #[test]
+    fn scaffold_and_polish_contigs_matches_separate_passes_on_simple_dataset() {
+        let contig1_correct = b"ACGTTGCATGCAAGTCGATCGTACCGTTAAGGCTAACGTA".to_vec();
+        let mut contig1_mutated = contig1_correct.clone();
+        contig1_mutated[10] = b'T';
+        let contig2 = b"TTAACCGGATCCGTTAGGCCAATTCGATGGCCTTAAGGCC".to_vec();
+
+        let mut contigs = NamedTempFile::new().unwrap();
+        writeln!(contigs, ">contig_1").unwrap();
+        writeln!(contigs, "{}", String::from_utf8_lossy(&contig1_mutated)).unwrap();
+        writeln!(contigs, ">contig_2").unwrap();
+        writeln!(contigs, "{}", String::from_utf8_lossy(&contig2)).unwrap();
+
+        let mut reads1 = NamedTempFile::new().unwrap();
+        let mut reads2 = NamedTempFile::new().unwrap();
+        let read1 = &contig1_correct[..30];
+        let read2 = &contig2[..30];
+        let quality = "I".repeat(read1.len());
+        for idx in 0..5 {
+            writeln!(reads1, "@r{}_1", idx).unwrap();
+            writeln!(reads1, "{}", String::from_utf8_lossy(read1)).unwrap();
+            writeln!(reads1, "+").unwrap();
+            writeln!(reads1, "{}", quality).unwrap();
+
+            writeln!(reads2, "@r{}_2", idx).unwrap();
+            writeln!(reads2, "{}", String::from_utf8_lossy(read2)).unwrap();
+            writeln!(reads2, "+").unwrap();
+            writeln!(reads2, "{}", quality).unwrap();
+        }
+
+        let separate_scaffold = NamedTempFile::new().unwrap();
+        let separate_polish = NamedTempFile::new().unwrap();
+        let combined_scaffold = NamedTempFile::new().unwrap();
+        let combined_polish = NamedTempFile::new().unwrap();
+
+        let separate_scaffold_stats = scaffold_contigs(
+            contigs.path().to_str().unwrap(),
+            reads1.path().to_str().unwrap(),
+            reads2.path().to_str().unwrap(),
+            separate_scaffold.path().to_str().unwrap(),
+            3,
+            ReadMappingConfig::default(),
+        )
+        .unwrap();
+        let separate_polish_stats = crate::pipeline::polisher::polish_contigs(
+            contigs.path().to_str().unwrap(),
+            reads1.path().to_str().unwrap(),
+            Some(reads2.path().to_str().unwrap()),
+            separate_polish.path().to_str().unwrap(),
+            1,
+            ReadMappingConfig::default(),
+        )
+        .unwrap();
+
+        let (combined_scaffold_stats, combined_polish_stats) = scaffold_and_polish_contigs(
+            contigs.path().to_str().unwrap(),
+            reads1.path().to_str().unwrap(),
+            reads2.path().to_str().unwrap(),
+            combined_scaffold.path().to_str().unwrap(),
+            combined_polish.path().to_str().unwrap(),
+            3,
+            ReadMappingConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            combined_scaffold_stats.links_after_filter,
+            separate_scaffold_stats.links_after_filter
+        );
+        assert_eq!(
+            combined_scaffold_stats.num_scaffolds,
+            separate_scaffold_stats.num_scaffolds
+        );
+        assert_eq!(
+            combined_polish_stats.corrections,
+            separate_polish_stats.corrections
+        );
+        assert_eq!(
+            combined_polish_stats.reads_mapped,
+            separate_polish_stats.reads_mapped
+        );
+        assert!(combined_polish_stats.reads_mapped > 0);
+
+        let separate_scaffold_output = std::fs::read_to_string(separate_scaffold.path()).unwrap();
+        let combined_scaffold_output = std::fs::read_to_string(combined_scaffold.path()).unwrap();
+        assert_eq!(combined_scaffold_output, separate_scaffold_output);
+
+        let separate_polish_output = std::fs::read_to_string(separate_polish.path()).unwrap();
+        let combined_polish_output = std::fs::read_to_string(combined_polish.path()).unwrap();
+        assert_eq!(combined_polish_output, separate_polish_output);
+        assert!(combined_polish_output.contains(">contig_1"));
     }
 }

@@ -65,6 +65,10 @@ harness = false
 name = "greedy_assembly"
 harness = false
 
+[[bench]]
+name = "large_genome_stages"
+harness = false
+
 [[bin]]
 name = "raptor"
 path = "src/main.rs"

@@ -8,6 +8,585 @@ pub struct Cli {
 }
 
 #[derive(Subcommand, Debug)]
+pub enum ComponentBenchCommands {
+    /// Evaluate the shared read mapper against a task directory or task root
+    ReadMapping {
+        /// Task directory, or a parent directory containing multiple task directories
+        #[arg(long)]
+        task: String,
+
+        /// Minimizer k-mer size
+        #[arg(long)]
+        k: Option<usize>,
+
+        /// Minimizer window size
+        #[arg(long)]
+        w: Option<usize>,
+
+        /// Minimum supporting minimizer hits for a primary mapping
+        #[arg(long, default_value_t = 3)]
+        min_primary_matches: usize,
+
+        /// Minimum supporting minimizer hits for a scaffold-level contig hit
+        #[arg(long, default_value_t = 2)]
+        min_scaffold_matches: usize,
+
+        /// Positional tolerance in base pairs for the "near" score
+        #[arg(long, default_value_t = 8)]
+        position_tolerance: usize,
+
+        /// Emit JSON to stdout instead of the human-readable summary
+        #[arg(long)]
+        json: bool,
+
+        /// Optional path to write the JSON report
+        #[arg(long)]
+        output: Option<String>,
+    },
+
+    /// Evaluate branch-choice heuristics against a task directory or task root
+    BranchResolution {
+        /// Task directory, or a parent directory containing multiple task directories
+        #[arg(long)]
+        task: String,
+
+        /// Minimum read support required before branch threading overrides coverage
+        #[arg(long, default_value_t = 1)]
+        branch_support_min_win: u32,
+
+        /// Minimum lead over the runner-up support before branch threading overrides coverage
+        #[arg(long, default_value_t = 2)]
+        branch_support_min_margin: u32,
+
+        /// Disable the non-repeat preference in coverage-driven branch choice
+        #[arg(long)]
+        disable_prefer_non_repeat: bool,
+
+        /// Emit JSON to stdout instead of the human-readable summary
+        #[arg(long)]
+        json: bool,
+
+        /// Optional path to write the JSON report
+        #[arg(long)]
+        output: Option<String>,
+    },
+
+    /// Evaluate the shared scaffold+polish postprocess against a task directory or task root
+    ScaffoldPolish {
+        /// Task directory, or a parent directory containing multiple task directories
+        #[arg(long)]
+        task: String,
+
+        /// Minimum number of read pairs required to keep a scaffold link
+        #[arg(long, default_value_t = 3)]
+        min_scaffold_links: usize,
+
+        /// Minimum supporting minimizer hits for a primary mapping
+        #[arg(long, default_value_t = 2)]
+        min_primary_matches: usize,
+
+        /// Minimum supporting minimizer hits for a scaffold-level contig hit
+        #[arg(long, default_value_t = 4)]
+        min_scaffold_matches: usize,
+
+        /// Emit JSON to stdout instead of the human-readable summary
+        #[arg(long)]
+        json: bool,
+
+        /// Optional path to write the JSON report
+        #[arg(long)]
+        output: Option<String>,
+    },
+
+    /// Evaluate phase-3 error correction against a task directory or task root
+    ErrorCorrection {
+        /// Task directory, or a parent directory containing multiple task directories
+        #[arg(long)]
+        task: String,
+
+        /// Minimum count threshold used to derive trusted k-mers
+        #[arg(long, default_value_t = 1)]
+        min_count: u32,
+
+        /// Minimum count floor required for a k-mer to be considered trusted
+        #[arg(long, default_value_t = 4)]
+        min_trusted_count: u32,
+
+        /// Emit JSON to stdout instead of the human-readable summary
+        #[arg(long)]
+        json: bool,
+
+        /// Optional path to write the JSON report
+        #[arg(long)]
+        output: Option<String>,
+    },
+
+    /// Evaluate contig extraction against a task directory or task root
+    ContigExtraction {
+        /// Task directory, or a parent directory containing multiple task directories
+        #[arg(long)]
+        task: String,
+
+        /// Disable prioritizing higher-coverage seeds first
+        #[arg(long)]
+        disable_prefer_high_count_seeds: bool,
+
+        /// Disable prioritizing non-repeat seeds before repeat seeds
+        #[arg(long)]
+        disable_prefer_non_repeat_seeds: bool,
+
+        /// Disable the repeat-seed completion pass
+        #[arg(long)]
+        disable_repeat_seed_completion: bool,
+
+        /// Suppress redundant contained or same-flank branch-alternative contigs
+        #[arg(long)]
+        suppress_redundant_contigs: bool,
+
+        /// Emit JSON to stdout instead of the human-readable summary
+        #[arg(long)]
+        json: bool,
+
+        /// Optional path to write the JSON report
+        #[arg(long)]
+        output: Option<String>,
+    },
+
+    /// Generate a small synthetic read-mapping task directory
+    PrepareReadMapping {
+        /// Output directory for the generated task
+        #[arg(long)]
+        output: String,
+
+        /// Generate paired-end reads instead of single-end reads
+        #[arg(long)]
+        paired: bool,
+
+        /// Number of synthetic contigs
+        #[arg(long, default_value_t = 4)]
+        num_contigs: usize,
+
+        /// Length of each synthetic contig
+        #[arg(long, default_value_t = 3000)]
+        contig_len: usize,
+
+        /// Read length
+        #[arg(long, default_value_t = 150)]
+        read_len: usize,
+
+        /// Number of reads to generate, or number of pairs when --paired is set
+        #[arg(long, default_value_t = 256)]
+        reads: usize,
+
+        /// Insert size for paired-end generation
+        #[arg(long, default_value_t = 450)]
+        insert_size: usize,
+
+        /// Length of the shared repeat planted into each contig
+        #[arg(long, default_value_t = 80)]
+        repeat_len: usize,
+
+        /// Per-base substitution error rate
+        #[arg(long, default_value_t = 0.01)]
+        error_rate: f64,
+
+        /// Ratio of extra random decoy templates to add as unmapped reads
+        #[arg(long, default_value_t = 0.0)]
+        decoy_rate: f64,
+
+        /// Ratio of repeat-only ambiguous decoys that should stay unmapped
+        #[arg(long, default_value_t = 0.0)]
+        ambiguous_repeat_decoy_rate: f64,
+
+        /// Deterministic RNG seed
+        #[arg(long, default_value_t = 7)]
+        seed: u64,
+
+        /// Minimizer k-mer size to record in task metadata
+        #[arg(long, default_value_t = 15)]
+        k: usize,
+
+        /// Minimizer window size to record in task metadata
+        #[arg(long, default_value_t = 10)]
+        w: usize,
+    },
+
+    /// Generate a small synthetic branch-resolution task directory
+    PrepareBranchResolution {
+        /// Output directory for the generated task
+        #[arg(long)]
+        output: String,
+
+        /// Number of branch-choice cases to generate
+        #[arg(long, default_value_t = 64)]
+        cases: usize,
+
+        /// Deterministic RNG seed
+        #[arg(long, default_value_t = 7)]
+        seed: u64,
+
+        /// Scenario profile to generate: balanced or support_stress
+        #[arg(long, default_value = "balanced", value_parser = ["balanced", "support_stress"])]
+        scenario_profile: String,
+    },
+
+    /// Generate a synthetic shared scaffold+polish task directory
+    PrepareScaffoldPolish {
+        /// Output directory for the generated task
+        #[arg(long)]
+        output: String,
+
+        /// Number of independent scaffold groups in the synthetic truth
+        #[arg(long, default_value_t = 2)]
+        scaffold_groups: usize,
+
+        /// Number of contigs per scaffold group
+        #[arg(long, default_value_t = 3)]
+        contigs_per_scaffold: usize,
+
+        /// Length of each synthetic contig
+        #[arg(long, default_value_t = 400)]
+        contig_len: usize,
+
+        /// Read length for generated pairs
+        #[arg(long, default_value_t = 80)]
+        read_len: usize,
+
+        /// Insert size for same-contig estimation pairs
+        #[arg(long, default_value_t = 200)]
+        insert_size: usize,
+
+        /// Number of same-contig pairs per contig for insert estimation and polishing
+        #[arg(long, default_value_t = 16)]
+        internal_pairs_per_contig: usize,
+
+        /// Number of true cross-contig pairs generated per real adjacency
+        #[arg(long, default_value_t = 5)]
+        true_link_pairs: usize,
+
+        /// Number of false cross-contig decoy pairs generated across scaffold groups
+        #[arg(long, default_value_t = 2)]
+        decoy_link_pairs: usize,
+
+        /// Number of substitutions introduced into each contig before polishing
+        #[arg(long, default_value_t = 1)]
+        mutations_per_contig: usize,
+
+        /// Deterministic RNG seed
+        #[arg(long, default_value_t = 7)]
+        seed: u64,
+    },
+
+    /// Generate a synthetic phase-3 error-correction task directory
+    PrepareErrorCorrection {
+        /// Output directory for the generated task
+        #[arg(long)]
+        output: String,
+
+        /// K-mer size for the synthetic count table
+        #[arg(long, default_value_t = 21)]
+        k: usize,
+
+        /// Number of trusted root k-mers with attached singleton errors
+        #[arg(long, default_value_t = 64)]
+        trusted_roots: usize,
+
+        /// Number of weak root k-mers with protected singleton neighbors
+        #[arg(long, default_value_t = 32)]
+        weak_roots: usize,
+
+        /// Number of correctable singleton errors generated per trusted root
+        #[arg(long, default_value_t = 2)]
+        correctable_singletons_per_trusted: usize,
+
+        /// Number of protected singleton neighbors generated per weak root
+        #[arg(long, default_value_t = 1)]
+        protected_singletons_per_weak: usize,
+
+        /// Deterministic RNG seed
+        #[arg(long, default_value_t = 7)]
+        seed: u64,
+    },
+
+    /// Generate a synthetic contig-extraction task directory
+    PrepareContigExtraction {
+        /// Output directory for the generated task
+        #[arg(long)]
+        output: String,
+
+        /// Scenario profile to generate
+        #[arg(
+            long,
+            default_value = "branching",
+            value_parser = [
+                "branching",
+                "repeat_fallback",
+                "repeat_completion",
+                "repeat_priority",
+            ]
+        )]
+        profile: String,
+
+        /// K-mer size for the synthetic graph
+        #[arg(long, default_value_t = 11)]
+        k: usize,
+
+        /// Number of branching components for branching-profile tasks
+        #[arg(long, default_value_t = 6)]
+        component_count: usize,
+
+        /// Number of primary-path reads per branching component
+        #[arg(long, default_value_t = 6)]
+        primary_reads_per_component: usize,
+
+        /// Number of alternate-path reads per branching component
+        #[arg(long, default_value_t = 2)]
+        alternate_reads_per_component: usize,
+
+        /// Deterministic RNG seed
+        #[arg(long, default_value_t = 7)]
+        seed: u64,
+    },
+
+    /// Generate a panel of synthetic read-mapping task directories
+    PrepareReadMappingPanel {
+        /// Output directory for the task panel
+        #[arg(long)]
+        output: String,
+
+        /// Number of task directories to create
+        #[arg(long, default_value_t = 16)]
+        tasks: usize,
+
+        /// Generate paired-end reads instead of single-end reads
+        #[arg(long)]
+        paired: bool,
+
+        /// Number of synthetic contigs per task
+        #[arg(long, default_value_t = 4)]
+        num_contigs: usize,
+
+        /// Length of each synthetic contig
+        #[arg(long, default_value_t = 3000)]
+        contig_len: usize,
+
+        /// Read length
+        #[arg(long, default_value_t = 150)]
+        read_len: usize,
+
+        /// Number of reads per task, or number of pairs when --paired is set
+        #[arg(long, default_value_t = 256)]
+        reads: usize,
+
+        /// Insert size for paired-end generation
+        #[arg(long, default_value_t = 450)]
+        insert_size: usize,
+
+        /// Length of the shared repeat planted into each contig
+        #[arg(long, default_value_t = 80)]
+        repeat_len: usize,
+
+        /// Per-base substitution error rate
+        #[arg(long, default_value_t = 0.01)]
+        error_rate: f64,
+
+        /// Ratio of extra random decoy templates to add as unmapped reads
+        #[arg(long, default_value_t = 0.0)]
+        decoy_rate: f64,
+
+        /// Ratio of repeat-only ambiguous decoys that should stay unmapped
+        #[arg(long, default_value_t = 0.0)]
+        ambiguous_repeat_decoy_rate: f64,
+
+        /// Starting RNG seed for task_000
+        #[arg(long, default_value_t = 7)]
+        seed: u64,
+
+        /// Increment applied to the seed for each subsequent task
+        #[arg(long, default_value_t = 1)]
+        seed_step: u64,
+
+        /// Minimizer k-mer size to record in task metadata
+        #[arg(long, default_value_t = 15)]
+        k: usize,
+
+        /// Minimizer window size to record in task metadata
+        #[arg(long, default_value_t = 10)]
+        w: usize,
+    },
+
+    /// Generate a panel of synthetic branch-resolution task directories
+    PrepareBranchResolutionPanel {
+        /// Output directory for the task panel
+        #[arg(long)]
+        output: String,
+
+        /// Number of task directories to create
+        #[arg(long, default_value_t = 16)]
+        tasks: usize,
+
+        /// Number of branch-choice cases per task
+        #[arg(long, default_value_t = 64)]
+        cases_per_task: usize,
+
+        /// Starting RNG seed for task_000
+        #[arg(long, default_value_t = 7)]
+        seed: u64,
+
+        /// Increment applied to the seed for each subsequent task
+        #[arg(long, default_value_t = 1)]
+        seed_step: u64,
+
+        /// Scenario profile to generate: balanced or support_stress
+        #[arg(long, default_value = "balanced", value_parser = ["balanced", "support_stress"])]
+        scenario_profile: String,
+    },
+
+    /// Generate a panel of synthetic shared scaffold+polish task directories
+    PrepareScaffoldPolishPanel {
+        /// Output directory for the task panel
+        #[arg(long)]
+        output: String,
+
+        /// Number of task directories to create
+        #[arg(long, default_value_t = 16)]
+        tasks: usize,
+
+        /// Number of independent scaffold groups in each task
+        #[arg(long, default_value_t = 2)]
+        scaffold_groups: usize,
+
+        /// Number of contigs per scaffold group
+        #[arg(long, default_value_t = 3)]
+        contigs_per_scaffold: usize,
+
+        /// Length of each synthetic contig
+        #[arg(long, default_value_t = 400)]
+        contig_len: usize,
+
+        /// Read length for generated pairs
+        #[arg(long, default_value_t = 80)]
+        read_len: usize,
+
+        /// Insert size for same-contig estimation pairs
+        #[arg(long, default_value_t = 200)]
+        insert_size: usize,
+
+        /// Number of same-contig pairs per contig for insert estimation and polishing
+        #[arg(long, default_value_t = 16)]
+        internal_pairs_per_contig: usize,
+
+        /// Number of true cross-contig pairs generated per real adjacency
+        #[arg(long, default_value_t = 5)]
+        true_link_pairs: usize,
+
+        /// Number of false cross-contig decoy pairs generated across scaffold groups
+        #[arg(long, default_value_t = 2)]
+        decoy_link_pairs: usize,
+
+        /// Number of substitutions introduced into each contig before polishing
+        #[arg(long, default_value_t = 1)]
+        mutations_per_contig: usize,
+
+        /// Starting RNG seed for task_000
+        #[arg(long, default_value_t = 7)]
+        seed: u64,
+
+        /// Increment applied to the seed for each subsequent task
+        #[arg(long, default_value_t = 1)]
+        seed_step: u64,
+    },
+
+    /// Generate a panel of synthetic phase-3 error-correction task directories
+    PrepareErrorCorrectionPanel {
+        /// Output directory for the task panel
+        #[arg(long)]
+        output: String,
+
+        /// Number of task directories to create
+        #[arg(long, default_value_t = 16)]
+        tasks: usize,
+
+        /// K-mer size for the synthetic count table
+        #[arg(long, default_value_t = 21)]
+        k: usize,
+
+        /// Number of trusted root k-mers per task
+        #[arg(long, default_value_t = 64)]
+        trusted_roots: usize,
+
+        /// Number of weak root k-mers per task
+        #[arg(long, default_value_t = 32)]
+        weak_roots: usize,
+
+        /// Number of correctable singleton errors generated per trusted root
+        #[arg(long, default_value_t = 2)]
+        correctable_singletons_per_trusted: usize,
+
+        /// Number of protected singleton neighbors generated per weak root
+        #[arg(long, default_value_t = 1)]
+        protected_singletons_per_weak: usize,
+
+        /// Starting RNG seed for task_000
+        #[arg(long, default_value_t = 7)]
+        seed: u64,
+
+        /// Increment applied to the seed for each subsequent task
+        #[arg(long, default_value_t = 1)]
+        seed_step: u64,
+    },
+
+    /// Generate a panel of synthetic contig-extraction task directories
+    PrepareContigExtractionPanel {
+        /// Output directory for the task panel
+        #[arg(long)]
+        output: String,
+
+        /// Number of task directories to create
+        #[arg(long, default_value_t = 16)]
+        tasks: usize,
+
+        /// Scenario profile to generate: mixed, branching, repeat_fallback, repeat_completion, or repeat_priority
+        #[arg(
+            long,
+            default_value = "mixed",
+            value_parser = [
+                "mixed",
+                "branching",
+                "repeat_fallback",
+                "repeat_completion",
+                "repeat_priority",
+            ]
+        )]
+        profile: String,
+
+        /// K-mer size for the synthetic graph
+        #[arg(long, default_value_t = 11)]
+        k: usize,
+
+        /// Number of branching components for branching-profile tasks
+        #[arg(long, default_value_t = 6)]
+        component_count: usize,
+
+        /// Number of primary-path reads per branching component
+        #[arg(long, default_value_t = 6)]
+        primary_reads_per_component: usize,
+
+        /// Number of alternate-path reads per branching component
+        #[arg(long, default_value_t = 2)]
+        alternate_reads_per_component: usize,
+
+        /// Starting RNG seed for task_000
+        #[arg(long, default_value_t = 7)]
+        seed: u64,
+
+        /// Increment applied to the seed for each subsequent task
+        #[arg(long, default_value_t = 1)]
+        seed_step: u64,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Normalize input reads with optional GPU acceleration
     Normalize {
@@ -205,6 +784,12 @@ pub enum Commands {
         threads: usize,
     },
 
+    /// Evaluate or generate isolated component-level tasks for optimizer loops
+    ComponentBench {
+        #[command(subcommand)]
+        command: ComponentBenchCommands,
+    },
+
     /// Reconstruct isoforms from GFA graph and expression data
     Isoform {
         /// Input GFA file containing contigs and overlaps
@@ -385,6 +970,10 @@ pub enum Commands {
         #[arg(short = 'c', long, default_value_t = 0)]
         min_count: u32,
 
+        /// Minimum count floor for trusted singleton-rescue neighbors
+        #[arg(long, default_value_t = 4)]
+        error_correction_min_trusted_count: u32,
+
         /// Minimum contig length to output
         #[arg(long, default_value_t = 200)]
         min_contig: usize,
@@ -409,6 +998,34 @@ pub enum Commands {
         #[arg(long, default_value_t = 50)]
         max_bubble_len: usize,
 
+        /// Minimum read support required before branch threading overrides coverage
+        #[arg(long, default_value_t = 1)]
+        branch_support_min_win: u32,
+
+        /// Minimum lead over the runner-up support before branch threading overrides coverage
+        #[arg(long, default_value_t = 2)]
+        branch_support_min_margin: u32,
+
+        /// Disable the non-repeat preference in coverage-driven branch choice
+        #[arg(long)]
+        disable_prefer_non_repeat: bool,
+
+        /// Disable prioritizing higher-coverage seeds first during contig extraction
+        #[arg(long)]
+        disable_prefer_high_count_seeds: bool,
+
+        /// Disable prioritizing non-repeat seeds before repeat seeds during contig extraction
+        #[arg(long)]
+        disable_prefer_non_repeat_seeds: bool,
+
+        /// Disable the repeat-seed completion pass after the primary extraction pass
+        #[arg(long)]
+        disable_repeat_seed_completion: bool,
+
+        /// Suppress enclosed leftover branch-path contigs after extraction
+        #[arg(long)]
+        suppress_redundant_contigs: bool,
+
         /// Enable scaffolding using paired-end information
         #[arg(long)]
         scaffold: bool,
@@ -424,6 +1041,22 @@ pub enum Commands {
         /// Number of polishing iterations
         #[arg(long, default_value_t = 1)]
         polish_iterations: usize,
+
+        /// Minimizer k-mer size for post-assembly read mapping
+        #[arg(long, default_value_t = 15)]
+        read_mapping_k: usize,
+
+        /// Minimizer window size for post-assembly read mapping
+        #[arg(long, default_value_t = 4)]
+        read_mapping_w: usize,
+
+        /// Minimum supporting minimizer hits for a primary post-assembly mapping
+        #[arg(long, default_value_t = 2)]
+        read_mapping_min_primary_matches: usize,
+
+        /// Minimum supporting minimizer hits for a scaffold-level contig hit
+        #[arg(long, default_value_t = 4)]
+        read_mapping_min_scaffold_matches: usize,
 
         /// Long reads file (FASTQ) for hybrid assembly
         #[arg(long)]

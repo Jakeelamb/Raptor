@@ -15,6 +15,29 @@ use std::io::{BufRead, Result};
 use tracing::info;
 
 const REVERSE_STRAND_FLAG: usize = 1usize << (usize::BITS - 1);
+pub const DEFAULT_READ_MAPPING_K: usize = 15;
+pub const DEFAULT_READ_MAPPING_W: usize = 4;
+pub const DEFAULT_MIN_PRIMARY_MATCHES: usize = 2;
+pub const DEFAULT_MIN_SCAFFOLD_MATCHES: usize = 4;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadMappingConfig {
+    pub minimizer_k: usize,
+    pub minimizer_w: usize,
+    pub min_primary_matches: usize,
+    pub min_scaffold_matches: usize,
+}
+
+impl Default for ReadMappingConfig {
+    fn default() -> Self {
+        Self {
+            minimizer_k: DEFAULT_READ_MAPPING_K,
+            minimizer_w: DEFAULT_READ_MAPPING_W,
+            min_primary_matches: DEFAULT_MIN_PRIMARY_MATCHES,
+            min_scaffold_matches: DEFAULT_MIN_SCAFFOLD_MATCHES,
+        }
+    }
+}
 
 /// Statistics from polishing
 #[derive(Debug, Clone, Default)]
@@ -30,7 +53,7 @@ pub struct PolishStats {
 
 /// Pileup column for consensus calling
 #[derive(Debug, Default, Clone)]
-struct PileupColumn {
+pub(crate) struct PileupColumn {
     bases: [u32; 5], // A, C, G, T, gap
     depth: u32,
 }
@@ -100,14 +123,14 @@ impl PileupColumn {
 }
 
 /// Minimizer index for read mapping
-struct MinimizerIndex {
+pub(crate) struct MinimizerIndex {
     index: AHashMap<u64, Vec<(usize, usize)>>, // minimizer -> [(contig_id, position)]
     k: usize,
     w: usize,
 }
 
 impl MinimizerIndex {
-    fn new(k: usize, w: usize) -> Self {
+    pub(crate) fn new(k: usize, w: usize) -> Self {
         Self {
             index: AHashMap::new(),
             k,
@@ -115,7 +138,7 @@ impl MinimizerIndex {
         }
     }
 
-    fn add_contig(&mut self, contig_id: usize, sequence: &[u8]) {
+    pub(crate) fn add_contig(&mut self, contig_id: usize, sequence: &[u8]) {
         Self::for_each_minimizer(self.k, self.w, sequence, |pos, minimizer| {
             self.index
                 .entry(minimizer)
@@ -160,17 +183,56 @@ impl MinimizerIndex {
 
     fn map_read(&self, sequence: &[u8]) -> Option<(usize, usize, bool)> {
         let mut hits = AHashMap::new();
+        let mut contig_hits = AHashMap::new();
         let mut reverse_scratch = Vec::new();
-        self.map_read_with_scratch(sequence, &mut hits, &mut reverse_scratch)
+        self.map_read_with_scaffold_support(
+            sequence,
+            &mut hits,
+            &mut contig_hits,
+            &mut reverse_scratch,
+        )
+        .0
     }
 
-    fn map_read_with_scratch(
+    pub(crate) fn map_read_with_scratch(
         &self,
         sequence: &[u8],
         hits: &mut AHashMap<(usize, usize), usize>,
         reverse_scratch: &mut Vec<u8>,
     ) -> Option<(usize, usize, bool)> {
+        let mut contig_hits = AHashMap::new();
+        self.map_read_with_scaffold_support(sequence, hits, &mut contig_hits, reverse_scratch)
+            .0
+    }
+
+    pub(crate) fn map_read_with_scaffold_support(
+        &self,
+        sequence: &[u8],
+        hits: &mut AHashMap<(usize, usize), usize>,
+        contig_hits: &mut AHashMap<(usize, bool), usize>,
+        reverse_scratch: &mut Vec<u8>,
+    ) -> (Option<(usize, usize, bool)>, Option<(usize, usize, bool)>) {
+        self.map_read_with_scaffold_support_thresholds(
+            sequence,
+            hits,
+            contig_hits,
+            reverse_scratch,
+            DEFAULT_MIN_PRIMARY_MATCHES,
+            DEFAULT_MIN_SCAFFOLD_MATCHES,
+        )
+    }
+
+    pub(crate) fn map_read_with_scaffold_support_thresholds(
+        &self,
+        sequence: &[u8],
+        hits: &mut AHashMap<(usize, usize), usize>,
+        contig_hits: &mut AHashMap<(usize, bool), usize>,
+        reverse_scratch: &mut Vec<u8>,
+        min_primary_matches: usize,
+        min_scaffold_matches: usize,
+    ) -> (Option<(usize, usize, bool)>, Option<(usize, usize, bool)>) {
         hits.clear();
+        contig_hits.clear();
 
         // Forward mapping
         Self::for_each_minimizer(self.k, self.w, sequence, |read_pos, minimizer| {
@@ -178,6 +240,7 @@ impl MinimizerIndex {
                 for &(contig_id, contig_pos) in entries {
                     let start = contig_pos.saturating_sub(read_pos);
                     *hits.entry((contig_id, start)).or_default() += 1;
+                    *contig_hits.entry((contig_id, false)).or_default() += 1;
                 }
             }
         });
@@ -191,13 +254,19 @@ impl MinimizerIndex {
                     *hits
                         .entry((contig_id, start | REVERSE_STRAND_FLAG))
                         .or_default() += 1;
+                    *contig_hits.entry((contig_id, true)).or_default() += 1;
                 }
             }
         });
 
-        // Find best hit with at least 3 minimizer matches using explicit,
-        // insertion-order-independent tie-breaking.
-        select_best_mapping_hit(hits.iter().map(|(k, v)| (*k, *v)), 3)
+        // Find best hits using explicit, insertion-order-independent tie-breaking.
+        (
+            select_best_mapping_hit(hits.iter().map(|(k, v)| (*k, *v)), min_primary_matches),
+            select_best_contig_hit(
+                contig_hits.iter().map(|(k, v)| (*k, *v)),
+                min_scaffold_matches,
+            ),
+        )
     }
 }
 
@@ -229,6 +298,17 @@ fn compare_mapping_hits(
 }
 
 #[inline]
+fn compare_contig_hits(left: &((usize, bool), usize), right: &((usize, bool), usize)) -> Ordering {
+    let ((left_contig, left_is_reverse), left_count) = left;
+    let ((right_contig, right_is_reverse), right_count) = right;
+
+    left_count
+        .cmp(right_count)
+        .then_with(|| right_contig.cmp(left_contig))
+        .then_with(|| right_is_reverse.cmp(left_is_reverse))
+}
+
+#[inline]
 fn select_best_mapping_hit<I>(hits: I, min_matches: usize) -> Option<(usize, usize, bool)>
 where
     I: IntoIterator<Item = ((usize, usize), usize)>,
@@ -240,6 +320,17 @@ where
             let (actual_pos, is_reverse) = decode_mapping_position(pos);
             (contig_id, actual_pos, is_reverse)
         })
+}
+
+#[inline]
+fn select_best_contig_hit<I>(hits: I, min_matches: usize) -> Option<(usize, usize, bool)>
+where
+    I: IntoIterator<Item = ((usize, bool), usize)>,
+{
+    hits.into_iter()
+        .filter(|(_, count)| *count >= min_matches)
+        .max_by(compare_contig_hits)
+        .map(|((contig_id, is_reverse), count)| (contig_id, count, is_reverse))
 }
 
 fn hash_kmer(kmer: &[u8]) -> Option<u64> {
@@ -276,7 +367,7 @@ fn reverse_complement(seq: &[u8]) -> Vec<u8> {
 }
 
 /// Read contigs from FASTA file
-fn read_contigs(path: &str) -> Result<Vec<(String, Vec<u8>)>> {
+pub(crate) fn read_contigs(path: &str) -> Result<Vec<(String, Vec<u8>)>> {
     let reader = open_fasta(path);
     let mut contigs = Vec::new();
     let mut current_header = String::new();
@@ -315,6 +406,7 @@ pub fn polish_contigs(
     reads2_path: Option<&str>,
     output_path: &str,
     iterations: usize,
+    mapping_config: ReadMappingConfig,
 ) -> Result<PolishStats> {
     let mut stats = PolishStats::default();
 
@@ -327,7 +419,7 @@ pub fn polish_contigs(
         info!("Polishing iteration {}/{}", iter + 1, iterations);
 
         // Build minimizer index
-        let mut index = MinimizerIndex::new(15, 10);
+        let mut index = MinimizerIndex::new(mapping_config.minimizer_k, mapping_config.minimizer_w);
         for (i, (_header, seq)) in contigs.iter().enumerate() {
             index.add_contig(i, seq);
         }
@@ -340,12 +432,18 @@ pub fn polish_contigs(
 
         // Process reads from first file
         info!("  Mapping reads from {}...", reads1_path);
-        map_reads_into_pileups(reads1_path, &index, &mut pileups, &mut stats)?;
+        map_reads_into_pileups(
+            reads1_path,
+            &index,
+            &mut pileups,
+            &mut stats,
+            mapping_config,
+        )?;
 
         // Process reads from second file if provided
         if let Some(reads2) = reads2_path {
             info!("  Mapping reads from {}...", reads2);
-            map_reads_into_pileups(reads2, &index, &mut pileups, &mut stats)?;
+            map_reads_into_pileups(reads2, &index, &mut pileups, &mut stats, mapping_config)?;
         }
 
         // Call consensus and apply corrections
@@ -359,13 +457,8 @@ pub fn polish_contigs(
         }
     }
 
-    // Write polished contigs
     info!("Writing polished contigs to {}", output_path);
-    let mut writer = FastaWriter::try_new(output_path)?;
-    for (header, seq) in &contigs {
-        let seq_str = String::from_utf8_lossy(seq);
-        writer.write_record(header, &seq_str)?;
-    }
+    write_contigs(&contigs, output_path)?;
 
     info!(
         "Polishing complete: {} corrections ({} substitutions, {} insertions, {} deletions)",
@@ -376,7 +469,7 @@ pub fn polish_contigs(
 }
 
 /// Add a read alignment to the pileup
-fn add_to_pileup(pileup: &mut [PileupColumn], start: usize, read: &[u8]) {
+pub(crate) fn add_to_pileup(pileup: &mut [PileupColumn], start: usize, read: &[u8]) {
     for (i, &base) in read.iter().enumerate() {
         let pos = start + i;
         if pos < pileup.len() {
@@ -390,9 +483,11 @@ fn map_reads_into_pileups(
     index: &MinimizerIndex,
     pileups: &mut [Vec<PileupColumn>],
     stats: &mut PolishStats,
+    mapping_config: ReadMappingConfig,
 ) -> Result<()> {
     let reader = try_open_fastq(reads_path)?;
     let mut hits = AHashMap::new();
+    let mut contig_hits = AHashMap::new();
     let mut reverse_scratch = Vec::new();
 
     for record in stream_fastq_records_checked(reader) {
@@ -400,8 +495,16 @@ fn map_reads_into_pileups(
         stats.reads_processed += 1;
 
         let sequence = record.sequence.into_bytes();
-        if let Some((contig_id, start, is_reverse)) =
-            index.map_read_with_scratch(&sequence, &mut hits, &mut reverse_scratch)
+        if let Some((contig_id, start, is_reverse)) = index
+            .map_read_with_scaffold_support_thresholds(
+                &sequence,
+                &mut hits,
+                &mut contig_hits,
+                &mut reverse_scratch,
+                mapping_config.min_primary_matches,
+                mapping_config.min_scaffold_matches,
+            )
+            .0
         {
             stats.reads_mapped += 1;
             let read_seq = if is_reverse {
@@ -417,7 +520,7 @@ fn map_reads_into_pileups(
 }
 
 /// Apply corrections based on pileup consensus
-fn apply_corrections(
+pub(crate) fn apply_corrections(
     contigs: &mut [(String, Vec<u8>)],
     pileups: &[Vec<PileupColumn>],
     stats: &mut PolishStats,
@@ -463,6 +566,15 @@ fn apply_corrections(
     }
 
     total_corrections
+}
+
+pub(crate) fn write_contigs(contigs: &[(String, Vec<u8>)], output_path: &str) -> Result<()> {
+    let mut writer = FastaWriter::try_new(output_path)?;
+    for (header, seq) in contigs {
+        let seq_str = String::from_utf8_lossy(seq);
+        writer.write_record(header, &seq_str)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -625,6 +737,7 @@ mod tests {
             None,
             output_dir.path().to_str().unwrap(),
             1,
+            ReadMappingConfig::default(),
         );
         assert!(result.is_err());
     }
