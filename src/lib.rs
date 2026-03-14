@@ -50,5 +50,6 @@ pub mod kmer;
 pub mod pipeline;
 pub mod polish;
 pub mod quant;
+pub use repeatmasker_rs as repeatmasker;
 pub mod stats;
 pub mod visualize;

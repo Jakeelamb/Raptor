@@ -1,0 +1,25 @@
+[package]
+name = "repeatmasker-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Fast Rust postprocessing and masking for RepeatMasker .out/.cat annotations"
+authors = ["Jacob Lamb <jacob.lamb@example.com>"]
+license = "MIT"
+repository = "https://github.com/Jakeelamb/Raptor.git"
+readme = "README.md"
+keywords = ["bioinformatics", "genomics", "repeatmasker", "masking"]
+categories = ["command-line-utilities", "science"]
+
+[dependencies]
+clap = { version = "4.5.0", features = ["derive"] }
+flate2 = "1.0.28"
+serde = { version = "1.0.207", features = ["derive"] }
+serde_json = "1.0.105"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3.10.1"
+
+[[bench]]
+name = "repeatmasker_masking"
+harness = false

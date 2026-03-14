@@ -8,6 +8,10 @@ license = "MIT"
 repository = "https://github.com/Jakeelamb/Raptor.git"
 default-run = "raptor"
 
+[workspace]
+members = ["crates/repeatmasker-rs"]
+resolver = "2"
+
 # Define features
 [features]
 default = []
@@ -37,6 +41,7 @@ rand = "0.8.5"
 num_cpus = "1.16.0"
 lz4_flex = "0.11"
 memmap2 = "0.9"
+repeatmasker-rs = { path = "crates/repeatmasker-rs", version = "0.1.0" }
 
 # Replaced with our own implementations
 # linfa = "0.6.1"
@@ -67,6 +72,10 @@ harness = false
 
 [[bench]]
 name = "large_genome_stages"
+harness = false
+
+[[bench]]
+name = "repeatmasker_masking"
 harness = false
 
 [[bin]]
