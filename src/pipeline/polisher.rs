@@ -8,17 +8,18 @@
 //! 5. Output polished contigs
 
 use crate::io::fasta::{open_fasta, FastaWriter};
-use crate::io::fastq::{stream_fastq_records_checked, try_open_fastq};
+use crate::io::fastq::{for_each_fastq_sequence_checked, try_open_fastq};
 use ahash::AHashMap;
 use std::cmp::Ordering;
 use std::io::{BufRead, Result};
 use tracing::info;
 
 const REVERSE_STRAND_FLAG: usize = 1usize << (usize::BITS - 1);
+const FAST_MINIMIZER_WINDOW_LIMIT: usize = 255;
 pub const DEFAULT_READ_MAPPING_K: usize = 15;
-pub const DEFAULT_READ_MAPPING_W: usize = 4;
-pub const DEFAULT_MIN_PRIMARY_MATCHES: usize = 2;
-pub const DEFAULT_MIN_SCAFFOLD_MATCHES: usize = 4;
+pub const DEFAULT_READ_MAPPING_W: usize = 10;
+pub const DEFAULT_MIN_PRIMARY_MATCHES: usize = 3;
+pub const DEFAULT_MIN_SCAFFOLD_MATCHES: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadMappingConfig {
@@ -127,6 +128,7 @@ pub(crate) struct MinimizerIndex {
     index: AHashMap<u64, Vec<(usize, usize)>>, // minimizer -> [(contig_id, position)]
     k: usize,
     w: usize,
+    contig_count: usize,
 }
 
 impl MinimizerIndex {
@@ -135,10 +137,12 @@ impl MinimizerIndex {
             index: AHashMap::new(),
             k,
             w,
+            contig_count: 0,
         }
     }
 
     pub(crate) fn add_contig(&mut self, contig_id: usize, sequence: &[u8]) {
+        self.contig_count = self.contig_count.max(contig_id.saturating_add(1));
         Self::for_each_minimizer(self.k, self.w, sequence, |pos, minimizer| {
             self.index
                 .entry(minimizer)
@@ -151,25 +155,112 @@ impl MinimizerIndex {
     where
         F: FnMut(usize, u64),
     {
-        if seq.len() < k + w - 1 {
+        if k == 0 || w == 0 {
+            return;
+        }
+        let Some(min_seq_len) = k.checked_add(w).and_then(|sum| sum.checked_sub(1)) else {
+            return;
+        };
+        if seq.len() < min_seq_len {
+            return;
+        }
+        if k > 32 || w > FAST_MINIMIZER_WINDOW_LIMIT {
+            Self::for_each_minimizer_reference(k, w, seq, emit);
+            return;
+        }
+
+        let rolling_mask = if k == 32 {
+            u64::MAX
+        } else {
+            (1u64 << (k * 2)) - 1
+        };
+        let mut rolling = 0u64;
+        let mut valid_run = 0usize;
+        let mut last_emitted_pos = usize::MAX;
+        let mut deque_positions = [0usize; FAST_MINIMIZER_WINDOW_LIMIT];
+        let mut deque_hashes = [0u64; FAST_MINIMIZER_WINDOW_LIMIT];
+        let mut deque_head = 0usize;
+        let mut deque_len = 0usize;
+
+        for (idx, &base) in seq.iter().enumerate() {
+            let current_entry = if let Some(base_bits) = encode_dna_base_2bit(base) {
+                rolling = ((rolling << 2) | base_bits) & rolling_mask;
+                valid_run += 1;
+                if valid_run >= k {
+                    Some((idx + 1 - k, rolling))
+                } else {
+                    None
+                }
+            } else {
+                rolling = 0;
+                valid_run = 0;
+                None
+            };
+
+            if idx + 1 >= min_seq_len {
+                let window_start = idx + 1 - min_seq_len;
+                while deque_len > 0 && deque_positions[deque_head] < window_start {
+                    deque_head = (deque_head + 1) % FAST_MINIMIZER_WINDOW_LIMIT;
+                    deque_len -= 1;
+                }
+            }
+
+            if let Some((kmer_pos, hash)) = current_entry {
+                while deque_len > 0 {
+                    let back_idx = (deque_head + deque_len - 1) % FAST_MINIMIZER_WINDOW_LIMIT;
+                    if deque_hashes[back_idx] > hash {
+                        deque_len -= 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                let insert_idx = (deque_head + deque_len) % FAST_MINIMIZER_WINDOW_LIMIT;
+                deque_positions[insert_idx] = kmer_pos;
+                deque_hashes[insert_idx] = hash;
+                deque_len += 1;
+            }
+
+            if idx + 1 < min_seq_len || deque_len == 0 {
+                continue;
+            }
+
+            let min_pos = deque_positions[deque_head];
+            if min_pos != last_emitted_pos {
+                emit(min_pos, deque_hashes[deque_head]);
+                last_emitted_pos = min_pos;
+            }
+        }
+    }
+
+    fn for_each_minimizer_reference<F>(k: usize, w: usize, seq: &[u8], mut emit: F)
+    where
+        F: FnMut(usize, u64),
+    {
+        let Some(min_seq_len) = k.checked_add(w).and_then(|sum| sum.checked_sub(1)) else {
+            return;
+        };
+        if k == 0 || w == 0 || seq.len() < min_seq_len {
             return;
         }
 
         let mut last_emitted_pos = usize::MAX;
-        for window_start in 0..=(seq.len() - k - w + 1) {
+        for window_start in 0..=(seq.len() - min_seq_len) {
             let mut min_hash = 0u64;
-            let mut min_pos = 0;
+            let mut min_pos = 0usize;
             let mut found_valid_kmer = false;
 
-            for i in 0..w {
-                let pos = window_start + i;
-                if pos + k <= seq.len() {
-                    if let Some(hash) = hash_kmer(&seq[pos..pos + k]) {
-                        if !found_valid_kmer || hash < min_hash {
-                            min_hash = hash;
-                            min_pos = pos;
-                            found_valid_kmer = true;
-                        }
+            for offset in 0..w {
+                let pos = window_start + offset;
+                let end = pos + k;
+                if end > seq.len() {
+                    break;
+                }
+                if let Some(hash) = hash_kmer(&seq[pos..end]) {
+                    if !found_valid_kmer || hash < min_hash {
+                        min_hash = hash;
+                        min_pos = pos;
+                        found_valid_kmer = true;
                     }
                 }
             }
@@ -183,7 +274,7 @@ impl MinimizerIndex {
 
     fn map_read(&self, sequence: &[u8]) -> Option<(usize, usize, bool)> {
         let mut hits = AHashMap::new();
-        let mut contig_hits = AHashMap::new();
+        let mut contig_hits = ContigHitScratch::default();
         let mut reverse_scratch = Vec::new();
         self.map_read_with_scaffold_support(
             sequence,
@@ -200,7 +291,7 @@ impl MinimizerIndex {
         hits: &mut AHashMap<(usize, usize), usize>,
         reverse_scratch: &mut Vec<u8>,
     ) -> Option<(usize, usize, bool)> {
-        let mut contig_hits = AHashMap::new();
+        let mut contig_hits = ContigHitScratch::default();
         self.map_read_with_scaffold_support(sequence, hits, &mut contig_hits, reverse_scratch)
             .0
     }
@@ -209,7 +300,7 @@ impl MinimizerIndex {
         &self,
         sequence: &[u8],
         hits: &mut AHashMap<(usize, usize), usize>,
-        contig_hits: &mut AHashMap<(usize, bool), usize>,
+        contig_hits: &mut ContigHitScratch,
         reverse_scratch: &mut Vec<u8>,
     ) -> (Option<(usize, usize, bool)>, Option<(usize, usize, bool)>) {
         self.map_read_with_scaffold_support_thresholds(
@@ -226,13 +317,13 @@ impl MinimizerIndex {
         &self,
         sequence: &[u8],
         hits: &mut AHashMap<(usize, usize), usize>,
-        contig_hits: &mut AHashMap<(usize, bool), usize>,
+        contig_hits: &mut ContigHitScratch,
         reverse_scratch: &mut Vec<u8>,
         min_primary_matches: usize,
         min_scaffold_matches: usize,
     ) -> (Option<(usize, usize, bool)>, Option<(usize, usize, bool)>) {
         hits.clear();
-        contig_hits.clear();
+        contig_hits.prepare(self.contig_count);
 
         // Forward mapping
         Self::for_each_minimizer(self.k, self.w, sequence, |read_pos, minimizer| {
@@ -240,7 +331,6 @@ impl MinimizerIndex {
                 for &(contig_id, contig_pos) in entries {
                     let start = contig_pos.saturating_sub(read_pos);
                     *hits.entry((contig_id, start)).or_default() += 1;
-                    *contig_hits.entry((contig_id, false)).or_default() += 1;
                 }
             }
         });
@@ -254,19 +344,84 @@ impl MinimizerIndex {
                     *hits
                         .entry((contig_id, start | REVERSE_STRAND_FLAG))
                         .or_default() += 1;
-                    *contig_hits.entry((contig_id, true)).or_default() += 1;
                 }
             }
         });
 
-        // Find best hits using explicit, insertion-order-independent tie-breaking.
+        let mut best_primary: Option<((usize, usize), usize)> = None;
+        for (&(contig_id, pos), &count) in hits.iter() {
+            let is_reverse = (pos & REVERSE_STRAND_FLAG) != 0;
+            contig_hits.add(contig_id, is_reverse, count);
+
+            if count < min_primary_matches {
+                continue;
+            }
+
+            let candidate = ((contig_id, pos), count);
+            match best_primary {
+                None => best_primary = Some(candidate),
+                Some(current) => {
+                    if compare_mapping_hits(&candidate, &current).is_gt() {
+                        best_primary = Some(candidate);
+                    }
+                }
+            }
+        }
+
         (
-            select_best_mapping_hit(hits.iter().map(|(k, v)| (*k, *v)), min_primary_matches),
-            select_best_contig_hit(
-                contig_hits.iter().map(|(k, v)| (*k, *v)),
-                min_scaffold_matches,
-            ),
+            best_primary.map(|((contig_id, pos), _)| {
+                let (actual_pos, is_reverse) = decode_mapping_position(pos);
+                (contig_id, actual_pos, is_reverse)
+            }),
+            contig_hits.best_hit(min_scaffold_matches),
         )
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ContigHitScratch {
+    counts: Vec<u32>,
+    touched: Vec<usize>,
+}
+
+impl ContigHitScratch {
+    fn prepare(&mut self, contig_count: usize) {
+        for &idx in &self.touched {
+            self.counts[idx] = 0;
+        }
+        self.touched.clear();
+
+        let needed = contig_count.saturating_mul(2);
+        if self.counts.len() < needed {
+            self.counts.resize(needed, 0);
+        }
+    }
+
+    #[inline]
+    fn add(&mut self, contig_id: usize, is_reverse: bool, count: usize) {
+        let idx = contig_id
+            .saturating_mul(2)
+            .saturating_add(usize::from(is_reverse));
+        if self.counts[idx] == 0 {
+            self.touched.push(idx);
+        }
+        self.counts[idx] = self.counts[idx].saturating_add(count as u32);
+    }
+
+    fn best_hit(&self, min_matches: usize) -> Option<(usize, usize, bool)> {
+        self.touched
+            .iter()
+            .copied()
+            .filter_map(|idx| {
+                let count = self.counts[idx] as usize;
+                (count >= min_matches).then(|| {
+                    let contig_id = idx / 2;
+                    let is_reverse = (idx & 1) != 0;
+                    ((contig_id, is_reverse), count)
+                })
+            })
+            .max_by(compare_contig_hits)
+            .map(|((contig_id, is_reverse), count)| (contig_id, count, is_reverse))
     }
 }
 
@@ -333,6 +488,18 @@ where
         .map(|((contig_id, is_reverse), count)| (contig_id, count, is_reverse))
 }
 
+#[inline]
+fn populate_contig_hits_from_positional_hits(
+    hits: &AHashMap<(usize, usize), usize>,
+    contig_hits: &mut AHashMap<(usize, bool), usize>,
+) {
+    contig_hits.clear();
+    for (&(contig_id, pos), &count) in hits {
+        let is_reverse = (pos & REVERSE_STRAND_FLAG) != 0;
+        *contig_hits.entry((contig_id, is_reverse)).or_default() += count;
+    }
+}
+
 fn hash_kmer(kmer: &[u8]) -> Option<u64> {
     let mut hash = 0u64;
     for &base in kmer {
@@ -346,6 +513,17 @@ fn hash_kmer(kmer: &[u8]) -> Option<u64> {
         hash = hash.wrapping_mul(4).wrapping_add(val);
     }
     Some(hash)
+}
+
+#[inline]
+fn encode_dna_base_2bit(base: u8) -> Option<u64> {
+    match base {
+        b'A' | b'a' => Some(0),
+        b'C' | b'c' => Some(1),
+        b'G' | b'g' => Some(2),
+        b'T' | b't' => Some(3),
+        _ => None,
+    }
 }
 
 fn reverse_complement_into(seq: &[u8], out: &mut Vec<u8>) {
@@ -487,17 +665,15 @@ fn map_reads_into_pileups(
 ) -> Result<()> {
     let reader = try_open_fastq(reads_path)?;
     let mut hits = AHashMap::new();
-    let mut contig_hits = AHashMap::new();
+    let mut contig_hits = ContigHitScratch::default();
     let mut reverse_scratch = Vec::new();
 
-    for record in stream_fastq_records_checked(reader) {
-        let record = record?;
+    for_each_fastq_sequence_checked(reader, |sequence| {
         stats.reads_processed += 1;
 
-        let sequence = record.sequence.into_bytes();
         if let Some((contig_id, start, is_reverse)) = index
             .map_read_with_scaffold_support_thresholds(
-                &sequence,
+                sequence,
                 &mut hits,
                 &mut contig_hits,
                 &mut reverse_scratch,
@@ -510,11 +686,12 @@ fn map_reads_into_pileups(
             let read_seq = if is_reverse {
                 reverse_scratch.as_slice()
             } else {
-                sequence.as_slice()
+                sequence
             };
             add_to_pileup(&mut pileups[contig_id], start, read_seq);
         }
-    }
+        Ok(())
+    })?;
 
     Ok(())
 }
@@ -627,6 +804,36 @@ mod tests {
         assert!(result.is_some());
     }
 
+    fn collect_minimizers<F>(collector: F, k: usize, w: usize, sequence: &[u8]) -> Vec<(usize, u64)>
+    where
+        F: Fn(usize, usize, &[u8], &mut dyn FnMut(usize, u64)),
+    {
+        let mut minimizers = Vec::new();
+        collector(k, w, sequence, &mut |pos, hash| {
+            minimizers.push((pos, hash))
+        });
+        minimizers
+    }
+
+    #[test]
+    fn fast_minimizer_path_matches_reference_with_ambiguous_bases_and_ties() {
+        let sequence = b"ACGTACGTNNACGTAAAACGT";
+        let observed = collect_minimizers(
+            |k, w, seq, emit| MinimizerIndex::for_each_minimizer(k, w, seq, emit),
+            5,
+            4,
+            sequence,
+        );
+        let expected = collect_minimizers(
+            |k, w, seq, emit| MinimizerIndex::for_each_minimizer_reference(k, w, seq, emit),
+            5,
+            4,
+            sequence,
+        );
+
+        assert_eq!(observed, expected);
+    }
+
     #[test]
     fn hash_kmer_rejects_ambiguous_bases() {
         assert_eq!(hash_kmer(b"ACGT"), Some(27));
@@ -658,6 +865,45 @@ mod tests {
         reversed.reverse();
         let best_reversed = select_best_mapping_hit(reversed.iter().copied(), 3);
         assert_eq!(best_reversed, Some((0, 5, false)));
+    }
+
+    #[test]
+    fn populate_contig_hits_from_positional_hits_aggregates_all_positions_per_strand() {
+        let mut hits = AHashMap::new();
+        hits.insert((0, 10), 2);
+        hits.insert((0, 20), 1);
+        hits.insert((0, 30 | REVERSE_STRAND_FLAG), 3);
+        hits.insert((1, 15), 3);
+        hits.insert((1, 25 | REVERSE_STRAND_FLAG), 2);
+
+        let mut contig_hits = AHashMap::new();
+        populate_contig_hits_from_positional_hits(&hits, &mut contig_hits);
+
+        assert_eq!(contig_hits.get(&(0, false)), Some(&3));
+        assert_eq!(contig_hits.get(&(0, true)), Some(&3));
+        assert_eq!(contig_hits.get(&(1, false)), Some(&3));
+        assert_eq!(contig_hits.get(&(1, true)), Some(&2));
+        assert_eq!(
+            select_best_contig_hit(contig_hits.iter().map(|(k, v)| (*k, *v)), 3),
+            Some((0, 3, false))
+        );
+    }
+
+    #[test]
+    fn contig_hit_scratch_aggregates_and_reuses_storage() {
+        let mut scratch = ContigHitScratch::default();
+        scratch.prepare(2);
+        scratch.add(0, false, 2);
+        scratch.add(0, false, 1);
+        scratch.add(0, true, 3);
+        scratch.add(1, false, 3);
+        scratch.add(1, true, 2);
+        assert_eq!(scratch.best_hit(3), Some((0, 3, false)));
+
+        scratch.prepare(2);
+        assert_eq!(scratch.best_hit(1), None);
+        scratch.add(1, true, 4);
+        assert_eq!(scratch.best_hit(3), Some((1, 4, true)));
     }
 
     #[test]
@@ -695,6 +941,33 @@ mod tests {
     }
 
     proptest! {
+        #[test]
+        fn fast_minimizer_path_matches_reference_under_random_input(
+            sequence in prop::collection::vec(
+                prop_oneof![
+                    Just(b'A'), Just(b'C'), Just(b'G'), Just(b'T'),
+                    Just(b'N'), Just(b'R'), Just(b'a'), Just(b't')
+                ],
+                0..96
+            ),
+            k in 1usize..20,
+            w in 1usize..16
+        ) {
+            let observed = collect_minimizers(
+                |k, w, seq, emit| MinimizerIndex::for_each_minimizer(k, w, seq, emit),
+                k,
+                w,
+                &sequence,
+            );
+            let expected = collect_minimizers(
+                |k, w, seq, emit| MinimizerIndex::for_each_minimizer_reference(k, w, seq, emit),
+                k,
+                w,
+                &sequence,
+            );
+            prop_assert_eq!(observed, expected);
+        }
+
         #[test]
         fn select_best_mapping_hit_is_invariant_to_candidate_order(
             raw_hits in prop::collection::vec(((0usize..8, 0usize..256usize, ANY), 0usize..10usize), 1..128)

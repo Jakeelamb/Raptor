@@ -9,9 +9,10 @@
 
 use crate::kmer::kmer::KmerU64;
 use ahash::AHashMap;
+use memmap2::Mmap;
 use rayon::prelude::*;
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 #[inline]
@@ -32,6 +33,29 @@ fn encode_base_2bit(base: u8) -> Option<u64> {
         b'T' | b't' => Some(3),
         _ => None,
     }
+}
+
+#[inline]
+fn count_sorted_kmers(sorted_kmers: &[u64], min_count: u32) -> AHashMap<u64, u32> {
+    let mut counts = AHashMap::with_capacity(sorted_kmers.len() / 4);
+    let mut idx = 0usize;
+
+    while idx < sorted_kmers.len() {
+        let current = sorted_kmers[idx];
+        idx += 1;
+        let mut count = 1u32;
+
+        while idx < sorted_kmers.len() && sorted_kmers[idx] == current {
+            count = count.saturating_add(1);
+            idx += 1;
+        }
+
+        if count >= min_count {
+            counts.insert(current, count);
+        }
+    }
+
+    counts
 }
 
 /// Configuration for disk-based k-mer counting
@@ -139,6 +163,7 @@ pub struct DiskKmerCounterV2 {
     config: DiskCounterConfig,
     bucket_paths: Vec<PathBuf>,
     bucket_counts: Vec<u64>,
+    open_buckets: Option<Vec<KmerBucket>>,
     total_kmers: u64,
 }
 
@@ -167,12 +192,52 @@ impl DiskKmerCounterV2 {
         }
 
         fs::create_dir_all(&config.temp_dir)?;
+        let num_buckets = config.num_buckets;
+        let bucket_paths = (0..num_buckets)
+            .map(|i| config.temp_dir.join(format!("bucket_{:05}.bin", i)))
+            .collect();
         Ok(Self {
             config,
-            bucket_paths: Vec::new(),
-            bucket_counts: Vec::new(),
+            bucket_paths,
+            bucket_counts: vec![0; num_buckets],
+            open_buckets: None,
             total_kmers: 0,
         })
+    }
+
+    fn ensure_buckets_open(&mut self) -> std::io::Result<()> {
+        if self.open_buckets.is_some() {
+            return Ok(());
+        }
+
+        let append_existing = self.bucket_counts.iter().any(|&count| count > 0);
+        let buckets = self
+            .bucket_paths
+            .iter()
+            .cloned()
+            .map(|path| {
+                if append_existing {
+                    KmerBucket::open_append(path, self.config.write_buffer_size)
+                } else {
+                    KmerBucket::new(path, self.config.write_buffer_size)
+                }
+            })
+            .collect::<std::io::Result<Vec<_>>>()?;
+        self.open_buckets = Some(buckets);
+        Ok(())
+    }
+
+    fn finalize_open_buckets(&mut self) -> std::io::Result<()> {
+        let Some(buckets) = self.open_buckets.take() else {
+            return Ok(());
+        };
+
+        for (bucket_idx, bucket) in buckets.into_iter().enumerate() {
+            let (_, count) = bucket.finalize()?;
+            self.bucket_counts[bucket_idx] = count;
+        }
+
+        Ok(())
     }
 
     /// Pass 1: Distribute encoded k-mers to disk buckets.
@@ -188,18 +253,11 @@ impl DiskKmerCounterV2 {
         let bucket_mask = (num_buckets.saturating_sub(1)) as u64;
         let rolling_mask = kmer_mask(k);
 
-        // Create buckets on first call, append on subsequent calls
-        let first_call = self.bucket_paths.is_empty();
-        let mut buckets: Vec<KmerBucket> = (0..num_buckets)
-            .map(|i| {
-                let path = self.config.temp_dir.join(format!("bucket_{:05}.bin", i));
-                if first_call {
-                    KmerBucket::new(path, self.config.write_buffer_size)
-                } else {
-                    KmerBucket::open_append(path, self.config.write_buffer_size)
-                }
-            })
-            .collect::<std::io::Result<Vec<_>>>()?;
+        self.ensure_buckets_open()?;
+        let buckets = self
+            .open_buckets
+            .as_mut()
+            .expect("buckets must be initialized before distribution");
 
         let mut batch_total = 0u64;
 
@@ -235,21 +293,17 @@ impl DiskKmerCounterV2 {
             }
         }
 
-        // Finalize buckets — accumulate counts
-        let results: Vec<(PathBuf, u64)> = buckets
-            .into_iter()
-            .map(|b| b.finalize())
-            .collect::<std::io::Result<Vec<_>>>()?;
-
-        self.bucket_paths = results.iter().map(|(p, _)| p.clone()).collect();
-        self.bucket_counts = results.iter().map(|(_, c)| *c).collect();
+        for (bucket_idx, bucket) in buckets.iter().enumerate() {
+            self.bucket_counts[bucket_idx] = bucket.count;
+        }
         self.total_kmers += batch_total;
 
         Ok(())
     }
 
     /// Pass 2: Count k-mers and return map of encoded -> count
-    pub fn count_all(&self) -> std::io::Result<AHashMap<u64, u32>> {
+    pub fn count_all(&mut self) -> std::io::Result<AHashMap<u64, u32>> {
+        self.finalize_open_buckets()?;
         let min_count = self.config.min_count;
 
         // Process buckets in parallel
@@ -290,60 +344,29 @@ impl DiskKmerCounterV2 {
             return Ok(AHashMap::new());
         }
 
-        // Read all k-mers
-        let mut reader = BufReader::with_capacity(4 * 1024 * 1024, file);
+        let mmap = unsafe { Mmap::map(&file)? };
         let mut kmers = Vec::with_capacity(num_kmers);
-        let mut buf = [0u8; 8];
 
-        for _ in 0..num_kmers {
-            reader.read_exact(&mut buf)?;
-            kmers.push(u64::from_le_bytes(buf));
+        for chunk in mmap.chunks_exact(8) {
+            let bytes: [u8; 8] = chunk.try_into().expect("chunk size must be 8");
+            kmers.push(u64::from_le_bytes(bytes));
         }
 
-        // Sort for counting
         kmers.sort_unstable();
-
-        // Count consecutive
-        let mut counts = AHashMap::with_capacity(num_kmers / 5);
-        if kmers.is_empty() {
-            return Ok(counts);
-        }
-
-        let mut current = kmers[0];
-        let mut count = 1u32;
-
-        for &kmer in &kmers[1..] {
-            if kmer == current {
-                count = count.saturating_add(1);
-            } else {
-                if count >= min_count {
-                    counts.insert(current, count);
-                }
-                current = kmer;
-                count = 1;
-            }
-        }
-
-        if count >= min_count {
-            counts.insert(current, count);
-        }
-
-        Ok(counts)
+        Ok(count_sorted_kmers(&kmers, min_count))
     }
 
     /// Get statistics
     pub fn stats(&self) -> (u64, usize, u64) {
-        let disk_bytes: u64 = self
-            .bucket_paths
-            .iter()
-            .filter_map(|p| fs::metadata(p).ok())
-            .map(|m| m.len())
-            .sum();
+        let disk_bytes = self.bucket_counts.iter().fold(0u64, |acc, count| {
+            acc.saturating_add(count.saturating_mul(8))
+        });
         (self.total_kmers, self.bucket_paths.len(), disk_bytes)
     }
 
     /// Cleanup temporary files
-    pub fn cleanup(&self) -> std::io::Result<()> {
+    pub fn cleanup(&mut self) -> std::io::Result<()> {
+        self.open_buckets.take();
         for path in &self.bucket_paths {
             let _ = fs::remove_file(path);
         }
@@ -447,6 +470,14 @@ mod tests {
             len: 32,
         };
         assert_eq!(result.decode(), "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAT");
+    }
+
+    #[test]
+    fn count_sorted_kmers_applies_min_count_filter() {
+        let counts = count_sorted_kmers(&[1, 1, 1, 7, 7, 9], 2);
+        assert_eq!(counts.get(&1), Some(&3));
+        assert_eq!(counts.get(&7), Some(&2));
+        assert!(!counts.contains_key(&9));
     }
 
     #[test]
@@ -563,5 +594,32 @@ mod tests {
             .count_all()
             .expect_err("truncated bucket must return an error");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn count_bucket_matches_reference_for_unsorted_duplicates() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let path = temp_dir.path().join("bucket_00000.bin");
+        let values = [
+            9u64, 1, 9, 2, 1, 1, 9, 2, 2, 2, 5, 5, 5, 5, 7, 7, 8, 8, 8, 8,
+        ];
+
+        let mut bytes = Vec::with_capacity(values.len() * 8);
+        for value in values {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        fs::write(&path, bytes).expect("bucket file should be written");
+
+        let observed = DiskKmerCounterV2::count_bucket(&path, 2).expect("count should succeed");
+
+        let mut expected = AHashMap::new();
+        expected.insert(1, 3);
+        expected.insert(2, 4);
+        expected.insert(5, 4);
+        expected.insert(7, 2);
+        expected.insert(8, 4);
+        expected.insert(9, 3);
+
+        assert_eq!(observed, expected);
     }
 }

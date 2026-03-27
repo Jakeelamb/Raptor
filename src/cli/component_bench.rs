@@ -5,7 +5,9 @@ use crate::pipeline::large_genome_assembler::{
     LargeGenomeAssembler, LargeGenomeBenchBranchCandidate, LargeGenomeBenchBranchResolutionCase,
     LargeGenomeConfig, LargeGenomeStageBenchFixture,
 };
-use crate::pipeline::polisher::{read_contigs, MinimizerIndex, ReadMappingConfig};
+use crate::pipeline::polisher::{
+    read_contigs, ContigHitScratch, MinimizerIndex, ReadMappingConfig,
+};
 use crate::pipeline::scaffolder::scaffold_and_polish_contigs;
 use ahash::{AHashMap, AHashSet};
 use rand::rngs::StdRng;
@@ -3800,7 +3802,7 @@ fn evaluate_fastq_file(
 ) -> io::Result<()> {
     let reader = try_open_fastq(path_to_str(reads_path)?)?;
     let mut hits = AHashMap::new();
-    let mut contig_hits = AHashMap::new();
+    let mut contig_hits = ContigHitScratch::default();
     let mut reverse_scratch = Vec::new();
 
     for record in stream_fastq_records_checked(reader) {

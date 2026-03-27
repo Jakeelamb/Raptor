@@ -14,7 +14,7 @@ use crate::accel::CpuBackend;
 use crate::eval::metrics::{evaluate_lengths_sorted_desc, TranscriptStats};
 use crate::graph::assembler::{greedy_assembly_u64, Contig};
 use crate::io::fasta::FastaWriter;
-use crate::io::fastq::{stream_fastq_records_checked, try_open_fastq};
+use crate::io::fastq::{for_each_fastq_sequence_checked, try_open_fastq};
 use crate::kmer::disk_counting_v2::{DiskCounterConfig, DiskKmerCounterV2};
 use ahash::AHashMap;
 use std::fs;
@@ -264,27 +264,27 @@ impl StreamingAssembler {
 
         // Collect sequences in batches for efficiency
         const BATCH_SIZE: usize = 10_000;
-        let mut batch: Vec<String> = Vec::with_capacity(BATCH_SIZE);
+        let mut batch: Vec<Vec<u8>> = Vec::with_capacity(BATCH_SIZE);
 
-        for record in stream_fastq_records_checked(reader) {
-            let record = record?;
+        for_each_fastq_sequence_checked(reader, |sequence| {
             total_reads += 1;
-            total_bases += record.sequence.len() as u64;
-            batch.push(record.sequence);
+            total_bases += sequence.len() as u64;
+            batch.push(sequence.to_vec());
 
             if batch.len() >= BATCH_SIZE {
-                counter.distribute(batch.iter().map(|s| s.as_bytes()))?;
-                batch.clear();
+                counter.distribute(batch.drain(..))?;
 
                 if total_reads % 1_000_000 == 0 {
                     info!("Processed {} million reads...", total_reads / 1_000_000);
                 }
             }
-        }
+
+            Ok(())
+        })?;
 
         // Process remaining batch
         if !batch.is_empty() {
-            counter.distribute(batch.iter().map(|s| s.as_bytes()))?;
+            counter.distribute(batch.drain(..))?;
         }
 
         Ok((total_reads, total_bases))

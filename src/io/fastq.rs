@@ -27,6 +27,154 @@ pub fn open_fastq(path: &str) -> Box<dyn BufRead> {
         .unwrap_or_else(|err| panic!("Unable to open FASTQ file '{}': {}", path, err))
 }
 
+#[derive(Default)]
+struct FastqScratch {
+    header: String,
+    sequence: String,
+    plus: String,
+    quality: String,
+}
+
+fn fastq_invalid_data(record_index: usize, message: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("FASTQ record {}: {}", record_index, message),
+    )
+}
+
+fn fastq_unexpected_eof(record_index: usize, missing_field: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::UnexpectedEof,
+        format!(
+            "FASTQ record {}: truncated input, missing {} line",
+            record_index, missing_field
+        ),
+    )
+}
+
+fn read_trimmed_fastq_line<R: BufRead>(reader: &mut R, buffer: &mut String) -> io::Result<usize> {
+    buffer.clear();
+    let bytes = reader.read_line(buffer)?;
+    if bytes == 0 {
+        return Ok(0);
+    }
+
+    if buffer.ends_with('\n') {
+        buffer.pop();
+        if buffer.ends_with('\r') {
+            buffer.pop();
+        }
+    }
+
+    Ok(bytes)
+}
+
+fn read_fastq_sequence_record_checked<R: BufRead>(
+    reader: &mut R,
+    scratch: &mut FastqScratch,
+    record_index: usize,
+) -> io::Result<bool> {
+    if read_trimmed_fastq_line(reader, &mut scratch.header)? == 0 {
+        return Ok(false);
+    }
+    if read_trimmed_fastq_line(reader, &mut scratch.sequence)? == 0 {
+        return Err(fastq_unexpected_eof(record_index, "sequence"));
+    }
+    if read_trimmed_fastq_line(reader, &mut scratch.plus)? == 0 {
+        return Err(fastq_unexpected_eof(record_index, "plus"));
+    }
+    if read_trimmed_fastq_line(reader, &mut scratch.quality)? == 0 {
+        return Err(fastq_unexpected_eof(record_index, "quality"));
+    }
+
+    if !scratch.header.starts_with('@') {
+        return Err(fastq_invalid_data(
+            record_index,
+            "header must start with '@'",
+        ));
+    }
+    if !scratch.plus.starts_with('+') {
+        return Err(fastq_invalid_data(
+            record_index,
+            "plus line must start with '+'",
+        ));
+    }
+    if scratch.sequence.len() != scratch.quality.len() {
+        return Err(fastq_invalid_data(
+            record_index,
+            "sequence and quality lengths differ",
+        ));
+    }
+
+    Ok(true)
+}
+
+pub fn for_each_fastq_sequence_checked<R: BufRead, F>(mut reader: R, mut visit: F) -> io::Result<()>
+where
+    F: FnMut(&[u8]) -> io::Result<()>,
+{
+    let mut scratch = FastqScratch::default();
+    let mut record_index = 0usize;
+
+    loop {
+        record_index += 1;
+        if !read_fastq_sequence_record_checked(&mut reader, &mut scratch, record_index)? {
+            return Ok(());
+        }
+        visit(scratch.sequence.as_bytes())?;
+    }
+}
+
+pub fn for_each_paired_fastq_sequence_checked<R1: BufRead, R2: BufRead, F>(
+    mut reader1: R1,
+    mut reader2: R2,
+    mut visit: F,
+) -> io::Result<()>
+where
+    F: FnMut(&[u8], &[u8]) -> io::Result<()>,
+{
+    let mut left_scratch = FastqScratch::default();
+    let mut right_scratch = FastqScratch::default();
+    let mut pair_index = 0usize;
+
+    loop {
+        let next_pair = pair_index + 1;
+        let left_present =
+            read_fastq_sequence_record_checked(&mut reader1, &mut left_scratch, next_pair)?;
+        let right_present =
+            read_fastq_sequence_record_checked(&mut reader2, &mut right_scratch, next_pair)?;
+
+        match (left_present, right_present) {
+            (false, false) => return Ok(()),
+            (true, true) => {
+                pair_index = next_pair;
+                visit(
+                    left_scratch.sequence.as_bytes(),
+                    right_scratch.sequence.as_bytes(),
+                )?;
+            }
+            (true, false) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "Paired FASTQ inputs have different record counts: missing mate in R2 at pair {}",
+                        next_pair
+                    ),
+                ));
+            }
+            (false, true) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "Paired FASTQ inputs have different record counts: missing mate in R1 at pair {}",
+                        next_pair
+                    ),
+                ));
+            }
+        }
+    }
+}
+
 /// DEPRECATED: Use stream_fastq_records() instead for memory efficiency.
 /// This function loads the entire file twice (once for lines, once for records).
 #[deprecated(note = "Use stream_fastq_records() for 50-66% memory reduction")]
@@ -453,6 +601,36 @@ mod tests {
             .next()
             .expect("expected mismatch error")
             .expect_err("expected paired mismatch error");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("different record counts"));
+    }
+
+    #[test]
+    fn for_each_fastq_sequence_checked_collects_sequences() {
+        let input = b"@r1\nACGT\n+\nIIII\n@r2\nTTAA\n+\nJJJJ\n";
+        let mut sequences = Vec::new();
+
+        for_each_fastq_sequence_checked(Cursor::new(&input[..]), |sequence| {
+            sequences.push(sequence.to_vec());
+            Ok(())
+        })
+        .expect("sequence-only parser should succeed");
+
+        assert_eq!(sequences, vec![b"ACGT".to_vec(), b"TTAA".to_vec()]);
+    }
+
+    #[test]
+    fn for_each_paired_fastq_sequence_checked_rejects_mismatched_record_counts() {
+        let r1 = b"@r1/1\nAAAA\n+\nIIII\n@r2/1\nCCCC\n+\nIIII\n";
+        let r2 = b"@r1/2\nTTTT\n+\nIIII\n";
+
+        let err = for_each_paired_fastq_sequence_checked(
+            Cursor::new(&r1[..]),
+            Cursor::new(&r2[..]),
+            |_left, _right| Ok(()),
+        )
+        .expect_err("paired sequence parser should reject mismatched mates");
+
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("different record counts"));
     }

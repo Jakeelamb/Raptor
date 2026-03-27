@@ -1047,15 +1047,15 @@ pub enum Commands {
         read_mapping_k: usize,
 
         /// Minimizer window size for post-assembly read mapping
-        #[arg(long, default_value_t = 4)]
+        #[arg(long, default_value_t = 10)]
         read_mapping_w: usize,
 
         /// Minimum supporting minimizer hits for a primary post-assembly mapping
-        #[arg(long, default_value_t = 2)]
+        #[arg(long, default_value_t = 3)]
         read_mapping_min_primary_matches: usize,
 
         /// Minimum supporting minimizer hits for a scaffold-level contig hit
-        #[arg(long, default_value_t = 4)]
+        #[arg(long, default_value_t = 2)]
         read_mapping_min_scaffold_matches: usize,
 
         /// Long reads file (FASTQ) for hybrid assembly

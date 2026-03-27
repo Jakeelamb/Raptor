@@ -78,6 +78,10 @@ harness = false
 name = "repeatmasker_masking"
 harness = false
 
+[[bench]]
+name = "assembly_hot_path"
+harness = false
+
 [[bin]]
 name = "raptor"
 path = "src/main.rs"

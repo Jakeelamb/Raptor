@@ -10,14 +10,16 @@
 
 use crate::eval::metrics::evaluate_lengths_sorted_desc;
 use crate::io::fasta::{open_fasta, FastaWriter};
-use crate::io::fastq::{stream_paired_fastq_records_checked, try_open_fastq};
+use crate::io::fastq::{for_each_paired_fastq_sequence_checked, try_open_fastq};
 use crate::pipeline::polisher::{
     add_to_pileup, apply_corrections, read_contigs as read_contigs_bytes, write_contigs,
-    MinimizerIndex as PolishMinimizerIndex, PileupColumn, PolishStats, ReadMappingConfig,
+    ContigHitScratch, MinimizerIndex as PolishMinimizerIndex, PileupColumn, PolishStats,
+    ReadMappingConfig,
 };
 use ahash::{AHashMap, AHashSet};
 use std::cmp::Ordering;
 use std::io::{BufRead, Result};
+use std::time::Instant;
 use tracing::info;
 
 /// Statistics from scaffolding
@@ -305,18 +307,15 @@ pub fn scaffold_contigs(
     const INSERT_MEDIAN_REFRESH: usize = 256;
     let mut estimated_insert = 500i32;
     let mut hits = AHashMap::new();
-    let mut contig_hits = AHashMap::new();
+    let mut contig_hits = ContigHitScratch::default();
     let mut reverse_scratch = Vec::new();
 
-    for pair in stream_paired_fastq_records_checked(reader1, reader2) {
-        let (r1, r2) = pair?;
+    for_each_paired_fastq_sequence_checked(reader1, reader2, |sequence1, sequence2| {
         stats.reads_processed += 2;
 
-        let sequence1 = r1.sequence.into_bytes();
-        let sequence2 = r2.sequence.into_bytes();
         let scaffold_hit1 = index
             .map_read_with_scaffold_support_thresholds(
-                &sequence1,
+                sequence1,
                 &mut hits,
                 &mut contig_hits,
                 &mut reverse_scratch,
@@ -326,7 +325,7 @@ pub fn scaffold_contigs(
             .1;
         let scaffold_hit2 = index
             .map_read_with_scaffold_support_thresholds(
-                &sequence2,
+                sequence2,
                 &mut hits,
                 &mut contig_hits,
                 &mut reverse_scratch,
@@ -350,7 +349,7 @@ pub fn scaffold_contigs(
                 {
                     estimated_insert = median_i32(&insert_sizes);
                 }
-                continue;
+                return Ok(());
             }
 
             // Record link between different contigs
@@ -391,7 +390,8 @@ pub fn scaffold_contigs(
                 stats.reads_processed / 2_000_000
             );
         }
-    }
+        Ok(())
+    })?;
 
     stats.links_found = links.len();
     info!("Found {} potential links", links.len());
@@ -460,6 +460,7 @@ pub fn scaffold_and_polish_contigs(
 ) -> Result<(ScaffoldStats, PolishStats)> {
     let mut scaffold_stats = ScaffoldStats::default();
     let mut polish_stats = PolishStats::default();
+    let total_start = Instant::now();
 
     info!("Reading contigs from {}", contigs_path);
     let mut contigs = read_contigs_bytes(contigs_path)?;
@@ -475,11 +476,13 @@ pub fn scaffold_and_polish_contigs(
     }
 
     info!("Building shared minimizer index...");
+    let phase_start = Instant::now();
     let mut index =
         PolishMinimizerIndex::new(mapping_config.minimizer_k, mapping_config.minimizer_w);
     for (contig_id, (_, sequence)) in contigs.iter().enumerate() {
         index.add_contig(contig_id, sequence);
     }
+    let index_seconds = phase_start.elapsed().as_secs_f64();
 
     let mut pileups: Vec<Vec<PileupColumn>> = contigs
         .iter()
@@ -490,7 +493,7 @@ pub fn scaffold_and_polish_contigs(
     let reader1 = try_open_fastq(reads1_path)?;
     let reader2 = try_open_fastq(reads2_path)?;
     let mut hits = AHashMap::new();
-    let mut contig_hits = AHashMap::new();
+    let mut contig_hits = ContigHitScratch::default();
     let mut reverse_scratch = Vec::new();
 
     let mut insert_sizes = Vec::new();
@@ -499,14 +502,13 @@ pub fn scaffold_and_polish_contigs(
     let mut estimated_insert = 500i32;
 
     info!("Mapping paired-end reads once for scaffolding and polishing...");
-    for pair in stream_paired_fastq_records_checked(reader1, reader2) {
-        let (r1, r2) = pair?;
+    let phase_start = Instant::now();
+    for_each_paired_fastq_sequence_checked(reader1, reader2, |sequence1, sequence2| {
         scaffold_stats.reads_processed += 2;
         polish_stats.reads_processed += 2;
 
-        let sequence1 = r1.sequence.into_bytes();
         let (mapping1, scaffold_hit1) = index.map_read_with_scaffold_support_thresholds(
-            &sequence1,
+            sequence1,
             &mut hits,
             &mut contig_hits,
             &mut reverse_scratch,
@@ -518,14 +520,13 @@ pub fn scaffold_and_polish_contigs(
             let read_sequence = if is_reverse {
                 reverse_scratch.as_slice()
             } else {
-                sequence1.as_slice()
+                sequence1
             };
             add_to_pileup(&mut pileups[contig_id], start, read_sequence);
         }
 
-        let sequence2 = r2.sequence.into_bytes();
         let (mapping2, scaffold_hit2) = index.map_read_with_scaffold_support_thresholds(
-            &sequence2,
+            sequence2,
             &mut hits,
             &mut contig_hits,
             &mut reverse_scratch,
@@ -537,7 +538,7 @@ pub fn scaffold_and_polish_contigs(
             let read_sequence = if is_reverse {
                 reverse_scratch.as_slice()
             } else {
-                sequence2.as_slice()
+                sequence2
             };
             add_to_pileup(&mut pileups[contig_id], start, read_sequence);
         }
@@ -555,7 +556,7 @@ pub fn scaffold_and_polish_contigs(
                 {
                     estimated_insert = median_i32(&insert_sizes);
                 }
-                continue;
+                return Ok(());
             }
 
             if contig1 != contig2 {
@@ -594,7 +595,9 @@ pub fn scaffold_and_polish_contigs(
                 scaffold_stats.reads_processed / 2_000_000
             );
         }
-    }
+        Ok(())
+    })?;
+    let mapping_seconds = phase_start.elapsed().as_secs_f64();
 
     scaffold_stats.links_found = links.len();
     info!("Found {} potential links", links.len());
@@ -611,25 +614,40 @@ pub fn scaffold_and_polish_contigs(
         min_links
     );
 
+    let phase_start = Instant::now();
     write_scaffold_output(
         &contigs,
         &filtered_links,
         scaffold_output_path,
         &mut scaffold_stats,
     )?;
+    let scaffold_write_seconds = phase_start.elapsed().as_secs_f64();
 
     info!("Calling consensus...");
+    let phase_start = Instant::now();
     let corrections = apply_corrections(&mut contigs, &pileups, &mut polish_stats);
+    let consensus_seconds = phase_start.elapsed().as_secs_f64();
     info!("Made {} corrections", corrections);
 
     info!("Writing polished contigs to {}", polish_output_path);
+    let phase_start = Instant::now();
     write_contigs(&contigs, polish_output_path)?;
+    let polish_write_seconds = phase_start.elapsed().as_secs_f64();
     info!(
         "Polishing complete: {} corrections ({} substitutions, {} insertions, {} deletions)",
         polish_stats.corrections,
         polish_stats.substitutions,
         polish_stats.insertions,
         polish_stats.deletions
+    );
+    info!(
+        "Shared scaffold+polish timings (s): index={:.3}, map={:.3}, scaffold_write={:.3}, consensus={:.3}, polish_write={:.3}, total={:.3}",
+        index_seconds,
+        mapping_seconds,
+        scaffold_write_seconds,
+        consensus_seconds,
+        polish_write_seconds,
+        total_start.elapsed().as_secs_f64()
     );
 
     Ok((scaffold_stats, polish_stats))

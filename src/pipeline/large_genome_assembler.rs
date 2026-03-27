@@ -14,15 +14,17 @@
 use crate::eval::metrics::{evaluate_lengths_sorted_desc, BaseComposition};
 use crate::io::fasta::FastaWriter;
 use crate::io::fastq::{
-    stream_fastq_records_checked, stream_paired_fastq_records_checked, try_open_fastq,
+    for_each_fastq_sequence_checked, for_each_paired_fastq_sequence_checked, try_open_fastq,
 };
 use crate::kmer::disk_counting_v2::{
     decode_kmer, extend_left, extend_right, DiskCounterConfig, DiskKmerCounterV2,
 };
 use crate::kmer::kmer::{reverse_complement, KmerU64};
+use crate::pipeline::branch_read_spool::BranchReadSpool;
 use ahash::{AHashMap, AHashSet};
 use rayon::prelude::*;
 use std::cmp::Reverse;
+use std::time::Instant;
 use tracing::info;
 
 /// Configuration for large genome assembly
@@ -83,6 +85,19 @@ impl Default for LargeGenomeConfig {
 }
 
 /// Assembly statistics
+#[derive(Debug, Clone, Default)]
+pub struct AssemblyPhaseTimings {
+    pub distribute_seconds: f64,
+    pub count_seconds: f64,
+    pub error_correction_seconds: f64,
+    pub graph_cleaning_seconds: f64,
+    pub graph_analysis_seconds: f64,
+    pub branch_threading_seconds: f64,
+    pub contig_extraction_seconds: f64,
+    pub write_output_seconds: f64,
+    pub total_seconds: f64,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct AssemblyStats {
     pub reads_processed: u64,
@@ -162,6 +177,7 @@ pub struct AssemblyStats {
     pub bases_ge_100kb_frac: f64,
     pub bases_ge_1mb_frac: f64,
     pub disk_bytes: u64,
+    pub phase_timings: AssemblyPhaseTimings,
 }
 
 impl std::fmt::Display for AssemblyStats {
@@ -300,6 +316,21 @@ impl std::fmt::Display for AssemblyStats {
         )?;
         writeln!(f, "Largest: {} bp", self.largest)?;
         writeln!(f, "Disk used: {:.2} GB", self.disk_bytes as f64 / 1e9)?;
+        if self.phase_timings.total_seconds > 0.0 {
+            writeln!(
+                f,
+                "Phase timings (s): distribute={:.3}, count={:.3}, error_correct={:.3}, graph_clean={:.3}, graph_analyze={:.3}, branch_thread={:.3}, contig_extract={:.3}, write={:.3}, total={:.3}",
+                self.phase_timings.distribute_seconds,
+                self.phase_timings.count_seconds,
+                self.phase_timings.error_correction_seconds,
+                self.phase_timings.graph_cleaning_seconds,
+                self.phase_timings.graph_analysis_seconds,
+                self.phase_timings.branch_threading_seconds,
+                self.phase_timings.contig_extraction_seconds,
+                self.phase_timings.write_output_seconds,
+                self.phase_timings.total_seconds
+            )?;
+        }
         Ok(())
     }
 }
@@ -329,7 +360,7 @@ struct WeightedGraphNode {
     successors: Vec<(u64, u32)>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct WeightedGraphDiagnostics {
     nodes: usize,
     oriented_edges: usize,
@@ -407,6 +438,17 @@ pub struct LargeGenomeBenchErrorCorrectionStats {
     pub remaining_kmers: usize,
 }
 
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LargeGenomeBenchGraphAnalysisStats {
+    pub nodes: usize,
+    pub oriented_edges: usize,
+    pub branching_nodes: usize,
+    pub source_nodes: usize,
+    pub sink_nodes: usize,
+    pub ambiguous_edges: usize,
+}
+
 #[derive(Debug, Default)]
 struct ErrorCorrectionBatch {
     trusted_increments: AHashMap<u64, u32>,
@@ -423,6 +465,7 @@ pub struct LargeGenomeStageBenchFixture {
     adjacency: AHashMap<u64, ([bool; 4], [bool; 4])>,
     branch_edges: AHashSet<(u64, u64)>,
     branch_reads: Vec<Vec<u8>>,
+    branch_read_spool: BranchReadSpool,
     branch_support: AHashMap<(u64, u64), u32>,
     expected_contigs: Vec<String>,
 }
@@ -678,6 +721,8 @@ impl LargeGenomeStageBenchFixture {
             component_count
                 .saturating_mul(primary_reads_per_component + alternate_reads_per_component),
         );
+        let mut branch_read_spool =
+            BranchReadSpool::create(None).expect("create branch read spool");
         let mut expected_contigs = Vec::with_capacity(component_count);
         let primary_weight = primary_reads_per_component.max(1) as u32;
         let alternate_weight = alternate_reads_per_component.max(1) as u32;
@@ -696,10 +741,14 @@ impl LargeGenomeStageBenchFixture {
             add_weighted_sequence_counts(&mut counts, alternate.as_bytes(), k, alternate_weight);
 
             for _ in 0..primary_reads_per_component {
-                branch_reads.push(primary.as_bytes().to_vec());
+                let read = primary.as_bytes().to_vec();
+                branch_read_spool.append(&read).expect("append branch read");
+                branch_reads.push(read);
             }
             for _ in 0..alternate_reads_per_component {
-                branch_reads.push(alternate.as_bytes().to_vec());
+                let read = alternate.as_bytes().to_vec();
+                branch_read_spool.append(&read).expect("append branch read");
+                branch_reads.push(read);
             }
         }
 
@@ -722,6 +771,7 @@ impl LargeGenomeStageBenchFixture {
             adjacency,
             branch_edges,
             branch_reads,
+            branch_read_spool,
             branch_support,
             expected_contigs,
         }
@@ -736,6 +786,53 @@ impl LargeGenomeStageBenchFixture {
             self.k,
         );
         LargeGenomeBenchBranchThreadingStats::from_internal(stats)
+    }
+
+    #[doc(hidden)]
+    pub fn run_branch_threading_from_spool(&self) -> LargeGenomeBenchBranchThreadingStats {
+        let (_, stats) = self
+            .assembler
+            .collect_branch_support_from_spool(
+                &self.branch_read_spool,
+                &self.adjacency,
+                &self.branch_edges,
+                self.k,
+            )
+            .unwrap_or_else(|err| panic!("branch read spool replay failed: {err}"));
+
+        LargeGenomeBenchBranchThreadingStats::from_internal(stats)
+    }
+
+    #[doc(hidden)]
+    pub fn run_weighted_graph_analysis_legacy(&self) -> LargeGenomeBenchGraphAnalysisStats {
+        let graph =
+            self.assembler
+                .build_weighted_unitig_graph(&self.kmer_counts, &self.adjacency, self.k);
+        let diagnostics = self.assembler.analyze_weighted_graph(&graph);
+        let ambiguous_edges = self.assembler.collect_ambiguous_branch_edges(&graph);
+        LargeGenomeBenchGraphAnalysisStats {
+            nodes: diagnostics.nodes,
+            oriented_edges: diagnostics.oriented_edges,
+            branching_nodes: diagnostics.branching_nodes,
+            source_nodes: diagnostics.source_nodes,
+            sink_nodes: diagnostics.sink_nodes,
+            ambiguous_edges: ambiguous_edges.len(),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn run_weighted_graph_analysis_direct(&self) -> LargeGenomeBenchGraphAnalysisStats {
+        let (diagnostics, ambiguous_edges) = self
+            .assembler
+            .scan_graph_diagnostics_and_branch_edges(&self.adjacency, self.k);
+        LargeGenomeBenchGraphAnalysisStats {
+            nodes: diagnostics.nodes,
+            oriented_edges: diagnostics.oriented_edges,
+            branching_nodes: diagnostics.branching_nodes,
+            source_nodes: diagnostics.source_nodes,
+            sink_nodes: diagnostics.sink_nodes,
+            ambiguous_edges: ambiguous_edges.len(),
+        }
     }
 
     #[doc(hidden)]
@@ -844,6 +941,66 @@ impl LargeGenomeErrorCorrectionBenchFixture {
     }
 
     #[doc(hidden)]
+    pub fn synthetic_rejection_heavy(
+        k: usize,
+        trusted_kmer_count: usize,
+        singletons_per_trusted: usize,
+    ) -> Self {
+        let assembler = LargeGenomeAssembler::new(LargeGenomeConfig {
+            k,
+            min_count: 1,
+            min_contig_len: k,
+            ..Default::default()
+        });
+
+        let mut counts = AHashMap::with_capacity(
+            trusted_kmer_count.saturating_mul(singletons_per_trusted.saturating_add(1)),
+        );
+
+        for trusted_idx in 0..trusted_kmer_count {
+            let trusted_seed =
+                (trusted_idx as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xA5A5_5A5A_1234_5678;
+
+            let trusted = loop {
+                let candidate = pseudo_random_dna(trusted_seed ^ counts.len() as u64, k);
+                let encoded = KmerU64::from_str(&candidate).unwrap().canonical().encoded;
+                if let std::collections::hash_map::Entry::Vacant(entry) = counts.entry(encoded) {
+                    entry.insert(16 + (trusted_idx % 11) as u32);
+                    break encoded;
+                }
+            };
+
+            let trusted_template = decode_kmer(trusted, k).into_bytes();
+            let mut generated = 0usize;
+            let mut attempt = 0usize;
+
+            while generated < singletons_per_trusted {
+                let mut singleton = trusted_template.clone();
+                let pos_a = (attempt * 7 + trusted_idx) % k;
+                let pos_b = (pos_a + (k / 2).max(1) + 1) % k;
+                singleton[pos_a] = alternate_dna_base(singleton[pos_a], attempt + generated);
+                singleton[pos_b] = alternate_dna_base(singleton[pos_b], attempt + generated + 1);
+
+                let encoded = KmerU64::from_slice(&singleton).unwrap().canonical().encoded;
+                attempt += 1;
+
+                if encoded == trusted || counts.contains_key(&encoded) {
+                    continue;
+                }
+
+                counts.insert(encoded, 1);
+                generated += 1;
+            }
+        }
+
+        Self {
+            assembler,
+            k,
+            kmer_counts: counts,
+        }
+    }
+
+    #[doc(hidden)]
     pub fn cloned_kmer_counts(&self) -> AHashMap<u64, u32> {
         self.kmer_counts.clone()
     }
@@ -918,6 +1075,7 @@ impl LargeGenomeAssembler {
     pub fn assemble(&self, input_path: &str, output_path: &str) -> std::io::Result<AssemblyStats> {
         let mut stats = AssemblyStats::default();
         let k = self.config.k;
+        let total_start = Instant::now();
 
         info!("=== Large Genome Assembler ===");
         info!("K-mer size: {}", k);
@@ -927,8 +1085,9 @@ impl LargeGenomeAssembler {
         info!("Phase 1/6: Distributing k-mers to disk...");
         let disk_config = self.create_disk_config();
         let mut counter = DiskKmerCounterV2::new(disk_config)?;
-
+        let phase_start = Instant::now();
         let (reads, bases) = self.distribute_from_fastq(input_path, &mut counter)?;
+        stats.phase_timings.distribute_seconds = phase_start.elapsed().as_secs_f64();
         stats.reads_processed = reads;
         stats.bases_processed = bases;
 
@@ -944,12 +1103,16 @@ impl LargeGenomeAssembler {
 
         // Phase 2: Count k-mers
         info!("Phase 2/6: Counting k-mers from buckets...");
+        let phase_start = Instant::now();
         let kmer_counts = counter.count_all()?;
+        stats.phase_timings.count_seconds = phase_start.elapsed().as_secs_f64();
         stats.kmers_unique = kmer_counts.len() as u64;
 
         // Phase 3: Error correction - rescue low-count k-mers that are 1 edit from high-count
         info!("Phase 3/6: Error correction...");
+        let phase_start = Instant::now();
         let (corrected_counts, num_corrected) = self.error_correct_kmers(kmer_counts, k);
+        stats.phase_timings.error_correction_seconds = phase_start.elapsed().as_secs_f64();
         stats.kmers_error_corrected = num_corrected;
         info!("Error-corrected {} k-mers", num_corrected);
 
@@ -974,6 +1137,7 @@ impl LargeGenomeAssembler {
 
         // Phase 4: Build graph and clean it
         info!("Phase 4/6: Building and cleaning de Bruijn graph...");
+        let phase_start = Instant::now();
         let valid_kmers: AHashSet<u64> = filtered.keys().copied().collect();
         let mut adjacency = self.build_adjacency(&valid_kmers, k);
         info!("  Adjacency built for {} k-mers", adjacency.len());
@@ -986,9 +1150,12 @@ impl LargeGenomeAssembler {
         let bubbles_popped = self.pop_bubbles(&mut adjacency, &filtered, k);
         stats.bubbles_popped = bubbles_popped;
         info!("  Popped {} bubbles", bubbles_popped);
+        stats.phase_timings.graph_cleaning_seconds = phase_start.elapsed().as_secs_f64();
 
-        let weighted_graph = self.build_weighted_unitig_graph(&filtered, &adjacency, k);
-        let graph_diagnostics = self.analyze_weighted_graph(&weighted_graph);
+        let phase_start = Instant::now();
+        let (graph_diagnostics, ambiguous_edges) =
+            self.scan_graph_diagnostics_and_branch_edges(&adjacency, k);
+        stats.phase_timings.graph_analysis_seconds = phase_start.elapsed().as_secs_f64();
         info!(
             "  Weighted graph: {} nodes, {} oriented edges, {} branching, {} sources, {} sinks",
             graph_diagnostics.nodes,
@@ -997,9 +1164,10 @@ impl LargeGenomeAssembler {
             graph_diagnostics.source_nodes,
             graph_diagnostics.sink_nodes
         );
-        let ambiguous_edges = self.collect_ambiguous_branch_edges(&weighted_graph);
+        let phase_start = Instant::now();
         let (branch_support, threading_stats) =
             self.collect_branch_support_from_fastq(input_path, &adjacency, &ambiguous_edges, k)?;
+        stats.phase_timings.branch_threading_seconds = phase_start.elapsed().as_secs_f64();
         Self::apply_read_threading_stats(&mut stats, &threading_stats);
         info!(
             "  Read threading: {} ambiguous edges, {} supported, {} observations",
@@ -1010,12 +1178,17 @@ impl LargeGenomeAssembler {
 
         // Phase 5: Build contigs from cleaned graph
         info!("Phase 5/6: Building contigs from cleaned graph...");
+        let phase_start = Instant::now();
         let contigs = self.build_contigs_from_graph(&filtered, &adjacency, &branch_support, k);
+        stats.phase_timings.contig_extraction_seconds = phase_start.elapsed().as_secs_f64();
         info!("Assembled {} raw contigs", contigs.len());
 
         // Phase 6: Write output
         info!("Phase 6/6: Writing output...");
+        let phase_start = Instant::now();
         self.write_output(&contigs, output_path, &mut stats)?;
+        stats.phase_timings.write_output_seconds = phase_start.elapsed().as_secs_f64();
+        stats.phase_timings.total_seconds = total_start.elapsed().as_secs_f64();
 
         // Cleanup
         counter.cleanup()?;
@@ -1033,6 +1206,7 @@ impl LargeGenomeAssembler {
     ) -> std::io::Result<AssemblyStats> {
         let mut stats = AssemblyStats::default();
         let k = self.config.k;
+        let total_start = Instant::now();
 
         info!("=== Large Genome Assembler (Paired-End Mode) ===");
         info!("K-mer size: {}", k);
@@ -1044,9 +1218,10 @@ impl LargeGenomeAssembler {
         info!("Phase 1/6: Distributing k-mers to disk...");
         let disk_config = self.create_disk_config();
         let mut counter = DiskKmerCounterV2::new(disk_config)?;
-
+        let phase_start = Instant::now();
         let (reads, bases, insert_stats) =
             self.distribute_from_paired_fastq(input1_path, input2_path, &mut counter)?;
+        stats.phase_timings.distribute_seconds = phase_start.elapsed().as_secs_f64();
         stats.reads_processed = reads;
         stats.bases_processed = bases;
 
@@ -1067,11 +1242,15 @@ impl LargeGenomeAssembler {
 
         // Phases 2-6 are the same as single-end
         info!("Phase 2/6: Counting k-mers from buckets...");
+        let phase_start = Instant::now();
         let kmer_counts = counter.count_all()?;
+        stats.phase_timings.count_seconds = phase_start.elapsed().as_secs_f64();
         stats.kmers_unique = kmer_counts.len() as u64;
 
         info!("Phase 3/6: Error correction...");
+        let phase_start = Instant::now();
         let (corrected_counts, num_corrected) = self.error_correct_kmers(kmer_counts, k);
+        stats.phase_timings.error_correction_seconds = phase_start.elapsed().as_secs_f64();
         stats.kmers_error_corrected = num_corrected;
         info!("Error-corrected {} k-mers", num_corrected);
 
@@ -1095,6 +1274,7 @@ impl LargeGenomeAssembler {
         );
 
         info!("Phase 4/6: Building and cleaning de Bruijn graph...");
+        let phase_start = Instant::now();
         let valid_kmers: AHashSet<u64> = filtered.keys().copied().collect();
         let mut adjacency = self.build_adjacency(&valid_kmers, k);
         info!("  Adjacency built for {} k-mers", adjacency.len());
@@ -1106,9 +1286,12 @@ impl LargeGenomeAssembler {
         let bubbles_popped = self.pop_bubbles(&mut adjacency, &filtered, k);
         stats.bubbles_popped = bubbles_popped;
         info!("  Popped {} bubbles", bubbles_popped);
+        stats.phase_timings.graph_cleaning_seconds = phase_start.elapsed().as_secs_f64();
 
-        let weighted_graph = self.build_weighted_unitig_graph(&filtered, &adjacency, k);
-        let graph_diagnostics = self.analyze_weighted_graph(&weighted_graph);
+        let phase_start = Instant::now();
+        let (graph_diagnostics, ambiguous_edges) =
+            self.scan_graph_diagnostics_and_branch_edges(&adjacency, k);
+        stats.phase_timings.graph_analysis_seconds = phase_start.elapsed().as_secs_f64();
         info!(
             "  Weighted graph: {} nodes, {} oriented edges, {} branching, {} sources, {} sinks",
             graph_diagnostics.nodes,
@@ -1117,7 +1300,7 @@ impl LargeGenomeAssembler {
             graph_diagnostics.source_nodes,
             graph_diagnostics.sink_nodes
         );
-        let ambiguous_edges = self.collect_ambiguous_branch_edges(&weighted_graph);
+        let phase_start = Instant::now();
         let (branch_support, threading_stats) = self.collect_branch_support_from_paired_fastq(
             input1_path,
             input2_path,
@@ -1125,6 +1308,7 @@ impl LargeGenomeAssembler {
             &ambiguous_edges,
             k,
         )?;
+        stats.phase_timings.branch_threading_seconds = phase_start.elapsed().as_secs_f64();
         Self::apply_read_threading_stats(&mut stats, &threading_stats);
         info!(
             "  Read threading: {} ambiguous edges, {} supported, {} observations",
@@ -1134,11 +1318,16 @@ impl LargeGenomeAssembler {
         );
 
         info!("Phase 5/6: Building contigs from cleaned graph...");
+        let phase_start = Instant::now();
         let contigs = self.build_contigs_from_graph(&filtered, &adjacency, &branch_support, k);
+        stats.phase_timings.contig_extraction_seconds = phase_start.elapsed().as_secs_f64();
         info!("Assembled {} raw contigs", contigs.len());
 
         info!("Phase 6/6: Writing output...");
+        let phase_start = Instant::now();
         self.write_output(&contigs, output_path, &mut stats)?;
+        stats.phase_timings.write_output_seconds = phase_start.elapsed().as_secs_f64();
+        stats.phase_timings.total_seconds = total_start.elapsed().as_secs_f64();
 
         counter.cleanup()?;
 
@@ -1182,26 +1371,28 @@ impl LargeGenomeAssembler {
 
         // Process in batches for efficiency
         const BATCH_SIZE: usize = 50_000;
-        let mut batch: Vec<String> = Vec::with_capacity(BATCH_SIZE);
+        let mut batch = Vec::with_capacity(BATCH_SIZE);
 
-        for record in stream_fastq_records_checked(reader) {
-            let record = record?;
+        for_each_fastq_sequence_checked(reader, |sequence| {
             reads += 1;
-            bases += record.sequence.len() as u64;
-            batch.push(record.sequence);
+            bases += sequence.len() as u64;
+            batch.push(sequence.to_vec());
 
             if batch.len() >= BATCH_SIZE {
-                counter.distribute(batch.drain(..).map(|s| s.into_bytes()))?;
+                counter.distribute(batch.iter())?;
+                batch.clear();
 
                 if reads % 5_000_000 == 0 {
                     info!("  {} million reads processed...", reads / 1_000_000);
                 }
             }
-        }
+
+            Ok(())
+        })?;
 
         // Remaining batch
         if !batch.is_empty() {
-            counter.distribute(batch.drain(..).map(|s| s.into_bytes()))?;
+            counter.distribute(batch.iter())?;
         }
 
         Ok((reads, bases))
@@ -1222,34 +1413,36 @@ impl LargeGenomeAssembler {
 
         const BATCH_SIZE: usize = 50_000;
         const INSERT_SAMPLE_SIZE: usize = 100_000;
-        let mut batch: Vec<String> = Vec::with_capacity(BATCH_SIZE * 2);
+        let mut batch = Vec::with_capacity(BATCH_SIZE * 2);
 
-        for pair in stream_paired_fastq_records_checked(reader1, reader2) {
-            let (r1, r2) = pair?;
+        for_each_paired_fastq_sequence_checked(reader1, reader2, |r1, r2| {
             reads += 2;
-            bases += (r1.sequence.len() + r2.sequence.len()) as u64;
+            bases += (r1.len() + r2.len()) as u64;
 
             // Sample insert sizes from read lengths (actual insert size estimation
             // would require mapping, but we estimate from read lengths for now)
             if insert_sizes.len() < INSERT_SAMPLE_SIZE {
-                insert_sizes.push(r1.sequence.len() + r2.sequence.len());
+                insert_sizes.push(r1.len() + r2.len());
             }
 
-            batch.push(r1.sequence);
-            batch.push(r2.sequence);
+            batch.push(r1.to_vec());
+            batch.push(r2.to_vec());
 
             if batch.len() >= BATCH_SIZE * 2 {
-                counter.distribute(batch.drain(..).map(|s| s.into_bytes()))?;
+                counter.distribute(batch.iter())?;
+                batch.clear();
 
                 if reads % 10_000_000 == 0 {
                     info!("  {} million read pairs processed...", reads / 2_000_000);
                 }
             }
-        }
+
+            Ok(())
+        })?;
 
         // Remaining batch
         if !batch.is_empty() {
-            counter.distribute(batch.drain(..).map(|s| s.into_bytes()))?;
+            counter.distribute(batch.iter())?;
         }
 
         // Calculate insert size statistics
@@ -1401,9 +1594,13 @@ impl LargeGenomeAssembler {
             }
 
             for singleton in batch.singleton_removals {
-                kmer_counts.remove(&singleton);
+                if let Some(count) = kmer_counts.get_mut(&singleton) {
+                    *count = 0;
+                }
             }
         }
+
+        kmer_counts.retain(|_, count| *count != 0);
 
         (kmer_counts, num_corrected)
     }
@@ -1443,36 +1640,43 @@ impl LargeGenomeAssembler {
         batch
     }
 
-    /// Find a high-confidence k-mer within Hamming distance 1
+    /// Find a high-confidence k-mer within Hamming distance 1.
+    ///
+    /// The input k-mer is already canonical, but each single-base variant may
+    /// canonicalize to either orientation. We derive the reverse-complement
+    /// variant directly from the original reverse complement so each probe is
+    /// O(1) instead of recomputing a full reverse complement for every
+    /// candidate mutation.
+    #[inline]
     fn find_trusted_neighbor(
         &self,
         encoded: u64,
         k: usize,
         trusted_counts: &AHashMap<u64, u32>,
     ) -> Option<u64> {
-        let bases: [u64; 4] = [0, 1, 2, 3]; // A, C, G, T in 2-bit encoding
         let mut best: Option<(u32, u64)> = None;
+        let reverse_complement = KmerU64 {
+            encoded,
+            len: k as u8,
+        }
+        .reverse_complement()
+        .encoded;
 
-        // Try substituting each position with each alternative base
         for pos in 0..k {
-            let shift = (k - 1 - pos) * 2;
-            let current_base = (encoded >> shift) & 0b11;
+            let forward_shift = (k - 1 - pos) * 2;
+            let reverse_shift = pos * 2;
+            let current_base = (encoded >> forward_shift) & 0b11;
+            let forward_cleared = encoded & !(0b11u64 << forward_shift);
+            let reverse_cleared = reverse_complement & !(0b11u64 << reverse_shift);
 
-            for &new_base in &bases {
+            for new_base in 0..4u64 {
                 if new_base == current_base {
                     continue;
                 }
 
-                // Create variant by substituting base at position
-                let mask = !(0b11u64 << shift);
-                let variant = (encoded & mask) | (new_base << shift);
-
-                // Check canonical form
-                let variant_kmer = KmerU64 {
-                    encoded: variant,
-                    len: k as u8,
-                };
-                let canonical = variant_kmer.canonical().encoded;
+                let variant = forward_cleared | (new_base << forward_shift);
+                let reverse_variant = reverse_cleared | ((new_base ^ 0b11) << reverse_shift);
+                let canonical = variant.min(reverse_variant);
 
                 if let Some(&count) = trusted_counts.get(&canonical) {
                     match best {
@@ -2464,6 +2668,110 @@ impl LargeGenomeAssembler {
         edges
     }
 
+    fn scan_graph_diagnostics_and_branch_edges(
+        &self,
+        adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+        k: usize,
+    ) -> (WeightedGraphDiagnostics, AHashSet<(u64, u64)>) {
+        let mut diagnostics = WeightedGraphDiagnostics {
+            nodes: adjacency.len(),
+            ..Default::default()
+        };
+        let mut edges = AHashSet::new();
+        let mut predecessors = [0u64; 4];
+        let mut successors = [0u64; 4];
+
+        for (&node, &(left, right)) in adjacency {
+            let predecessor_count = Self::collect_unique_oriented_neighbors(
+                node,
+                &left,
+                adjacency,
+                k,
+                true,
+                &mut predecessors,
+            );
+            let successor_count = Self::collect_unique_oriented_neighbors(
+                node,
+                &right,
+                adjacency,
+                k,
+                false,
+                &mut successors,
+            );
+
+            diagnostics.oriented_edges += successor_count;
+            if predecessor_count > 1 || successor_count > 1 {
+                diagnostics.branching_nodes += 1;
+            }
+            if predecessor_count == 0 && successor_count > 0 {
+                diagnostics.source_nodes += 1;
+            }
+            if successor_count == 0 && predecessor_count > 0 {
+                diagnostics.sink_nodes += 1;
+            }
+
+            if successor_count > 1 {
+                for &next in &successors[..successor_count] {
+                    edges.insert(Self::canonical_edge_key(node, next, k));
+                }
+            }
+            if predecessor_count > 1 {
+                for &prev in &predecessors[..predecessor_count] {
+                    edges.insert(Self::canonical_edge_key(prev, node, k));
+                }
+            }
+        }
+
+        (diagnostics, edges)
+    }
+
+    fn collect_unique_oriented_neighbors(
+        node: u64,
+        extensions: &[bool; 4],
+        adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+        k: usize,
+        going_left: bool,
+        output: &mut [u64; 4],
+    ) -> usize {
+        const BASES: [u8; 4] = [b'A', b'C', b'G', b'T'];
+        let mut len = 0usize;
+
+        for (base_idx, &valid) in extensions.iter().enumerate() {
+            if !valid {
+                continue;
+            }
+
+            let candidate = if going_left {
+                extend_left(node, BASES[base_idx], k)
+            } else {
+                extend_right(node, BASES[base_idx], k)
+            };
+            let Some(candidate) = candidate else {
+                continue;
+            };
+
+            let resolved = if adjacency.contains_key(&candidate) {
+                candidate
+            } else {
+                let canonical = Self::canonical_encoded(candidate, k);
+                if adjacency.contains_key(&canonical) {
+                    canonical
+                } else {
+                    continue;
+                }
+            };
+
+            if output[..len].contains(&resolved) {
+                continue;
+            }
+
+            output[len] = resolved;
+            len += 1;
+        }
+
+        len
+    }
+
     fn collect_branch_support_from_fastq(
         &self,
         path: &str,
@@ -2484,9 +2792,8 @@ impl LargeGenomeAssembler {
         let branch_edge_lookup = OrientedBranchEdgeLookup::new(branch_edges, k);
         let reader = try_open_fastq(path)?;
         let mut batch = Vec::with_capacity(Self::THREADING_BATCH_SIZE);
-        for record in stream_fastq_records_checked(reader) {
-            let record = record?;
-            batch.push(record.sequence.into_bytes());
+        for_each_fastq_sequence_checked(reader, |sequence| {
+            batch.push(sequence.to_vec());
             if batch.len() >= Self::THREADING_BATCH_SIZE {
                 stats.edge_observations += Self::accumulate_branch_support_batch(
                     &batch,
@@ -2497,7 +2804,56 @@ impl LargeGenomeAssembler {
                 );
                 batch.clear();
             }
+            Ok(())
+        })?;
+
+        if !batch.is_empty() {
+            stats.edge_observations += Self::accumulate_branch_support_batch(
+                &batch,
+                k,
+                adjacency,
+                &branch_edge_lookup,
+                &mut edge_support,
+            );
         }
+
+        stats.supported_edges = edge_support.len();
+        Ok((edge_support, stats))
+    }
+
+    fn collect_branch_support_from_spool(
+        &self,
+        spool: &BranchReadSpool,
+        adjacency: &AHashMap<u64, ([bool; 4], [bool; 4])>,
+        branch_edges: &AHashSet<(u64, u64)>,
+        k: usize,
+    ) -> std::io::Result<(AHashMap<(u64, u64), u32>, ReadThreadingStats)> {
+        let mut edge_support = AHashMap::with_capacity(branch_edges.len());
+        let mut stats = ReadThreadingStats {
+            ambiguous_edges: branch_edges.len(),
+            ..Default::default()
+        };
+
+        if branch_edges.is_empty() {
+            return Ok((edge_support, stats));
+        }
+
+        let branch_edge_lookup = OrientedBranchEdgeLookup::new(branch_edges, k);
+        let mut batch = Vec::with_capacity(Self::THREADING_BATCH_SIZE);
+        spool.replay_sequences(|sequence| {
+            batch.push(sequence.to_vec());
+            if batch.len() >= Self::THREADING_BATCH_SIZE {
+                stats.edge_observations += Self::accumulate_branch_support_batch(
+                    &batch,
+                    k,
+                    adjacency,
+                    &branch_edge_lookup,
+                    &mut edge_support,
+                );
+                batch.clear();
+            }
+            Ok(())
+        })?;
 
         if !batch.is_empty() {
             stats.edge_observations += Self::accumulate_branch_support_batch(
@@ -2535,9 +2891,8 @@ impl LargeGenomeAssembler {
         let reader1 = try_open_fastq(path1)?;
         let reader2 = try_open_fastq(path2)?;
         let mut batch = Vec::with_capacity(Self::THREADING_BATCH_SIZE);
-        for pair in stream_paired_fastq_records_checked(reader1, reader2) {
-            let (r1, r2) = pair?;
-            batch.push(r1.sequence.into_bytes());
+        for_each_paired_fastq_sequence_checked(reader1, reader2, |r1, r2| {
+            batch.push(r1.to_vec());
             if batch.len() >= Self::THREADING_BATCH_SIZE {
                 stats.edge_observations += Self::accumulate_branch_support_batch(
                     &batch,
@@ -2549,7 +2904,7 @@ impl LargeGenomeAssembler {
                 batch.clear();
             }
 
-            batch.push(r2.sequence.into_bytes());
+            batch.push(r2.to_vec());
             if batch.len() >= Self::THREADING_BATCH_SIZE {
                 stats.edge_observations += Self::accumulate_branch_support_batch(
                     &batch,
@@ -2560,7 +2915,9 @@ impl LargeGenomeAssembler {
                 );
                 batch.clear();
             }
-        }
+
+            Ok(())
+        })?;
 
         if !batch.is_empty() {
             stats.edge_observations += Self::accumulate_branch_support_batch(
@@ -4478,6 +4835,29 @@ mod tests {
     }
 
     #[test]
+    fn test_assembly_stats_display_includes_phase_timings() {
+        let stats = AssemblyStats {
+            phase_timings: AssemblyPhaseTimings {
+                distribute_seconds: 1.0,
+                count_seconds: 2.0,
+                error_correction_seconds: 3.0,
+                graph_cleaning_seconds: 4.0,
+                graph_analysis_seconds: 5.0,
+                branch_threading_seconds: 6.0,
+                contig_extraction_seconds: 7.0,
+                write_output_seconds: 8.0,
+                total_seconds: 36.0,
+            },
+            ..AssemblyStats::default()
+        };
+
+        let rendered = stats.to_string();
+        assert!(rendered.contains(
+            "Phase timings (s): distribute=1.000, count=2.000, error_correct=3.000, graph_clean=4.000, graph_analyze=5.000, branch_thread=6.000, contig_extract=7.000, write=8.000, total=36.000"
+        ));
+    }
+
+    #[test]
     fn test_write_output_reports_base_composition_metrics() {
         let output = NamedTempFile::new().unwrap();
         let temp_dir = TempDir::new().unwrap();
@@ -4982,6 +5362,14 @@ mod tests {
         assert!(diagnostics.oriented_edges >= counts.len().saturating_sub(1));
         assert_eq!(contigs.len(), 1);
         assert!(contigs[0] == sequence || contigs[0] == reverse);
+    }
+
+    #[test]
+    fn test_direct_graph_scan_matches_weighted_graph_reference() {
+        let fixture = LargeGenomeStageBenchFixture::synthetic_branching(11, 16, 6, 2);
+        let legacy = fixture.run_weighted_graph_analysis_legacy();
+        let direct = fixture.run_weighted_graph_analysis_direct();
+        assert_eq!(direct, legacy);
     }
 
     #[test]
@@ -5821,6 +6209,15 @@ mod tests {
         assert_eq!(stats.ambiguous_edges, fixture.branch_edge_count());
         assert!(stats.supported_edges > 0);
         assert!(stats.edge_observations > 0);
+    }
+
+    #[test]
+    fn test_stage_bench_fixture_spool_replay_matches_reread_branch_threading() {
+        let fixture = LargeGenomeStageBenchFixture::synthetic_branching(11, 8, 5, 2);
+        let reread = fixture.run_branch_threading();
+        let spool = fixture.run_branch_threading_from_spool();
+
+        assert_eq!(reread, spool);
     }
 
     #[test]

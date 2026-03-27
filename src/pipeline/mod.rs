@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 pub mod assemble;
+pub mod branch_read_spool;
 pub mod isoform_processor;
 pub mod large_genome_assembler;
 pub mod long_read_integration;
