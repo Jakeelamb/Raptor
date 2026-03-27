@@ -707,3 +707,136 @@ dataset gate.
 Reference run:
 
 - `artifacts/autoresearch_raptor/campaign_runs/20260326/mapper_config_k9_w4_mp5_ms4_20260326/summary.json`
+
+## Error-Correction Trusted-Kmer Filter (2026-03-27)
+
+On 2026-03-27 US/Pacific, the next core-assembly hotspot after the mapper
+promotion was singleton rescue inside `error_correct`. The production path was
+still spending about `7.5s` in `find_trusted_neighbor()` on a fresh real-data
+rerun, and the dominant cost was repeated negative `trusted_counts.get()`
+lookups.
+
+### Kept code changes
+
+- added a compact `TrustedKmerFilter` Bloom-style prefilter in
+  `large_genome_assembler.rs`
+- built the filter once from `trusted_counts`
+- inserted `maybe_contains()` ahead of the `trusted_counts.get()` probe in
+  `find_trusted_neighbor()`
+
+### Synthetic stage-bench outcome
+
+The stage bench split cleanly by workload shape.
+
+Rescue-heavy synthetic cases regressed:
+
+| Fixture | Before | After | Change |
+|---------|--------|-------|--------|
+| 4,096 trusted kmers | 3.431 ms | 3.730 ms | slower |
+| 16,384 trusted kmers | 7.069 ms | 8.733 ms | slower |
+| 65,536 trusted kmers | 16.487 ms | 18.214 ms | slower |
+
+Rejection-heavy synthetic cases improved sharply:
+
+| Fixture | Before | After | Improvement |
+|---------|--------|-------|-------------|
+| 4,096 trusted kmers | 4.071 ms | 3.097 ms | 1.31x faster |
+| 16,384 trusted kmers | 26.347 ms | 7.062 ms | 3.73x faster |
+| 65,536 trusted kmers | 161.349 ms | 12.757 ms | 12.65x faster |
+
+This is exactly why the real-data gate matters: the synthetic rescue-heavy
+fixture alone would have caused a false reject.
+
+### Real `quick_test`
+
+Fresh rerun before the filter on 2026-03-27:
+
+| Run | Core `assemble-large` | End-to-end wall-clock |
+|-----|-----------------------|-----------------------|
+| 2026-03-27 post-push baseline | 19.442 s | 26.69 s |
+
+With the trusted-kmer filter enabled:
+
+| Run | Core `assemble-large` | End-to-end wall-clock |
+|-----|-----------------------|-----------------------|
+| 2026-03-27 filter run 1 | 14.819 s | 22.23 s |
+| 2026-03-27 filter run 2 | 14.760 s | 22.18 s |
+
+Key core phases:
+
+| Phase | 2026-03-27 baseline | Filter run 1 | Filter run 2 |
+|------|----------------------|--------------|--------------|
+| error_correct | 7.475 s | 3.969 s | 3.924 s |
+| branch_thread | 4.049 s | 3.478 s | 3.310 s |
+| total | 19.442 s | 14.819 s | 14.760 s |
+
+Observed assembly output stayed stable:
+
+- 22 raw contigs
+- 1,817,070 assembled bases
+- N50 120,054 bp
+- 19 scaffolds with scaffold N50 360,080 bp
+- 520 polishing corrections
+
+Reference runs:
+
+- `artifacts/autoresearch_raptor/campaign_runs/post_push_20260327/summary.json`
+- `artifacts/autoresearch_raptor/campaign_runs/trusted_filter_20260327/summary.json`
+- `artifacts/autoresearch_raptor/campaign_runs/trusted_filter_repeat_20260327/summary.json`
+
+## Branch-Threading Batch Parallelism Recovery (2026-03-27)
+
+After the trusted-kmer filter landed, `branch_thread` became the next obvious
+core hot phase. The code was already using Rayon, but the ingest path flushed
+read batches at `512` sequences and the parallel path also chunked by `512`,
+which usually left Rayon with only one chunk to process.
+
+### Kept code changes
+
+- split branch-thread batching into:
+  - `THREADING_INPUT_BATCH_SIZE = 8192`
+  - `THREADING_PAR_CHUNK_SIZE = 512`
+- kept the same branch-threading semantics and per-read logic
+- only changed how much work gets handed to Rayon at once
+
+### Stage-bench outcome
+
+The larger synthetic branch cases improved the most:
+
+| Fixture | Before | After | Improvement |
+|---------|--------|-------|-------------|
+| reread / 32 components | 96.93 us | 94.94 us | flat |
+| reread / 128 components | 355.80 us | 353.63 us | flat |
+| reread / 512 components | 2.450 ms | 1.387 ms | 1.77x faster |
+
+### Real `quick_test`
+
+On top of the trusted-kmer filter, the batch split produced:
+
+| Run | Core `assemble-large` | End-to-end wall-clock |
+|-----|-----------------------|-----------------------|
+| 2026-03-27 filter-only repeat | 14.760 s | 22.18 s |
+| 2026-03-27 filter + threading batch run 1 | 12.271 s | 20.01 s |
+| 2026-03-27 filter + threading batch run 2 | 12.728 s | 20.34 s |
+
+Key core phases:
+
+| Phase | Filter-only repeat | Filter + batch run 1 | Filter + batch run 2 |
+|------|--------------------|----------------------|----------------------|
+| branch_thread | 3.310 s | 1.155 s | 1.180 s |
+| error_correct | 3.924 s | 3.916 s | 3.985 s |
+| total | 14.760 s | 12.271 s | 12.728 s |
+
+Observed assembly output stayed stable:
+
+- 22 raw contigs
+- 1,817,070 assembled bases
+- N50 120,054 bp
+- 19 scaffolds with scaffold N50 360,080 bp
+- 520 polishing corrections
+
+Reference runs:
+
+- `artifacts/autoresearch_raptor/campaign_runs/trusted_filter_repeat_20260327/summary.json`
+- `artifacts/autoresearch_raptor/campaign_runs/trusted_filter_thread_batch_20260327/summary.json`
+- `artifacts/autoresearch_raptor/campaign_runs/trusted_filter_thread_batch_repeat_20260327/summary.json`

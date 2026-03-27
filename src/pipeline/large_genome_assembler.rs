@@ -456,6 +456,72 @@ struct ErrorCorrectionBatch {
     corrected: u64,
 }
 
+#[derive(Debug, Clone)]
+struct TrustedKmerFilter {
+    words: Vec<u64>,
+    bit_mask: u64,
+}
+
+impl TrustedKmerFilter {
+    const BITS_PER_ENTRY: usize = 16;
+    const HASH_COUNT: u64 = 3;
+
+    fn from_trusted_counts(trusted_counts: &AHashMap<u64, u32>) -> Self {
+        let word_count = trusted_counts
+            .len()
+            .saturating_mul(Self::BITS_PER_ENTRY)
+            .div_ceil(64)
+            .max(1)
+            .next_power_of_two();
+        let mut filter = Self {
+            words: vec![0; word_count],
+            bit_mask: (word_count as u64).saturating_mul(64).saturating_sub(1),
+        };
+
+        for &kmer in trusted_counts.keys() {
+            filter.insert(kmer);
+        }
+
+        filter
+    }
+
+    #[inline]
+    fn maybe_contains(&self, kmer: u64) -> bool {
+        let (base, stride) = Self::hash_pair(kmer);
+        for idx in 0..Self::HASH_COUNT {
+            let bit = base.wrapping_add(stride.wrapping_mul(idx)) & self.bit_mask;
+            if (self.words[(bit >> 6) as usize] & (1u64 << (bit & 63))) == 0 {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[inline]
+    fn insert(&mut self, kmer: u64) {
+        let (base, stride) = Self::hash_pair(kmer);
+        for idx in 0..Self::HASH_COUNT {
+            let bit = base.wrapping_add(stride.wrapping_mul(idx)) & self.bit_mask;
+            self.words[(bit >> 6) as usize] |= 1u64 << (bit & 63);
+        }
+    }
+
+    #[inline]
+    fn hash_pair(kmer: u64) -> (u64, u64) {
+        let base = Self::mix(kmer);
+        let stride = Self::mix(kmer ^ 0x9E37_79B9_7F4A_7C15) | 1;
+        (base, stride)
+    }
+
+    #[inline]
+    fn mix(mut value: u64) -> u64 {
+        value = value.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        value ^ (value >> 31)
+    }
+}
+
 #[doc(hidden)]
 pub struct LargeGenomeStageBenchFixture {
     assembler: LargeGenomeAssembler,
@@ -1036,7 +1102,8 @@ pub struct LargeGenomeAssembler {
 }
 
 impl LargeGenomeAssembler {
-    const THREADING_BATCH_SIZE: usize = 512;
+    const THREADING_INPUT_BATCH_SIZE: usize = 8_192;
+    const THREADING_PAR_CHUNK_SIZE: usize = 512;
     const PARALLEL_THREADING_MIN_BATCH: usize = 256;
     const ERROR_CORRECTION_BATCH_SIZE: usize = 4_096;
     const PARALLEL_ERROR_CORRECTION_MIN_BATCH: usize = 8_192;
@@ -1572,16 +1639,25 @@ impl LargeGenomeAssembler {
         if trusted_counts.is_empty() || singleton_kmers.is_empty() {
             return (kmer_counts, 0);
         }
+        let trusted_filter = TrustedKmerFilter::from_trusted_counts(&trusted_counts);
 
-        let correction_batches =
-            if singleton_kmers.len() >= Self::PARALLEL_ERROR_CORRECTION_MIN_BATCH {
-                singleton_kmers
-                    .par_chunks(Self::ERROR_CORRECTION_BATCH_SIZE)
-                    .map(|chunk| self.collect_error_correction_batch(chunk, k, &trusted_counts))
-                    .collect::<Vec<_>>()
-            } else {
-                vec![self.collect_error_correction_batch(&singleton_kmers, k, &trusted_counts)]
-            };
+        let correction_batches = if singleton_kmers.len()
+            >= Self::PARALLEL_ERROR_CORRECTION_MIN_BATCH
+        {
+            singleton_kmers
+                .par_chunks(Self::ERROR_CORRECTION_BATCH_SIZE)
+                .map(|chunk| {
+                    self.collect_error_correction_batch(chunk, k, &trusted_counts, &trusted_filter)
+                })
+                .collect::<Vec<_>>()
+        } else {
+            vec![self.collect_error_correction_batch(
+                &singleton_kmers,
+                k,
+                &trusted_counts,
+                &trusted_filter,
+            )]
+        };
 
         let mut num_corrected = 0u64;
         for batch in correction_batches {
@@ -1617,6 +1693,7 @@ impl LargeGenomeAssembler {
         singleton_kmers: &[u64],
         k: usize,
         trusted_counts: &AHashMap<u64, u32>,
+        trusted_filter: &TrustedKmerFilter,
     ) -> ErrorCorrectionBatch {
         let mut batch = ErrorCorrectionBatch {
             trusted_increments: AHashMap::with_capacity(singleton_kmers.len()),
@@ -1625,7 +1702,8 @@ impl LargeGenomeAssembler {
         };
 
         for &singleton in singleton_kmers {
-            if let Some(trusted_neighbor) = self.find_trusted_neighbor(singleton, k, trusted_counts)
+            if let Some(trusted_neighbor) =
+                self.find_trusted_neighbor(singleton, k, trusted_counts, trusted_filter)
             {
                 let entry = batch
                     .trusted_increments
@@ -1653,6 +1731,7 @@ impl LargeGenomeAssembler {
         encoded: u64,
         k: usize,
         trusted_counts: &AHashMap<u64, u32>,
+        trusted_filter: &TrustedKmerFilter,
     ) -> Option<u64> {
         let mut best: Option<(u32, u64)> = None;
         let reverse_complement = KmerU64 {
@@ -1677,6 +1756,10 @@ impl LargeGenomeAssembler {
                 let variant = forward_cleared | (new_base << forward_shift);
                 let reverse_variant = reverse_cleared | ((new_base ^ 0b11) << reverse_shift);
                 let canonical = variant.min(reverse_variant);
+
+                if !trusted_filter.maybe_contains(canonical) {
+                    continue;
+                }
 
                 if let Some(&count) = trusted_counts.get(&canonical) {
                     match best {
@@ -2791,10 +2874,10 @@ impl LargeGenomeAssembler {
 
         let branch_edge_lookup = OrientedBranchEdgeLookup::new(branch_edges, k);
         let reader = try_open_fastq(path)?;
-        let mut batch = Vec::with_capacity(Self::THREADING_BATCH_SIZE);
+        let mut batch = Vec::with_capacity(Self::THREADING_INPUT_BATCH_SIZE);
         for_each_fastq_sequence_checked(reader, |sequence| {
             batch.push(sequence.to_vec());
-            if batch.len() >= Self::THREADING_BATCH_SIZE {
+            if batch.len() >= Self::THREADING_INPUT_BATCH_SIZE {
                 stats.edge_observations += Self::accumulate_branch_support_batch(
                     &batch,
                     k,
@@ -2839,10 +2922,10 @@ impl LargeGenomeAssembler {
         }
 
         let branch_edge_lookup = OrientedBranchEdgeLookup::new(branch_edges, k);
-        let mut batch = Vec::with_capacity(Self::THREADING_BATCH_SIZE);
+        let mut batch = Vec::with_capacity(Self::THREADING_INPUT_BATCH_SIZE);
         spool.replay_sequences(|sequence| {
             batch.push(sequence.to_vec());
-            if batch.len() >= Self::THREADING_BATCH_SIZE {
+            if batch.len() >= Self::THREADING_INPUT_BATCH_SIZE {
                 stats.edge_observations += Self::accumulate_branch_support_batch(
                     &batch,
                     k,
@@ -2890,10 +2973,10 @@ impl LargeGenomeAssembler {
         let branch_edge_lookup = OrientedBranchEdgeLookup::new(branch_edges, k);
         let reader1 = try_open_fastq(path1)?;
         let reader2 = try_open_fastq(path2)?;
-        let mut batch = Vec::with_capacity(Self::THREADING_BATCH_SIZE);
+        let mut batch = Vec::with_capacity(Self::THREADING_INPUT_BATCH_SIZE);
         for_each_paired_fastq_sequence_checked(reader1, reader2, |r1, r2| {
             batch.push(r1.to_vec());
-            if batch.len() >= Self::THREADING_BATCH_SIZE {
+            if batch.len() >= Self::THREADING_INPUT_BATCH_SIZE {
                 stats.edge_observations += Self::accumulate_branch_support_batch(
                     &batch,
                     k,
@@ -2905,7 +2988,7 @@ impl LargeGenomeAssembler {
             }
 
             batch.push(r2.to_vec());
-            if batch.len() >= Self::THREADING_BATCH_SIZE {
+            if batch.len() >= Self::THREADING_INPUT_BATCH_SIZE {
                 stats.edge_observations += Self::accumulate_branch_support_batch(
                     &batch,
                     k,
@@ -2990,7 +3073,7 @@ impl LargeGenomeAssembler {
         }
 
         let (batch_support, observations) = sequences
-            .par_chunks(Self::THREADING_BATCH_SIZE)
+            .par_chunks(Self::THREADING_PAR_CHUNK_SIZE)
             .map(|chunk| {
                 let mut local_support = AHashMap::with_capacity(
                     branch_edge_lookup
@@ -4181,13 +4264,14 @@ mod tests {
                 singleton_kmers.push(encoded);
             }
         }
+        let trusted_filter = TrustedKmerFilter::from_trusted_counts(&trusted_counts);
 
         let mut corrected = kmer_counts.clone();
         let mut num_corrected = 0u64;
 
         for singleton in singleton_kmers {
             if let Some(trusted_neighbor) =
-                assembler.find_trusted_neighbor(singleton, k, &trusted_counts)
+                assembler.find_trusted_neighbor(singleton, k, &trusted_counts, &trusted_filter)
             {
                 if let Some(count) = corrected.get_mut(&trusted_neighbor) {
                     *count = count.saturating_add(1);
@@ -4434,9 +4518,10 @@ mod tests {
         let mut trusted_counts = AHashMap::new();
         trusted_counts.insert(low, 9);
         trusted_counts.insert(high, 25);
+        let trusted_filter = TrustedKmerFilter::from_trusted_counts(&trusted_counts);
 
         let picked = assembler
-            .find_trusted_neighbor(singleton, k, &trusted_counts)
+            .find_trusted_neighbor(singleton, k, &trusted_counts, &trusted_filter)
             .unwrap();
         assert_eq!(picked, high);
     }
@@ -4454,11 +4539,32 @@ mod tests {
         let mut trusted_counts = AHashMap::new();
         trusted_counts.insert(first, 12);
         trusted_counts.insert(second, 12);
+        let trusted_filter = TrustedKmerFilter::from_trusted_counts(&trusted_counts);
 
         let picked = assembler
-            .find_trusted_neighbor(singleton, k, &trusted_counts)
+            .find_trusted_neighbor(singleton, k, &trusted_counts, &trusted_filter)
             .unwrap();
         assert_eq!(picked, expected);
+    }
+
+    #[test]
+    fn test_trusted_kmer_filter_has_no_false_negatives() {
+        let kmers = [
+            KmerU64::from_str("AAAT").unwrap().canonical().encoded,
+            KmerU64::from_str("AACA").unwrap().canonical().encoded,
+            KmerU64::from_str("TTGC").unwrap().canonical().encoded,
+            KmerU64::from_str("CGTA").unwrap().canonical().encoded,
+        ];
+        let trusted_counts = kmers
+            .into_iter()
+            .enumerate()
+            .map(|(idx, kmer)| (kmer, (idx as u32) + 4))
+            .collect::<AHashMap<_, _>>();
+        let filter = TrustedKmerFilter::from_trusted_counts(&trusted_counts);
+
+        for &kmer in trusted_counts.keys() {
+            assert!(filter.maybe_contains(kmer));
+        }
     }
 
     #[test]

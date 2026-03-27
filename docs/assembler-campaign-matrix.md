@@ -157,20 +157,29 @@ Combination evaluation order:
   - live default mapper config promoted to `k=15, w=10, min_primary=3, min_scaffold=2`
   - current default `quick_test` frontier is `22.13s` end-to-end
   - shared `map` timing is down to `5.843s`
-- lane B error-correction masked-signature prefilter was prototyped and
-  rejected after `quick_test` regressed to `39.08s` with
-  `error_correct=16.428s`
-- lane C branch-read spool was prototyped and rejected from production after
-  the stage bench showed the spool path slower than reread across all measured
-  fixture sizes
+- lane B now has one rejected path and one accepted path:
+  - rejected: masked-signature prefilter regressed to `39.08s` with
+    `error_correct=16.428s`
+  - accepted on 2026-03-27: trusted-kmer membership prefilter
+  - synthetic benches split by workload shape, but real `quick_test` won twice
+  - repeat-confirmed filter-only frontier is `22.18s` end-to-end with
+    `error_correct` down to about `3.92s`
+- lane C now has one rejected path and one accepted path:
+  - rejected: branch-read spool was slower than reread on the stage bench
+  - accepted on 2026-03-27: decoupled branch-thread input batching from
+    Rayon chunk size
+  - repeat-confirmed branch-thread time is down to about `1.18s`
+  - current repeat-confirmed overall frontier is `20.34s` end-to-end
+  - best observed run is `20.01s`
 - lane D counting backend did not produce a faster kernel, but the campaign
   kept a dedicated `disk_bucket_count` benchmark and targeted count-path tests
 - the synthetic-task mapper winner `k=9, w=4, min_primary=5, min_scaffold=4`
   was rejected on real `quick_test` after regressing to `47.03s`
 - campaign tooling is now in place under `scripts/autoresearch_bridge`
 - next high-value work is still:
-  - a different error-correction acceleration strategy that does not add a large
-    per-run index build
-  - branch-threading evidence capture that wins on real data, not just on paper
+  - shared mapper compaction again, because `map` is back to roughly
+    `7.4s-7.6s` and is now the largest remaining phase
+  - dense branch-edge lookup / dense support accumulation, not just better
+    batching
   - a more radical graph-core rewrite rather than more local singleton-rescue
     heuristics
