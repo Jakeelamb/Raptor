@@ -2,7 +2,10 @@
 
 Date: 2026-05-20
 Branch: `rescue/gpu-trinity`
-Baseline commit: `299c294 Revive GPU count smoke CLI`
+Baseline commits:
+
+- `299c294 Revive GPU count smoke CLI`
+- `954a255 Polish rescued GPU baseline`
 
 ## What Was Rescued
 
@@ -41,15 +44,46 @@ cargo test --features gpu
 - `cargo check --features gpu`: passed
 - `cargo test`: passed
 - `cargo test --features gpu`: passed
-- `./scripts/rescue_smoke.sh`: passed overall
-- Current host GPU runtime status: OpenCL discovery returns unavailable in this shell, and `nvidia-smi` failed to communicate with the NVIDIA driver during the polish pass. `/etc/OpenCL/vendors/nvidia.icd` and NVIDIA OpenCL libraries are present, so this looks like driver/runtime state rather than missing source support.
+- `./scripts/rescue_smoke.sh`: passed with `gpu_smoke=ok`
+- Current host GPU runtime status: `nvidia-smi` reports `NVIDIA GeForce RTX 5070 Laptop GPU`, driver `595.71.05`, CUDA runtime `13.2`, and 8151 MiB VRAM.
+- OpenCL k-mer smoke completed and reported GPU counting.
+
+## CPU vs OpenCL Baseline
+
+Run:
+
+```bash
+./bench/gpu_kmer_baseline.sh
+```
+
+Default input shape:
+
+- reads: 20000
+- read length: 150
+- synthetic genome length: 50000
+- k: 25
+
+The script writes:
+
+- `target/rescue-baseline/kmer_cpu_opencl.tsv`
+- `target/rescue-baseline/cpu.log`
+- `target/rescue-baseline/opencl.log`
+
+First measured run on the RTX 5070 Laptop GPU:
+
+| Backend | Status | End-to-end seconds | Unique k-mers |
+|---|---:|---:|---:|
+| CPU exact | ok | 3.424227 | 49974 |
+| OpenCL | ok | 0.648744 | 49974 |
+
+The OpenCL binary also reported kernel-side counting time of `231.493299ms`.
 
 ## CUDA Note
 
 Jake has NVIDIA hardware, so CUDA is a reasonable future backend. Do not add it as a blind rewrite. The right path is:
 
-1. Restore stable NVIDIA driver/runtime visibility (`nvidia-smi` must work).
-2. Save an OpenCL baseline when OpenCL is available, or explicitly record that OpenCL is unavailable on the target host.
+1. Keep `nvidia-smi` and OpenCL smoke green.
+2. Save CPU and OpenCL baselines with `./bench/gpu_kmer_baseline.sh`.
 3. Add a CUDA backend behind a separate feature, such as `cuda`, with the same public counting contract.
 4. Compare OpenCL, CUDA, and CPU on the same generated FASTQ inputs.
 

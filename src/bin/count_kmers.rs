@@ -1,20 +1,26 @@
-use raptor::io::fastq::{open_fastq, stream_fastq_records};
+use raptor::io::fastq::{stream_fastq_records, try_open_fastq};
 use raptor::kmer::cms::CountMinSketch;
 use raptor::kmer::kmer::KmerU64;
 use raptor::kmer::nthash::NtHashIterator;
 use std::collections::HashMap;
 use std::time::Instant;
 
-fn main() {
+fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
         eprintln!("Usage: {} <input.fastq(.gz)> [k-mer length]", args[0]);
-        std::process::exit(1);
+        return std::process::ExitCode::FAILURE;
     }
 
     let input_path = &args[1];
     let k = if args.len() > 2 {
-        args[2].parse::<usize>().unwrap_or(21)
+        match args[2].parse::<usize>() {
+            Ok(k) => k,
+            Err(err) => {
+                eprintln!("Invalid k-mer length '{}': {}", args[2], err);
+                return std::process::ExitCode::FAILURE;
+            }
+        }
     } else {
         21 // Default k-mer size
     };
@@ -23,7 +29,13 @@ fn main() {
     let start = Instant::now();
 
     // Process the FASTQ file using streaming for memory efficiency
-    let reader = open_fastq(input_path);
+    let reader = match try_open_fastq(input_path) {
+        Ok(reader) => reader,
+        Err(err) => {
+            eprintln!("Unable to open FASTQ file '{}': {}", input_path, err);
+            return std::process::ExitCode::FAILURE;
+        }
+    };
     let records = stream_fastq_records(reader);
 
     // Set up k-mer counting
@@ -48,12 +60,10 @@ fn main() {
             // Count in CMS using hash directly
             cms.insert_hash(hash);
 
-            // Keep exact counts for first 1000 unique k-mers (using u64 encoding)
-            if exact_counts.len() < 1000 {
-                if let Some(kmer) = KmerU64::from_slice(&bytes[pos..pos + k]) {
-                    let canonical = kmer.canonical();
-                    *exact_counts.entry(canonical.encoded).or_insert(0) += 1;
-                }
+            if let Some(kmer) = KmerU64::from_slice(&bytes[pos..pos + k]) {
+                let canonical = kmer.canonical();
+                let count = exact_counts.entry(canonical.encoded).or_insert(0);
+                *count = count.saturating_add(1);
             }
 
             total_kmers += 1;
@@ -96,4 +106,5 @@ fn main() {
     }
 
     println!("\nComplete.");
+    std::process::ExitCode::SUCCESS
 }
