@@ -4,6 +4,34 @@ This directory is the reproducible comparison harness for Raptor versus Trinity.
 
 Current status: scaffold only. It intentionally starts with a tiny truth-known fixture so failures are cheap and visible. This is not the frozen public benchmark panel yet.
 
+## Candidate Panel
+
+`panel.json` defines the current deterministic candidate panel. It is not the
+final frozen public Trinity parity panel, but it is the active fast regression
+gate across the current truth-known stress cases:
+
+- `tiny_alt_isoform` across insert sizes `110,140,160,180`
+- `ambiguous_paralog` at insert size `160`
+- `compact_fusion` at insert size `160`
+
+Run the full candidate panel:
+
+```bash
+python3 bench/trinity_parity/run_panel.py
+```
+
+The runner writes `target/trinity_parity/candidate_panel/panel_report.json`
+with per-fixture commands, pass/fail state, selected-isoform precision/recall/F1,
+component counts, graph counts, lengths, and Trinity metrics when requested.
+
+If Trinity is installed on `PATH`, the same panel can also run Trinity:
+
+```bash
+python3 bench/trinity_parity/run_panel.py --run-trinity
+```
+
+Use `--require-trinity` when Trinity output is mandatory for the gate.
+
 ## Tiny Fixture
 
 `run_tiny_fixture.py` generates:

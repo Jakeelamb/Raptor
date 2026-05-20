@@ -1,0 +1,30 @@
+{
+  "name": "raptor_trinity_candidate_panel",
+  "status": "candidate",
+  "note": "Deterministic local stress panel. This is not the final frozen public Trinity parity panel.",
+  "defaults": {
+    "run_raptor_workflow": true,
+    "skip_raptor": true,
+    "min_truth_coverage": 0.95,
+    "min_selected_match_coverage": 0.95,
+    "min_selected_precision": 0.95,
+    "min_selected_f1": 0.95
+  },
+  "fixtures": [
+    {
+      "name": "tiny_alt_isoform",
+      "inserts": [110, 140, 160, 180],
+      "description": "Two related isoforms with shared terminal exons and one alternative exon."
+    },
+    {
+      "name": "ambiguous_paralog",
+      "inserts": [160],
+      "description": "Ambiguous isoform/paralog fixture that rejects partial false-positive isoforms."
+    },
+    {
+      "name": "compact_fusion",
+      "inserts": [160],
+      "description": "Overlapping-transcript fusion-control fixture that requires paired-start evidence."
+    }
+  ]
+}
