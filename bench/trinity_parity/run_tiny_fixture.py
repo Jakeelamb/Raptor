@@ -357,6 +357,36 @@ def count_fastq_records(path: Path) -> int:
     return lines // 4
 
 
+def normalized_pair_metrics(left: Path, right: Path, input_pairs: int) -> dict[str, object]:
+    left_count = count_fastq_records(left)
+    right_count = count_fastq_records(right)
+    kept_pairs = min(left_count, right_count)
+    return {
+        "normalized_r1": str(left),
+        "normalized_r2": str(right),
+        "normalized_r1_bytes": file_size_bytes(left),
+        "normalized_r2_bytes": file_size_bytes(right),
+        "normalized_kept_r1_reads": left_count,
+        "normalized_kept_r2_reads": right_count,
+        "normalized_kept_pairs": kept_pairs,
+        "normalized_kept_pair_fraction": round(kept_pairs / input_pairs, 6)
+        if input_pairs
+        else 0.0,
+        "normalized_paired_counts_match": left_count == right_count,
+    }
+
+
+def trinity_normalization_metrics(trinity_out: Path, input_pairs: int) -> dict[str, object]:
+    norm_dir = trinity_out / "insilico_read_normalization"
+    left_candidates = sorted(norm_dir.glob("*_R1.fastq.gz.normalized_*.fq"))
+    right_candidates = sorted(norm_dir.glob("*_R2.fastq.gz.normalized_*.fq"))
+    if not left_candidates or not right_candidates:
+        return {"normalization_output_exists": False}
+    metrics = normalized_pair_metrics(left_candidates[0], right_candidates[0], input_pairs)
+    metrics["normalization_output_exists"] = True
+    return metrics
+
+
 def read_fasta_records(path: Path) -> dict[str, str]:
     opener = gzip.open if path.suffix == ".gz" else open
     records: dict[str, str] = {}
@@ -1515,21 +1545,16 @@ def run_one_fixture(
             "output_dir_footprint": directory_footprint(normalized_prefix.parent),
         }
         if normalized_r1.exists() and normalized_r2.exists():
-            r1_count = count_fastq_records(normalized_r1)
-            r2_count = count_fastq_records(normalized_r2)
             metrics.update(
-                {
-                    "kept_r1_reads": r1_count,
-                    "kept_r2_reads": r2_count,
-                    "kept_pairs": min(r1_count, r2_count),
-                    "kept_pair_fraction": round(
-                        min(r1_count, r2_count) / fixture["paired_end_pairs"], 6
-                    )
-                    if fixture["paired_end_pairs"]
-                    else 0.0,
-                    "paired_counts_match": r1_count == r2_count,
-                }
+                normalized_pair_metrics(
+                    normalized_r1, normalized_r2, int(fixture["paired_end_pairs"])
+                )
             )
+            metrics["kept_r1_reads"] = metrics["normalized_kept_r1_reads"]
+            metrics["kept_r2_reads"] = metrics["normalized_kept_r2_reads"]
+            metrics["kept_pairs"] = metrics["normalized_kept_pairs"]
+            metrics["kept_pair_fraction"] = metrics["normalized_kept_pair_fraction"]
+            metrics["paired_counts_match"] = metrics["normalized_paired_counts_match"]
             if assemble_normalized:
                 raptor_r1 = normalized_r1
                 raptor_r2 = normalized_r2
@@ -1678,6 +1703,11 @@ def run_one_fixture(
                     report["oracle"]["path"] = str(oracle_fasta)
                     report["oracle"]["available"] = True
                     report["oracle"]["frozen_from_trinity"] = str(output_fasta)
+            metrics.update(
+                trinity_normalization_metrics(
+                    trinity_out, int(fixture["paired_end_pairs"])
+                )
+            )
             result["metrics"] = metrics
             report["trinity"]["result"] = result
 
@@ -1696,6 +1726,7 @@ def check_report_thresholds(
     min_selected_precision: float,
     min_selected_f1: float,
     min_trinity_selected_f1: float | None,
+    max_normalization_kept_pair_delta: float | None,
 ) -> list[str]:
     failures: list[str] = []
     trinity = report.get("trinity", {})
@@ -1728,6 +1759,22 @@ def check_report_thresholds(
             failures.append("raptor normalize did not produce paired outputs")
         if normalize_metrics.get("paired_counts_match") is False:
             failures.append("raptor normalize produced mismatched R1/R2 record counts")
+        if max_normalization_kept_pair_delta is not None:
+            trinity_metrics = (
+                (report.get("trinity", {}) or {})
+                .get("result", {})
+                .get("metrics", {})
+            )
+            raptor_fraction = normalize_metrics.get("kept_pair_fraction")
+            trinity_fraction = trinity_metrics.get("normalized_kept_pair_fraction")
+            if raptor_fraction is None or trinity_fraction is None:
+                failures.append("normalization kept-pair comparison is missing")
+            else:
+                delta = abs(raptor_fraction - trinity_fraction)
+                if delta > max_normalization_kept_pair_delta:
+                    failures.append(
+                        f"normalization kept-pair fraction delta above threshold: {delta} > {max_normalization_kept_pair_delta}"
+                    )
 
     if not raptor:
         if not any(
@@ -2534,6 +2581,20 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         "trinity_output_file_count": trinity_metrics.get("output_dir_footprint", {}).get(
             "file_count"
         ),
+        "trinity_normalization_output_exists": trinity_metrics.get(
+            "normalization_output_exists"
+        ),
+        "trinity_normalized_kept_pairs": trinity_metrics.get("normalized_kept_pairs"),
+        "trinity_normalized_kept_pair_fraction": trinity_metrics.get(
+            "normalized_kept_pair_fraction"
+        ),
+        "normalization_kept_pair_delta": (
+            normalize_metrics.get("kept_pair_fraction")
+            - trinity_metrics.get("normalized_kept_pair_fraction")
+        )
+        if normalize_metrics.get("kept_pair_fraction") is not None
+        and trinity_metrics.get("normalized_kept_pair_fraction") is not None
+        else None,
         "trinity_lengths": trinity_metrics.get("lengths"),
         "trinity_n50": trinity_metrics.get("n50"),
         "trinity_truth_min_coverage": trinity_metrics.get("truth_recovery", {}).get(
@@ -2665,6 +2726,12 @@ def main() -> int:
         default=None,
         help="Optional minimum selected isoform F1 between Raptor workflow output and Trinity output",
     )
+    parser.add_argument(
+        "--max-normalization-kept-pair-delta",
+        type=float,
+        default=None,
+        help="Optional maximum absolute difference between Raptor and Trinity normalized kept-pair fractions",
+    )
     args = parser.parse_args()
 
     out_dir = args.out_dir.resolve()
@@ -2718,6 +2785,7 @@ def main() -> int:
                 args.min_selected_precision,
                 args.min_selected_f1,
                 args.min_trinity_selected_f1,
+                args.max_normalization_kept_pair_delta,
             )
         )
         print(f"wrote {report['report_path']}")

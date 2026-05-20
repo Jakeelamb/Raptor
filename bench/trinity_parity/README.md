@@ -39,6 +39,12 @@ Raptor-vs-Trinity selected-output F1 `0.95` for `tiny_alt_isoform`,
 `compact_fusion` remain recorded divergence probes until their policy is
 explicitly decided.
 
+The panel also runs Raptor paired-read normalization and, when Trinity is
+enabled, records Trinity's `insilico_read_normalization` kept-pair counts. The
+current candidate gate requires the normalized kept-pair fraction delta to be
+`0.0` on these small fixtures; this is a retention sanity check, not a claim
+that the two normalization algorithms are equivalent on real high-depth data.
+
 If Trinity is installed on `PATH`, the same panel can also run Trinity:
 
 ```bash
@@ -240,6 +246,7 @@ The script records:
 - comma-separated direct input mode and reported input-group count when requested
 - Trinity-style `SS_lib_type` value and actual assembly input paths when requested
 - malformed FASTQ rejection command, exit status, output absence, and stderr context
+- Raptor and Trinity normalized kept-pair counts/fractions when requested
 - Trinity paired-end command, exit status, output metrics, and truth recovery when requested
 - whether Trinity was available, which executable was resolved, and `Trinity --version` output
 - the current Raptor limitation that paired-end evidence is only used as reverse-complemented mate sequence evidence, not yet full Butterfly-style pair path constraints

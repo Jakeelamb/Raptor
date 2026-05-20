@@ -327,6 +327,7 @@ def fixture_summary(report_path: Path) -> dict[str, object]:
 
 
 def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, object]:
+    raptor_normalize = payload.get("raptor_normalize") or {}
     raptor_workflow = payload.get("raptor_workflow") or {}
     raptor_workflow_gpu = payload.get("raptor_workflow_gpu") or {}
     raptor_workflow_single = payload.get("raptor_workflow_single") or {}
@@ -343,6 +344,7 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
     comma_workflow_metrics = raptor_workflow_comma_lists.get("metrics", {})
     stranded_workflow_metrics = raptor_workflow_stranded_rf.get("metrics", {})
     malformed_metrics = malformed_fastq_check.get("metrics", {})
+    normalize_metrics = raptor_normalize.get("metrics", {})
     trinity = payload.get("trinity") or {}
     trinity_result = trinity.get("result", {})
     trinity_metrics = trinity_result.get("metrics", {})
@@ -361,6 +363,9 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
         "insert": payload["fixture"]["insert"],
         "paired_end_pairs": payload["fixture"]["paired_end_pairs"],
         "report_path": payload.get("report_path"),
+        "raptor_normalize_exit_code": raptor_normalize.get("exit_code"),
+        "normalized_kept_pairs": normalize_metrics.get("kept_pairs"),
+        "normalized_kept_pair_fraction": normalize_metrics.get("kept_pair_fraction"),
         "raptor_workflow_exit_code": raptor_workflow.get("exit_code"),
         "raptor_workflow_elapsed_seconds": raptor_workflow.get("elapsed_seconds"),
         "raptor_workflow_max_rss_kb": workflow_resources.get("max_rss_kb"),
@@ -564,6 +569,20 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
         "trinity_output_file_count": trinity_metrics.get("output_dir_footprint", {}).get(
             "file_count"
         ),
+        "trinity_normalization_output_exists": trinity_metrics.get(
+            "normalization_output_exists"
+        ),
+        "trinity_normalized_kept_pairs": trinity_metrics.get("normalized_kept_pairs"),
+        "trinity_normalized_kept_pair_fraction": trinity_metrics.get(
+            "normalized_kept_pair_fraction"
+        ),
+        "normalization_kept_pair_delta": (
+            normalize_metrics.get("kept_pair_fraction")
+            - trinity_metrics.get("normalized_kept_pair_fraction")
+        )
+        if normalize_metrics.get("kept_pair_fraction") is not None
+        and trinity_metrics.get("normalized_kept_pair_fraction") is not None
+        else None,
         "trinity_lengths": trinity_metrics.get("lengths"),
         "trinity_truth_min_coverage": trinity_metrics.get("truth_recovery", {}).get(
             "min_best_coverage"
@@ -634,6 +653,12 @@ def run_fixture(
         )
     )
     skip_raptor = bool(fixture.get("skip_raptor", defaults.get("skip_raptor", True)))
+    normalize_raptor = bool(
+        fixture.get("normalize_raptor", defaults.get("normalize_raptor", False))
+    )
+    assemble_normalized = bool(
+        fixture.get("assemble_normalized", defaults.get("assemble_normalized", False))
+    )
     command = [
         sys.executable,
         str(FIXTURE_RUNNER),
@@ -657,8 +682,27 @@ def run_fixture(
     )
     if min_trinity_selected_f1 is not None and (run_trinity or require_trinity):
         command.extend(["--min-trinity-selected-f1", str(min_trinity_selected_f1)])
+    max_normalization_kept_pair_delta = fixture.get(
+        "max_normalization_kept_pair_delta",
+        defaults.get("max_normalization_kept_pair_delta"),
+    )
+    if (
+        max_normalization_kept_pair_delta is not None
+        and normalize_raptor
+        and (run_trinity or require_trinity)
+    ):
+        command.extend(
+            [
+                "--max-normalization-kept-pair-delta",
+                str(max_normalization_kept_pair_delta),
+            ]
+        )
     if run_raptor_workflow:
         command.append("--run-raptor-workflow")
+    if normalize_raptor:
+        command.append("--normalize-raptor")
+    if assemble_normalized:
+        command.append("--assemble-normalized")
     if run_raptor_workflow_gpu:
         command.append("--run-raptor-workflow-gpu")
     if run_raptor_workflow_single:

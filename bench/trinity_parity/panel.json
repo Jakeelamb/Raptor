@@ -11,11 +11,13 @@
     "run_raptor_workflow_comma_lists": true,
     "run_raptor_workflow_stranded_rf": true,
     "run_malformed_fastq_checks": true,
+    "normalize_raptor": true,
     "skip_raptor": true,
     "min_truth_coverage": 0.95,
     "min_selected_match_coverage": 0.95,
     "min_selected_precision": 0.95,
-    "min_selected_f1": 0.95
+    "min_selected_f1": 0.95,
+    "max_normalization_kept_pair_delta": 0.0
   },
   "fixtures": [
     {
