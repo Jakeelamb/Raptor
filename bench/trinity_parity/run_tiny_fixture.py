@@ -206,46 +206,34 @@ def read_fasta_records(path: Path) -> dict[str, str]:
     return records
 
 
-def write_fasta_records(path: Path, records: dict[str, str]) -> None:
-    chunks: list[str] = []
-    for name, seq in records.items():
-        chunks.append(f">{name}\n")
-        for start in range(0, len(seq), 80):
-            chunks.append(seq[start : start + 80] + "\n")
-    write_text(path, "".join(chunks))
-
-
 def component_candidate_metrics(
     path: Path,
+    selected_path: Path | None,
     truth_fasta: Path,
     oracle_fasta: Path,
 ) -> dict[str, object]:
     if not path.exists():
         return {"component_paths_fasta_exists": False}
     records = read_fasta_records(path)
-    selected = {
-        name: seq
-        for name, seq in records.items()
-        if name.startswith("component_") and "_contig_" in name
-    }
-    selected_path = path.with_name("raptor_component_selected_isoforms.fasta")
-    write_fasta_records(selected_path, selected)
     metrics: dict[str, object] = {
         "component_paths_fasta_exists": True,
         "component_path_transcript_count": len(records),
         "component_path_total_bases": sum(len(seq) for seq in records.values()),
         "component_path_n50": n50([len(seq) for seq in records.values()]),
         "component_path_lengths": [len(seq) for seq in records.values()],
-        "component_selected_isoforms_fasta": str(selected_path),
-        "component_selected_isoform_count": len(selected),
-        "component_selected_isoform_lengths": [len(seq) for seq in selected.values()],
     }
     metrics["component_candidate_truth_recovery"] = truth_recovery_metrics(truth_fasta, path)
     if oracle_fasta.exists():
         metrics["component_candidate_oracle_recovery"] = fasta_recovery_metrics(
             oracle_fasta, path
         )
-    if selected:
+    if selected_path is not None:
+        metrics["component_selected_isoforms_fasta"] = str(selected_path)
+        metrics["component_selected_isoforms_fasta_exists"] = selected_path.exists()
+    if selected_path is not None and selected_path.exists():
+        selected = read_fasta_records(selected_path)
+        metrics["component_selected_isoform_count"] = len(selected)
+        metrics["component_selected_isoform_lengths"] = [len(seq) for seq in selected.values()]
         metrics["component_selected_truth_recovery"] = truth_recovery_metrics(
             truth_fasta, selected_path
         )
@@ -598,6 +586,9 @@ def run_one_fixture(
             metrics["component_graph_count"] = workflow_payload.get("component_graph_count")
             metrics["component_graphs_json"] = workflow_payload.get("component_graphs_json")
             metrics["component_paths_fasta"] = workflow_payload.get("component_paths_fasta")
+            metrics["component_selected_isoforms_fasta"] = workflow_payload.get(
+                "component_selected_isoforms_fasta"
+            )
             components_json = workflow_payload.get("components_json")
             if components_json:
                 metrics.update(component_evidence_metrics(Path(components_json)))
@@ -609,6 +600,9 @@ def run_one_fixture(
                 metrics.update(
                     component_candidate_metrics(
                         Path(component_paths_fasta),
+                        Path(workflow_payload["component_selected_isoforms_fasta"])
+                        if workflow_payload.get("component_selected_isoforms_fasta")
+                        else None,
                         Path(fixture["paths"]["truth_fasta"]),
                         oracle_fasta,
                     )
@@ -776,6 +770,8 @@ def check_report_thresholds(
             failures.append("raptor trinity workflow did not emit component path transcript FASTA")
         if workflow_metrics.get("component_path_transcript_count", 0) < 1:
             failures.append("raptor trinity workflow component path FASTA is empty")
+        if not workflow_metrics.get("component_selected_isoforms_fasta_exists"):
+            failures.append("raptor trinity workflow did not emit selected isoform FASTA")
         if workflow_metrics.get("component_selected_isoform_count", 0) < 1:
             failures.append("raptor trinity workflow did not select component isoforms")
         if workflow_metrics.get("component_assigned_read_count", 0) < 1:

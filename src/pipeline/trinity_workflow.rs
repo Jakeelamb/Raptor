@@ -44,6 +44,7 @@ pub struct TrinityWorkflowReport {
     pub components_json: String,
     pub component_graphs_json: String,
     pub component_paths_fasta: String,
+    pub component_selected_isoforms_fasta: String,
     pub component_clustering: &'static str,
     pub component_count: usize,
     pub component_graph_count: usize,
@@ -107,11 +108,14 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
     let component_path = output_dir.join("raptor_components.json");
     let component_graphs_path = output_dir.join("raptor_component_graphs.json");
     let component_paths_fasta = output_dir.join("raptor_component_paths.fasta");
+    let component_selected_isoforms_fasta =
+        output_dir.join("raptor_component_selected_isoforms.fasta");
     let component_artifacts = write_component_artifacts(
         &assembly_fasta_string,
         &component_path,
         &component_graphs_path,
         &component_paths_fasta,
+        &component_selected_isoforms_fasta,
         60,
         &assembly_input1,
         assembly_input2.as_deref(),
@@ -144,6 +148,8 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
         components_json: path_to_str(&component_path)?.to_string(),
         component_graphs_json: path_to_str(&component_graphs_path)?.to_string(),
         component_paths_fasta: path_to_str(&component_paths_fasta)?.to_string(),
+        component_selected_isoforms_fasta: path_to_str(&component_selected_isoforms_fasta)?
+            .to_string(),
         component_clustering: component_artifacts.clustering,
         component_count: component_artifacts.components.len(),
         component_graph_count: component_artifacts.component_graphs.len(),
@@ -167,6 +173,7 @@ fn write_component_artifacts(
     component_path: &Path,
     component_graphs_path: &Path,
     component_paths_fasta: &Path,
+    component_selected_isoforms_fasta: &Path,
     min_shared_bases: usize,
     reads1_path: &str,
     reads2_path: Option<&str>,
@@ -209,6 +216,11 @@ fn write_component_artifacts(
         "component graph report",
     )?;
     write_component_paths_fasta(component_paths_fasta, &contigs, &component_graphs)?;
+    write_component_selected_isoforms_fasta(
+        component_selected_isoforms_fasta,
+        &contigs,
+        &component_graphs,
+    )?;
     Ok(ComponentArtifacts {
         components,
         component_graphs,
@@ -245,6 +257,34 @@ fn write_component_paths_fasta(
                 graph.component_id, path_idx, read_path.edge_count, read_path.min_support
             ));
             write_wrapped_fasta_sequence(&mut output, &read_path.sequence);
+        }
+    }
+    fs::write(path, output)
+}
+
+fn write_component_selected_isoforms_fasta(
+    path: &Path,
+    contigs: &[Contig],
+    component_graphs: &[RaptorComponentGraph],
+) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let contigs_by_id: std::collections::BTreeMap<usize, &Contig> =
+        contigs.iter().map(|contig| (contig.id, contig)).collect();
+    let mut output = String::new();
+    for graph in component_graphs {
+        for (isoform_idx, node) in graph.nodes.iter().enumerate() {
+            if let Some(contig) = contigs_by_id.get(&node.contig_id) {
+                output.push_str(&format!(
+                    ">component_{}_isoform_{} source=contig_{} length={}\n",
+                    graph.component_id,
+                    isoform_idx,
+                    node.contig_id,
+                    contig.sequence.len()
+                ));
+                write_wrapped_fasta_sequence(&mut output, &contig.sequence);
+            }
         }
     }
     fs::write(path, output)
@@ -431,6 +471,7 @@ mod tests {
         assert!(std::path::Path::new(&report.components_json).exists());
         assert!(std::path::Path::new(&report.component_graphs_json).exists());
         assert!(std::path::Path::new(&report.component_paths_fasta).exists());
+        assert!(std::path::Path::new(&report.component_selected_isoforms_fasta).exists());
         let components: Vec<serde_json::Value> = serde_json::from_str(
             &fs::read_to_string(&report.components_json).expect("component json"),
         )
