@@ -46,8 +46,8 @@ The current overall readiness is the minimum stage score: **0**. That is not a v
 | Strand-specific RNA-seq | No clear `SS_lib_type` equivalent found | No mapped strand-specific semantics. | 0 | Add explicit strand-orientation model and fixtures before claiming strand-specific support |
 | Jaccard clipping / compact genome fusion control | No mapped transcriptome implementation found | Missing. | 0 | Add compact-genome overlapping-UTR stress fixture and either implement support or document an explicit non-goal before parity threshold is frozen |
 | Output transcript FASTA/GFA/GTF/GFF3/counts | `src/io/transcript_io.rs`, `src/io/gfa.rs`, `src/io/gff3.rs`, `src/io/gtf.rs`, `assemble --isoforms --gtf --gff3 --counts-matrix`, `isoform` CLI | Writers exist. Current GTF writer emits one exon per transcript and uses transcript IDs as seqnames, so it is not a faithful transcript annotation model for reference-based evaluation. | 1 | Define output contract for de novo transcript FASTA and evaluation-side reference mappings; fix GTF/GFF3 semantics or restrict them to synthetic truth fixtures |
-| Evaluation and reporting | `src/eval/metrics.rs`, `src/eval/gtf_compare.rs`, `gtf-compare`, `eval`, `stats`, `bench/README.md`, `bench/trinity_parity/run_tiny_fixture.py` | Length metrics, GTF precision/recall, and a tiny paired-end Raptor/Trinity harness exist. The harness can freeze a live Trinity output as oracle when Trinity is installed. There is still no frozen public panel, BUSCO/read-representation/full-length recovery integration, or resource capture. | 1 | Expand `bench/trinity_parity/` into exact versions, commands, metrics, runtime/RSS/disk/GPU capture, and reproducible public-panel reports |
-| End-to-end Trinity-like CLI | `raptor normalize`, `raptor assemble`, `raptor isoform`, `raptor eval` | Pieces are exposed as separate commands. There is no single Trinity-equivalent workflow that accepts paired FASTQ and produces final de novo transcript FASTA plus report. | 0 | Add or script an end-to-end workflow over the same production code paths and compare directly to a Trinity command |
+| Evaluation and reporting | `src/eval/metrics.rs`, `src/eval/gtf_compare.rs`, `gtf-compare`, `eval`, `stats`, `bench/README.md`, `bench/trinity_parity/run_tiny_fixture.py`, `src/pipeline/trinity_workflow.rs` | Length metrics, GTF precision/recall, a tiny paired-end Raptor/Trinity harness, and a JSON report from `raptor trinity` exist. The harness can freeze a live Trinity output as oracle when Trinity is installed. There is still no frozen public panel, BUSCO/read-representation/full-length recovery integration, or resource capture. | 1 | Expand `bench/trinity_parity/` into exact versions, commands, metrics, runtime/RSS/disk/GPU capture, and reproducible public-panel reports |
+| End-to-end Trinity-like CLI | `raptor trinity`, `src/pipeline/trinity_workflow.rs`, `raptor normalize`, `raptor assemble`, `bench/trinity_parity/run_tiny_fixture.py --run-raptor-workflow` | A minimal single-command de novo workflow now accepts paired FASTQ, runs production normalization and assembly, writes final transcript FASTA, assembly sidecars, and `raptor_trinity_report.json`. It passes the tiny fixture, but has not been compared directly to Trinity or the frozen panel. | 1 | Compare the single-command workflow directly to Trinity on the tiny fixture, then expand it across the approved benchmark panel |
 | Genome-guided Trinity mode | `assemble-large` is genome assembly oriented, not genome-guided transcriptome assembly | Missing for Trinity parity. It remains optional until de novo parity is credible. | 0 | Defer until de novo stages reach at least readiness 4 |
 
 ## Current Evidence Worth Keeping
@@ -106,6 +106,14 @@ python3 bench/trinity_parity/run_tiny_fixture.py --normalize-raptor --assemble-n
 ```
 
 On the default insert 160 fixture, this kept 15/15 pairs with matched R1/R2 counts and still recovered [252,240] with truth/oracle minimum coverage 1.0.
+
+The single-command workflow can also be exercised:
+
+```bash
+python3 bench/trinity_parity/run_tiny_fixture.py --run-raptor-workflow --skip-raptor
+```
+
+On the default insert 160 fixture, `raptor trinity` emits [252,240], N50 252, and truth/oracle minimum coverage 1.0 while writing `raptor_trinity_report.json`.
 
 Interpretation: current `raptor assemble --input R1 --input2 R2` now recovers the two truth transcripts exactly on this tiny non-repetitive two-isoform fixture across insert sweep 110,140,160,180 and matches the checked-in frozen oracle at `bench/trinity_parity/oracles/tiny_alt_isoform.fa`. This is useful normalization/Inchworm/paired-ingestion progress, but it is still not Trinity parity: Trinity is not installed on this machine's `PATH` yet, paired-end evidence is not yet used as full path/scaffold constraints, and broader isoform correctness is not measured.
 

@@ -300,6 +300,7 @@ def run_one_fixture(
     oracle_fasta: Path,
     normalize_raptor: bool,
     assemble_normalized: bool,
+    run_raptor_workflow: bool,
     run_trinity: bool,
     require_trinity: bool,
     freeze_trinity_oracle: bool,
@@ -313,6 +314,7 @@ def run_one_fixture(
         "repo": str(ROOT),
         "raptor_normalize": None,
         "raptor": None,
+        "raptor_workflow": None,
         "trinity": {
             "available": shutil.which("Trinity") is not None,
             "ran": False,
@@ -429,6 +431,49 @@ def run_one_fixture(
         result["metrics"] = metrics
         report["raptor"] = result
 
+    if run_raptor_workflow:
+        workflow_dir = out_dir / "raptor_workflow"
+        workflow_fasta = workflow_dir / "raptor_trinity.fasta.gz"
+        command = [
+            "cargo",
+            "run",
+            "--quiet",
+            "--",
+            "trinity",
+            "--input1",
+            fixture["paths"]["r1_fastq"],
+            "--input2",
+            fixture["paths"]["r2_fastq"],
+            "--output-dir",
+            str(workflow_dir),
+            "--output-fasta",
+            str(workflow_fasta),
+            "--min-len",
+            "25",
+        ]
+        result = run_command(command, ROOT)
+        metrics = {
+            "output_exists": workflow_fasta.exists(),
+            "workflow_report": str(workflow_dir / "raptor_trinity_report.json"),
+        }
+        if workflow_fasta.exists():
+            lengths = read_fasta_lengths(workflow_fasta)
+            metrics.update(
+                {
+                    "transcript_count": len(lengths),
+                    "total_bases": sum(lengths),
+                    "n50": n50(lengths),
+                    "lengths": lengths,
+                }
+            )
+            metrics["truth_recovery"] = truth_recovery_metrics(
+                Path(fixture["paths"]["truth_fasta"]), workflow_fasta
+            )
+            if oracle_fasta.exists():
+                metrics["oracle_recovery"] = fasta_recovery_metrics(oracle_fasta, workflow_fasta)
+        result["metrics"] = metrics
+        report["raptor_workflow"] = result
+
     if run_trinity:
         trinity_bin = shutil.which("Trinity")
         if not trinity_bin:
@@ -505,6 +550,7 @@ def check_report_thresholds(
 
     raptor = report.get("raptor")
     raptor_normalize = report.get("raptor_normalize")
+    raptor_workflow = report.get("raptor_workflow")
     if raptor_normalize:
         if raptor_normalize.get("exit_code") != 0:
             failures.append("raptor normalize failed")
@@ -513,6 +559,29 @@ def check_report_thresholds(
             failures.append("raptor normalize did not produce paired outputs")
         if normalize_metrics.get("paired_counts_match") is False:
             failures.append("raptor normalize produced mismatched R1/R2 record counts")
+
+    if not raptor:
+        if not raptor_workflow:
+            return failures
+    if raptor_workflow:
+        if raptor_workflow.get("exit_code") != 0:
+            failures.append("raptor trinity workflow failed")
+        workflow_metrics = raptor_workflow.get("metrics", {})
+        if not workflow_metrics.get("output_exists"):
+            failures.append("raptor trinity workflow did not produce assembly output")
+        truth_recovery = workflow_metrics.get("truth_recovery", {})
+        min_coverage = truth_recovery.get("min_best_coverage", 0.0)
+        if min_coverage < min_truth_coverage:
+            failures.append(
+                f"workflow truth recovery below threshold: {min_coverage} < {min_truth_coverage}"
+            )
+        oracle_recovery = workflow_metrics.get("oracle_recovery")
+        if oracle_recovery:
+            min_oracle = oracle_recovery.get("min_best_coverage", 0.0)
+            if min_oracle < min_oracle_coverage:
+                failures.append(
+                    f"workflow oracle recovery below threshold: {min_oracle} < {min_oracle_coverage}"
+                )
 
     if not raptor:
         return failures
@@ -543,6 +612,7 @@ def check_report_thresholds(
 def summarize_report(report: dict[str, object]) -> dict[str, object]:
     metrics = report.get("raptor", {}).get("metrics", {})
     normalize_metrics = report.get("raptor_normalize", {}).get("metrics", {})
+    workflow_metrics = report.get("raptor_workflow", {}).get("metrics", {})
     trinity_result = report.get("trinity", {}).get("result", {})
     trinity_metrics = trinity_result.get("metrics", {})
     return {
@@ -554,6 +624,15 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         "normalized_kept_pairs": normalize_metrics.get("kept_pairs"),
         "normalized_kept_pair_fraction": normalize_metrics.get("kept_pair_fraction"),
         "assembled_from_normalized_reads": metrics.get("assembled_from_normalized_reads"),
+        "raptor_workflow_exit_code": report.get("raptor_workflow", {}).get("exit_code"),
+        "workflow_lengths": workflow_metrics.get("lengths"),
+        "workflow_n50": workflow_metrics.get("n50"),
+        "workflow_truth_min_coverage": workflow_metrics.get("truth_recovery", {}).get(
+            "min_best_coverage"
+        ),
+        "workflow_oracle_min_coverage": workflow_metrics.get("oracle_recovery", {}).get(
+            "min_best_coverage"
+        ),
         "lengths": metrics.get("lengths"),
         "n50": metrics.get("n50"),
         "truth_min_coverage": metrics.get("truth_recovery", {}).get("min_best_coverage"),
@@ -582,6 +661,11 @@ def main() -> int:
         "--assemble-normalized",
         action="store_true",
         help="Assemble Raptor output from --normalize-raptor instead of raw fixture reads",
+    )
+    parser.add_argument(
+        "--run-raptor-workflow",
+        action="store_true",
+        help="Run the raptor trinity end-to-end CLI and record its output metrics",
     )
     parser.add_argument("--run-trinity", action="store_true")
     parser.add_argument("--oracle-fasta", type=Path, default=DEFAULT_ORACLE)
@@ -623,6 +707,7 @@ def main() -> int:
             args.oracle_fasta,
             args.normalize_raptor,
             args.assemble_normalized,
+            args.run_raptor_workflow,
             run_trinity,
             require_trinity,
             args.freeze_trinity_oracle,

@@ -4,6 +4,7 @@ use crate::io::fastq::{
 use crate::kmer::cms::CountMinSketch;
 use crate::kmer::normalize::{should_keep_read_pair_with_scratch, should_keep_read_with_scratch};
 use crate::kmer::nthash::NtHashIterator;
+use serde::Serialize;
 use std::io;
 use std::time::Instant;
 use tracing::info;
@@ -29,7 +30,7 @@ impl Default for NormalizeConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct NormalizeSummary {
     pub total_reads: usize,
     pub kept_reads: usize,

@@ -114,6 +114,56 @@ fn main() {
             );
         }
 
+        Commands::Trinity {
+            input1,
+            input2,
+            output_dir,
+            output_fasta,
+            report_json,
+            no_normalize,
+            gpu,
+            coverage_target,
+            max_reads,
+            min_len,
+        } => {
+            println!("Running Trinity-like de novo workflow");
+            let target_coverage = match u16::try_from(coverage_target) {
+                Ok(value) => value,
+                Err(_) => {
+                    eprintln!(
+                        "Trinity workflow failed: coverage-target must be <= {}",
+                        u16::MAX
+                    );
+                    return;
+                }
+            };
+            let config = pipeline::trinity_workflow::TrinityWorkflowConfig {
+                input1,
+                input2,
+                output_dir,
+                output_fasta,
+                report_json,
+                normalize: !no_normalize,
+                normalize_config: pipeline::normalize::NormalizeConfig {
+                    target_coverage,
+                    max_reads: Some(max_reads),
+                    use_gpu: gpu,
+                    ..pipeline::normalize::NormalizeConfig::default()
+                },
+                min_len,
+                use_gpu: gpu,
+            };
+            match pipeline::trinity_workflow::run_trinity_workflow(config) {
+                Ok(report) => {
+                    println!("Workflow complete: {}", report.assembly_fasta);
+                    println!("Report: {}", report.report_json);
+                }
+                Err(err) => {
+                    eprintln!("Trinity workflow failed: {}", err);
+                }
+            }
+        }
+
         Commands::Assemble {
             input,
             input2,

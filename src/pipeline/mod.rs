@@ -10,3 +10,4 @@ pub mod normalize;
 pub mod polisher;
 pub mod scaffolder;
 pub mod streaming_assembly;
+pub mod trinity_workflow;

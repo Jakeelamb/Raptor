@@ -623,6 +623,49 @@ pub enum Commands {
         max_reads: usize,
     },
 
+    /// Run a Trinity-like de novo RNA-seq workflow: normalize then assemble
+    Trinity {
+        /// Input read 1 FASTQ(.gz)
+        #[arg(short = '1', long)]
+        input1: String,
+
+        /// Optional input read 2 FASTQ(.gz)
+        #[arg(short = '2', long)]
+        input2: Option<String>,
+
+        /// Output directory for normalized reads, assembly, and report
+        #[arg(short, long)]
+        output_dir: String,
+
+        /// Optional final transcript FASTA(.gz) path
+        #[arg(long)]
+        output_fasta: Option<String>,
+
+        /// Optional workflow report JSON path
+        #[arg(long)]
+        report_json: Option<String>,
+
+        /// Skip normalization and assemble raw reads directly
+        #[arg(long)]
+        no_normalize: bool,
+
+        /// Enable GPU request state for supported stages
+        #[arg(long)]
+        gpu: bool,
+
+        /// Target coverage threshold for normalization
+        #[arg(long, default_value_t = 500)]
+        coverage_target: usize,
+
+        /// Maximum reads or read pairs to process during normalization
+        #[arg(long, default_value_t = 5_000_000)]
+        max_reads: usize,
+
+        /// Minimum transcript/contig length
+        #[arg(long, default_value_t = 50)]
+        min_len: usize,
+    },
+
     /// Assemble normalized reads into contigs
     Assemble {
         /// Input FASTQ(.gz) file
