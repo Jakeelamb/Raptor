@@ -619,11 +619,26 @@ def ambiguous_paralog_transcripts() -> tuple[dict[str, str], dict[str, int]]:
     return transcripts, coverage
 
 
+def compact_fusion_transcripts() -> tuple[dict[str, str], dict[str, int]]:
+    left_unique = deterministic_dna("fusion_left_unique", 120)
+    shared_overlap = deterministic_dna("fusion_shared_overlap", 96)
+    right_unique = deterministic_dna("fusion_right_unique", 120)
+
+    transcripts = {
+        "tx_left": left_unique + shared_overlap,
+        "tx_right": shared_overlap + right_unique,
+    }
+    coverage = {"tx_left": 3, "tx_right": 3}
+    return transcripts, coverage
+
+
 def generate_fixture(out_dir: Path, fixture_name: str, insert: int) -> dict[str, object]:
     if fixture_name == "tiny_alt_isoform":
         transcripts, coverage = tiny_alt_isoform_transcripts()
     elif fixture_name == "ambiguous_paralog":
         transcripts, coverage = ambiguous_paralog_transcripts()
+    elif fixture_name == "compact_fusion":
+        transcripts, coverage = compact_fusion_transcripts()
     else:
         raise ValueError(f"unknown fixture: {fixture_name}")
     return write_fixture_files(out_dir, fixture_name, transcripts, insert, coverage)
@@ -1328,7 +1343,7 @@ def main() -> int:
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
     parser.add_argument(
         "--fixture",
-        choices=["tiny_alt_isoform", "ambiguous_paralog"],
+        choices=["tiny_alt_isoform", "ambiguous_paralog", "compact_fusion"],
         default=DEFAULT_FIXTURE,
     )
     parser.add_argument("--skip-raptor", action="store_true")

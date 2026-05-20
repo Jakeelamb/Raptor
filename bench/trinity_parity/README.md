@@ -43,6 +43,16 @@ To run the first harder ambiguous isoform/paralog stress fixture:
 python3 bench/trinity_parity/run_tiny_fixture.py --fixture ambiguous_paralog --run-raptor-workflow --skip-raptor
 ```
 
+To run the current compact-overlap fusion stress fixture:
+
+```bash
+python3 bench/trinity_parity/run_tiny_fixture.py --fixture compact_fusion --run-raptor-workflow --skip-raptor
+```
+
+This fixture is intentionally a hard gate. At the current rescue point it fails
+because the read-overlap rescue emits one fused 336 bp contig from two 216 bp
+truth transcripts.
+
 If Trinity is installed on `PATH`, the same fixture can run Trinity on the same
 paired-end reads:
 
