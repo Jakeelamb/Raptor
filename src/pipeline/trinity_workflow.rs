@@ -1,10 +1,13 @@
+use crate::graph::assembler::Contig;
+use crate::graph::partition::{cluster_contigs_by_shared_sequence, RaptorComponent};
+use crate::io::fasta::try_open_fasta;
 use crate::pipeline::assemble::assemble_reads_with_gpu;
 use crate::pipeline::normalize::{
     normalize_paired_with_config, normalize_single_with_config, NormalizeConfig, NormalizeSummary,
 };
 use serde::Serialize;
 use std::fs;
-use std::io;
+use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -34,6 +37,8 @@ pub struct TrinityWorkflowReport {
     pub assembly_fasta: String,
     pub assembly_metrics_json: String,
     pub assembly_metrics_tsv: String,
+    pub components_json: String,
+    pub component_count: usize,
     pub report_json: String,
     pub elapsed_seconds: f64,
 }
@@ -91,6 +96,8 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
     )?;
 
     let assembly_fasta_string = path_to_str(&assembly_fasta)?.to_string();
+    let component_path = output_dir.join("raptor_components.json");
+    let components = write_component_report(&assembly_fasta_string, &component_path, 60)?;
     let report_path = config
         .report_json
         .as_ref()
@@ -116,6 +123,8 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
         normalization,
         assembly_metrics_json: sidecar_path(&assembly_fasta_string, "assembly_metrics.json"),
         assembly_metrics_tsv: sidecar_path(&assembly_fasta_string, "assembly_metrics.tsv"),
+        components_json: path_to_str(&component_path)?.to_string(),
+        component_count: components.len(),
         assembly_fasta: assembly_fasta_string,
         report_json: path_to_str(&report_path)?.to_string(),
         elapsed_seconds: start.elapsed().as_secs_f64(),
@@ -123,6 +132,68 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
 
     write_report(&report_path, &report)?;
     Ok(report)
+}
+
+fn write_component_report(
+    assembly_fasta: &str,
+    component_path: &Path,
+    min_shared_bases: usize,
+) -> io::Result<Vec<RaptorComponent>> {
+    let contigs = read_contigs_from_fasta(assembly_fasta)?;
+    let components = cluster_contigs_by_shared_sequence(&contigs, min_shared_bases);
+    if let Some(parent) = component_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = fs::File::create(component_path)?;
+    serde_json::to_writer_pretty(file, &components).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("failed to serialize component report: {err}"),
+        )
+    })?;
+    Ok(components)
+}
+
+fn read_contigs_from_fasta(path: &str) -> io::Result<Vec<Contig>> {
+    let mut reader = try_open_fasta(path)?;
+    let mut line = String::new();
+    let mut contigs = Vec::new();
+    let mut current_name: Option<String> = None;
+    let mut sequence = String::new();
+
+    loop {
+        line.clear();
+        let bytes = reader.read_line(&mut line)?;
+        if bytes == 0 {
+            break;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(header) = trimmed.strip_prefix('>') {
+            if current_name.take().is_some() {
+                contigs.push(Contig {
+                    id: contigs.len(),
+                    sequence: std::mem::take(&mut sequence),
+                    kmer_path: Vec::new(),
+                });
+            }
+            current_name = Some(header.to_string());
+        } else {
+            sequence.push_str(trimmed);
+        }
+    }
+
+    if current_name.is_some() {
+        contigs.push(Contig {
+            id: contigs.len(),
+            sequence,
+            kmer_path: Vec::new(),
+        });
+    }
+
+    Ok(contigs)
 }
 
 fn normalize_for_workflow(
@@ -231,7 +302,9 @@ mod tests {
                 .total_reads,
             1
         );
+        assert_eq!(report.component_count, 1);
         assert!(std::path::Path::new(&report.assembly_fasta).exists());
+        assert!(std::path::Path::new(&report.components_json).exists());
         assert!(output_dir.join("raptor_trinity_report.json").exists());
     }
 }

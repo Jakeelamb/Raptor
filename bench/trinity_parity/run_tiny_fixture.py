@@ -456,6 +456,11 @@ def run_one_fixture(
             "output_exists": workflow_fasta.exists(),
             "workflow_report": str(workflow_dir / "raptor_trinity_report.json"),
         }
+        workflow_report = workflow_dir / "raptor_trinity_report.json"
+        if workflow_report.exists():
+            workflow_payload = json.loads(workflow_report.read_text(encoding="utf-8"))
+            metrics["component_count"] = workflow_payload.get("component_count")
+            metrics["components_json"] = workflow_payload.get("components_json")
         if workflow_fasta.exists():
             lengths = read_fasta_lengths(workflow_fasta)
             metrics.update(
@@ -569,6 +574,8 @@ def check_report_thresholds(
         workflow_metrics = raptor_workflow.get("metrics", {})
         if not workflow_metrics.get("output_exists"):
             failures.append("raptor trinity workflow did not produce assembly output")
+        if workflow_metrics.get("component_count", 0) < 1:
+            failures.append("raptor trinity workflow did not emit transcript components")
         truth_recovery = workflow_metrics.get("truth_recovery", {})
         min_coverage = truth_recovery.get("min_best_coverage", 0.0)
         if min_coverage < min_truth_coverage:
@@ -610,23 +617,28 @@ def check_report_thresholds(
 
 
 def summarize_report(report: dict[str, object]) -> dict[str, object]:
-    metrics = report.get("raptor", {}).get("metrics", {})
-    normalize_metrics = report.get("raptor_normalize", {}).get("metrics", {})
-    workflow_metrics = report.get("raptor_workflow", {}).get("metrics", {})
-    trinity_result = report.get("trinity", {}).get("result", {})
+    raptor = report.get("raptor") or {}
+    raptor_normalize = report.get("raptor_normalize") or {}
+    raptor_workflow = report.get("raptor_workflow") or {}
+    trinity = report.get("trinity") or {}
+    metrics = raptor.get("metrics", {})
+    normalize_metrics = raptor_normalize.get("metrics", {})
+    workflow_metrics = raptor_workflow.get("metrics", {})
+    trinity_result = trinity.get("result", {})
     trinity_metrics = trinity_result.get("metrics", {})
     return {
         "insert": report["fixture"]["insert"],
         "paired_end_pairs": report["fixture"]["paired_end_pairs"],
         "report_path": report.get("report_path"),
-        "raptor_exit_code": report.get("raptor", {}).get("exit_code"),
-        "raptor_normalize_exit_code": report.get("raptor_normalize", {}).get("exit_code"),
+        "raptor_exit_code": raptor.get("exit_code"),
+        "raptor_normalize_exit_code": raptor_normalize.get("exit_code"),
         "normalized_kept_pairs": normalize_metrics.get("kept_pairs"),
         "normalized_kept_pair_fraction": normalize_metrics.get("kept_pair_fraction"),
         "assembled_from_normalized_reads": metrics.get("assembled_from_normalized_reads"),
-        "raptor_workflow_exit_code": report.get("raptor_workflow", {}).get("exit_code"),
+        "raptor_workflow_exit_code": raptor_workflow.get("exit_code"),
         "workflow_lengths": workflow_metrics.get("lengths"),
         "workflow_n50": workflow_metrics.get("n50"),
+        "workflow_component_count": workflow_metrics.get("component_count"),
         "workflow_truth_min_coverage": workflow_metrics.get("truth_recovery", {}).get(
             "min_best_coverage"
         ),
@@ -637,8 +649,8 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         "n50": metrics.get("n50"),
         "truth_min_coverage": metrics.get("truth_recovery", {}).get("min_best_coverage"),
         "oracle_min_coverage": metrics.get("oracle_recovery", {}).get("min_best_coverage"),
-        "trinity_available": report.get("trinity", {}).get("available"),
-        "trinity_ran": report.get("trinity", {}).get("ran"),
+        "trinity_available": trinity.get("available"),
+        "trinity_ran": trinity.get("ran"),
         "trinity_exit_code": trinity_result.get("exit_code"),
         "trinity_lengths": trinity_metrics.get("lengths"),
         "trinity_n50": trinity_metrics.get("n50"),
