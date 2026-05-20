@@ -1200,6 +1200,20 @@ def high_depth_normalization_transcripts() -> tuple[dict[str, str], dict[str, in
     return {"tx_high_depth": transcript}, {"tx_high_depth": 300}
 
 
+def high_depth_alt_isoform_transcripts() -> tuple[dict[str, str], dict[str, int]]:
+    exon_a = deterministic_dna("high_depth_shared_exon_a", 120)
+    exon_b = deterministic_dna("high_depth_dominant_exon_b", 96)
+    exon_alt = deterministic_dna("high_depth_alternative_exon", 84)
+    exon_c = deterministic_dna("high_depth_shared_exon_c", 120)
+
+    tx1 = exon_a + exon_b + exon_c
+    tx2 = exon_a + exon_alt + exon_c
+    return {"tx_high_depth_dominant": tx1, "tx_high_depth_alt": tx2}, {
+        "tx_high_depth_dominant": 260,
+        "tx_high_depth_alt": 180,
+    }
+
+
 def generate_fixture(out_dir: Path, fixture_name: str, insert: int) -> dict[str, object]:
     if fixture_name == "tiny_alt_isoform":
         transcripts, coverage = tiny_alt_isoform_transcripts()
@@ -1213,6 +1227,8 @@ def generate_fixture(out_dir: Path, fixture_name: str, insert: int) -> dict[str,
         transcripts, coverage = partial_antisense_overlap_transcripts()
     elif fixture_name == "high_depth_normalization":
         transcripts, coverage = high_depth_normalization_transcripts()
+    elif fixture_name == "high_depth_alt_isoform":
+        transcripts, coverage = high_depth_alt_isoform_transcripts()
     else:
         raise ValueError(f"unknown fixture: {fixture_name}")
     return write_fixture_files(out_dir, fixture_name, transcripts, insert, coverage)
@@ -2761,6 +2777,7 @@ def main() -> int:
             "antisense_overlap",
             "partial_antisense_overlap",
             "high_depth_normalization",
+            "high_depth_alt_isoform",
         ],
         default=DEFAULT_FIXTURE,
     )

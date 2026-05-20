@@ -16,6 +16,7 @@ gate across the current truth-known stress cases:
 - `antisense_overlap` at insert size `160`
 - `partial_antisense_overlap` at insert size `160`
 - `high_depth_normalization` at insert size `160`
+- `high_depth_alt_isoform` at insert size `160`
 
 Run the full candidate panel:
 
@@ -53,6 +54,11 @@ identity remains an explicit gap. The same fixture now assembles from
 Raptor-normalized reads and requires assembly FASTA F1 `0.95` against Trinity;
 current Raptor and Trinity outputs both recover one `900` bp transcript with
 assembly F1 `1.0`.
+
+`high_depth_alt_isoform` extends that normalized-output gate to two isoforms.
+At normalization target `200`, Raptor keeps `1006/2200` pairs and Trinity keeps
+`861/2200` pairs, retained-pair Jaccard is `0.270068`, and both tools recover
+`[336,324]` with assembly F1 `1.0`.
 
 If Trinity is installed on `PATH`, the same panel can also run Trinity:
 
