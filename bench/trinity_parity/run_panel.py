@@ -327,6 +327,7 @@ def fixture_summary(report_path: Path) -> dict[str, object]:
 
 
 def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, object]:
+    raptor = payload.get("raptor") or {}
     raptor_normalize = payload.get("raptor_normalize") or {}
     raptor_workflow = payload.get("raptor_workflow") or {}
     raptor_workflow_gpu = payload.get("raptor_workflow_gpu") or {}
@@ -344,6 +345,7 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
     comma_workflow_metrics = raptor_workflow_comma_lists.get("metrics", {})
     stranded_workflow_metrics = raptor_workflow_stranded_rf.get("metrics", {})
     malformed_metrics = malformed_fastq_check.get("metrics", {})
+    metrics = raptor.get("metrics", {})
     normalize_metrics = raptor_normalize.get("metrics", {})
     trinity = payload.get("trinity") or {}
     trinity_result = trinity.get("result", {})
@@ -543,6 +545,17 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
         "workflow_truth_min_coverage": workflow_metrics.get("truth_recovery", {}).get(
             "min_best_coverage"
         ),
+        "lengths": metrics.get("lengths"),
+        "truth_min_coverage": metrics.get("truth_recovery", {}).get("min_best_coverage"),
+        "raptor_trinity_assembly_precision": metrics.get(
+            "trinity_assembly_match", {}
+        ).get("precision"),
+        "raptor_trinity_assembly_recall": metrics.get(
+            "trinity_assembly_match", {}
+        ).get("recall"),
+        "raptor_trinity_assembly_f1": metrics.get("trinity_assembly_match", {}).get(
+            "f1"
+        ),
         "trinity_available": trinity.get("available"),
         "trinity_ran": trinity.get("ran"),
         "trinity_exit_code": trinity_result.get("exit_code"),
@@ -700,6 +713,11 @@ def run_fixture(
     )
     if min_trinity_selected_f1 is not None and (run_trinity or require_trinity):
         command.extend(["--min-trinity-selected-f1", str(min_trinity_selected_f1)])
+    min_trinity_assembly_f1 = fixture.get(
+        "min_trinity_assembly_f1", defaults.get("min_trinity_assembly_f1")
+    )
+    if min_trinity_assembly_f1 is not None and (run_trinity or require_trinity):
+        command.extend(["--min-trinity-assembly-f1", str(min_trinity_assembly_f1)])
     max_normalization_kept_pair_delta = fixture.get(
         "max_normalization_kept_pair_delta",
         defaults.get("max_normalization_kept_pair_delta"),

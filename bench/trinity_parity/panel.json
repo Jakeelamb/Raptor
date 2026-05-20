@@ -63,8 +63,11 @@
       "run_raptor_workflow_comma_lists": false,
       "run_raptor_workflow_stranded_rf": false,
       "run_malformed_fastq_checks": false,
+      "skip_raptor": false,
+      "assemble_normalized": true,
       "normalize_coverage_target": 200,
       "max_normalization_kept_pair_delta": 0.02,
+      "min_trinity_assembly_f1": 0.95,
       "description": "High-depth single-transcript fixture for forcing normalization to reduce paired reads."
     }
   ]

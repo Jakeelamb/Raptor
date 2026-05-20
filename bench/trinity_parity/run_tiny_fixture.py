@@ -1466,6 +1466,30 @@ def add_raptor_trinity_workflow_comparison(
     )
 
 
+def add_raptor_trinity_assembly_comparison(
+    report: dict[str, object], min_match_coverage: float
+) -> None:
+    raptor = report.get("raptor") or {}
+    trinity = report.get("trinity") or {}
+    raptor_metrics = raptor.get("metrics", {})
+    trinity_result = trinity.get("result", {})
+    trinity_metrics = trinity_result.get("metrics", {})
+    raptor_fasta = raptor_metrics.get("output_fasta")
+    trinity_fasta = trinity_metrics.get("output_fasta")
+    if not raptor_fasta or not trinity_fasta:
+        return
+    raptor_path = Path(raptor_fasta)
+    trinity_path = Path(trinity_fasta)
+    if not raptor_path.exists() or not trinity_path.exists():
+        return
+    raptor_metrics["trinity_assembly_match"] = fasta_precision_recall_metrics(
+        trinity_path, raptor_path, min_match_coverage
+    )
+    trinity_metrics["raptor_assembly_match"] = fasta_precision_recall_metrics(
+        raptor_path, trinity_path, min_match_coverage
+    )
+
+
 def run_malformed_fastq_check(out_dir: Path, fixture: dict[str, object]) -> dict[str, object]:
     malformed_dir = out_dir / "malformed_fastq_check"
     malformed_dir.mkdir(parents=True, exist_ok=True)
@@ -1642,6 +1666,7 @@ def run_one_fixture(
         result = run_command(command, ROOT)
         metrics = {
             "output_exists": output_fasta.exists(),
+            "output_fasta": str(output_fasta),
             "output_fasta_bytes": file_size_bytes(output_fasta),
             "output_dir_footprint": directory_footprint(output_fasta.parent),
             "assembled_from_normalized_reads": assemble_normalized and normalize_raptor,
@@ -1782,6 +1807,7 @@ def run_one_fixture(
             report["trinity"]["result"] = result
 
     add_raptor_trinity_workflow_comparison(report, min_match_coverage)
+    add_raptor_trinity_assembly_comparison(report, min_match_coverage)
 
     report_path = out_dir / "report.json"
     write_text(report_path, json.dumps(report, indent=2) + "\n")
@@ -1796,6 +1822,7 @@ def check_report_thresholds(
     min_selected_precision: float,
     min_selected_f1: float,
     min_trinity_selected_f1: float | None,
+    min_trinity_assembly_f1: float | None,
     max_normalization_kept_pair_delta: float | None,
 ) -> list[str]:
     failures: list[str] = []
@@ -2206,6 +2233,16 @@ def check_report_thresholds(
         return failures
 
     metrics = raptor.get("metrics", {})
+    if min_trinity_assembly_f1 is not None:
+        trinity_match = metrics.get("trinity_assembly_match")
+        if not trinity_match:
+            failures.append("Raptor-vs-Trinity assembly comparison is missing")
+        else:
+            trinity_f1 = trinity_match.get("f1", 0.0)
+            if trinity_f1 < min_trinity_assembly_f1:
+                failures.append(
+                    f"Raptor-vs-Trinity assembly F1 below threshold: {trinity_f1} < {min_trinity_assembly_f1}"
+                )
     truth_recovery = metrics.get("truth_recovery", {})
     min_coverage = truth_recovery.get("min_best_coverage", 0.0)
     if min_coverage < min_truth_coverage:
@@ -2625,6 +2662,15 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         "n50": metrics.get("n50"),
         "truth_min_coverage": metrics.get("truth_recovery", {}).get("min_best_coverage"),
         "oracle_min_coverage": metrics.get("oracle_recovery", {}).get("min_best_coverage"),
+        "raptor_trinity_assembly_precision": metrics.get(
+            "trinity_assembly_match", {}
+        ).get("precision"),
+        "raptor_trinity_assembly_recall": metrics.get(
+            "trinity_assembly_match", {}
+        ).get("recall"),
+        "raptor_trinity_assembly_f1": metrics.get("trinity_assembly_match", {}).get(
+            "f1"
+        ),
         "trinity_available": trinity.get("available"),
         "trinity_ran": trinity.get("ran"),
         "trinity_exit_code": trinity_result.get("exit_code"),
@@ -2690,6 +2736,15 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         ).get("recall"),
         "trinity_raptor_selected_f1": trinity_metrics.get(
             "raptor_selected_isoform_match", {}
+        ).get("f1"),
+        "trinity_raptor_assembly_precision": trinity_metrics.get(
+            "raptor_assembly_match", {}
+        ).get("precision"),
+        "trinity_raptor_assembly_recall": trinity_metrics.get(
+            "raptor_assembly_match", {}
+        ).get("recall"),
+        "trinity_raptor_assembly_f1": trinity_metrics.get(
+            "raptor_assembly_match", {}
         ).get("f1"),
     }
 
@@ -2816,6 +2871,12 @@ def main() -> int:
         help="Optional minimum selected isoform F1 between Raptor workflow output and Trinity output",
     )
     parser.add_argument(
+        "--min-trinity-assembly-f1",
+        type=float,
+        default=None,
+        help="Optional minimum assembly FASTA F1 between Raptor assemble output and Trinity output",
+    )
+    parser.add_argument(
         "--max-normalization-kept-pair-delta",
         type=float,
         default=None,
@@ -2875,6 +2936,7 @@ def main() -> int:
                 args.min_selected_precision,
                 args.min_selected_f1,
                 args.min_trinity_selected_f1,
+                args.min_trinity_assembly_f1,
                 args.max_normalization_kept_pair_delta,
             )
         )
