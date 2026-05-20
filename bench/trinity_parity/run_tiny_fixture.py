@@ -129,6 +129,12 @@ def component_graph_metrics(path: Path) -> dict[str, object]:
         "component_graph_edge_observed_kmers": sum(
             int(edge.get("shared_observed_kmer_count", 0)) for edge in edges
         ),
+        "component_graph_read_kmer_node_count": sum(
+            int(graph.get("read_kmer_node_count", 0)) for graph in graphs
+        ),
+        "component_graph_read_kmer_edge_count": sum(
+            int(graph.get("read_kmer_edge_count", 0)) for graph in graphs
+        ),
     }
 
 
@@ -638,6 +644,10 @@ def check_report_thresholds(
             failures.append("raptor trinity workflow component graph edges lack pair support")
         if workflow_metrics.get("component_graph_edge_observed_kmers", 0) < 1:
             failures.append("raptor trinity workflow component graph edges lack observed k-mer support")
+        if workflow_metrics.get("component_graph_read_kmer_node_count", 0) < 1:
+            failures.append("raptor trinity workflow component graphs lack read k-mer nodes")
+        if workflow_metrics.get("component_graph_read_kmer_edge_count", 0) < 1:
+            failures.append("raptor trinity workflow component graphs lack read k-mer edges")
         if workflow_metrics.get("component_assigned_read_count", 0) < 1:
             failures.append("raptor trinity workflow did not assign reads to components")
         if workflow_metrics.get("component_assigned_pair_count", 0) < 1:
@@ -716,6 +726,12 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         ),
         "workflow_component_graph_edge_observed_kmers": workflow_metrics.get(
             "component_graph_edge_observed_kmers"
+        ),
+        "workflow_component_graph_read_kmer_nodes": workflow_metrics.get(
+            "component_graph_read_kmer_node_count"
+        ),
+        "workflow_component_graph_read_kmer_edges": workflow_metrics.get(
+            "component_graph_read_kmer_edge_count"
         ),
         "workflow_component_assigned_reads": workflow_metrics.get(
             "component_assigned_read_count"
