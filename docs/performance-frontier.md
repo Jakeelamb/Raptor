@@ -16,63 +16,65 @@ Command shape:
 python3 bench/trinity_parity/run_public_panel.py \
   --dataset trinity_source_test_assembly \
   --timeout-seconds 180 \
-  --out-root target/trinity_parity/public_panel_oriented_boundary_probe
+  --out-root target/trinity_parity/public_panel_minabund1_probe
 
 python3 bench/trinity_parity/run_public_panel.py \
   --dataset trinity_source_test_assembly \
   --skip-raptor \
   --run-trinity \
   --timeout-seconds 120 \
-  --out-root target/trinity_parity/public_panel_oriented_boundary_probe
+  --out-root target/trinity_parity/public_panel_minabund1_probe \
+  --report target/trinity_parity/public_panel_minabund1_probe/trinity_rerun_report.json
 ```
 
 Current Raptor output:
 
 | Metric | Value |
 | --- | ---: |
-| Contigs | 30 |
-| Total bases | 96,750 |
-| N50 | 5,379 bp |
-| Max length | 8,756 bp |
-| Contigs >=1kb | 22 |
-| Bases >=1kb | 93,247 |
-| App-level workflow elapsed | 1.14 s |
-| Harness wall time with release compile | 18.51 s |
+| Contigs | 41 |
+| Total bases | 115,862 |
+| N50 | 5,381 bp |
+| Max length | 8,723 bp |
+| Contigs >=1kb | 26 |
+| Bases >=1kb | 110,026 |
+| Normalized kept pairs | 30,258 / 30,575 |
+| Harness wall time with release compile | 19.72 s |
 
 Trinity in the same output root emits 74 transcripts, 149,325 bases, N50 5,399
 bp, and max length 8,973 bp.
 
-Strict parity still fails. Reciprocal FASTA F1 is 0.019231 at the frozen 0.95
+Strict parity still fails. Reciprocal FASTA F1 is 0.052174 at the frozen 0.95
 coverage threshold, far below the required 0.9. The best observed reciprocal
-coverage remains 0.999886 for one nearly full-length match, while the next
-public boundary miss remains 0.917342. The current problem is still transcript
-selection and boundary accuracy, not gross contiguity or raw speed.
+coverage is now 0.989275, with three strict near-full-length matches. The
+current problem is still transcript selection and boundary accuracy, but the
+latest measured blocker was workflow normalization discarding low-abundance
+public transcript evidence.
 
 Current diagnostic threshold sweep:
 
 | Min coverage | Raptor matches | Trinity matches | F1 |
 | --- | ---: | ---: | ---: |
-| 0.900 | 2 / 30 | 2 / 74 | 0.038462 |
-| 0.925 | 1 / 30 | 1 / 74 | 0.019231 |
-| 0.950 | 1 / 30 | 1 / 74 | 0.019231 |
-| 0.975 | 1 / 30 | 1 / 74 | 0.019231 |
+| 0.900 | 4 / 41 | 4 / 74 | 0.069565 |
+| 0.925 | 3 / 41 | 3 / 74 | 0.052174 |
+| 0.950 | 3 / 41 | 3 / 74 | 0.052174 |
+| 0.975 | 2 / 41 | 2 / 74 | 0.034783 |
 
 Against Trinity's `inchworm.DS.fa`, Raptor's current contigs have stronger
 stage-level overlap:
 
 | Min coverage | Raptor matches | Trinity Inchworm matches | F1 |
 | --- | ---: | ---: | ---: |
-| 0.900 | 2 / 30 | 2 / 1,275 | 0.003066 |
-| 0.925 | 1 / 30 | 1 / 1,275 | 0.001532 |
-| 0.950 | 1 / 30 | 1 / 1,275 | 0.001532 |
-| 0.975 | 1 / 30 | 1 / 1,275 | 0.001532 |
+| 0.900 | 5 / 41 | 4 / 1,275 | 0.006117 |
+| 0.925 | 5 / 41 | 4 / 1,275 | 0.006117 |
+| 0.950 | 4 / 41 | 4 / 1,275 | 0.006079 |
+| 0.975 | 3 / 41 | 3 / 1,275 | 0.004559 |
 
-Interpretation: the oriented k-mer fallback now extends contig boundaries inside
-the same oriented k-mer graph before ranking adaptive-k and Trinity-style k=25
-candidates. This makes the public output much more Trinity-scale by contiguity
-and slightly improves final FASTA F1, but it still leaves most public
-transcripts unmatched. The next blocker is path selection/isoform reconstruction
-across Chrysalis/Butterfly-style stages, not raw contig length alone.
+Interpretation: the oriented k-mer fallback still provides Trinity-scale
+contiguity, and workflow normalization now keeps singleton-abundance public
+reads instead of deleting them up front. That moves final FASTA F1 from
+0.019231 to 0.052174. The next blocker remains path selection/isoform
+reconstruction across Chrysalis/Butterfly-style stages; normalization was a
+measured evidence-loss bug, not the whole problem.
 
 ## Accepted Changes
 
@@ -86,6 +88,7 @@ across Chrysalis/Butterfly-style stages, not raw contig length alone.
 | Adaptive oriented k plus Trinity-style k=25 candidate selection | Public final FASTA F1 moved from 0.0 to 0.018868 at 0.95 coverage; output is 30 contigs, N50 3,580, max 8,756 | Kept |
 | Oriented graph boundary extension | Public output improved to 30 contigs, 96,750 bases, N50 5,379; final FASTA F1 moved to 0.019231 | Current frontier |
 | Component artifact cap above 20,000 contig bases | Lets public oriented-contig output finish and be scored while full graph artifacts remain expensive | Kept as a bounded reporting guard |
+| Trinity workflow normalization `--min-abundance` default lowered to 1 | Public normalized kept pairs improved from 23,898/30,575 to 30,258/30,575; final FASTA F1 moved to 0.052174 with 3 strict matches | Current frontier |
 
 ## Limited Or Negative Results
 
@@ -109,6 +112,9 @@ across Chrysalis/Butterfly-style stages, not raw contig length alone.
   frontier until path selection has a stronger evidence model.
 - Full component graph artifact generation is not yet public-scale. Current
   caps are honest bounded-reporting guards, not a Chrysalis parity solution.
+- Public runner scoring must require a real Raptor-vs-Trinity comparison. A
+  run with missing Trinity FASTA now fails the F1 gate instead of reporting a
+  false pass.
 
 ## Boundary Diagnostics
 

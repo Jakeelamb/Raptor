@@ -399,6 +399,8 @@ def run_dataset(
         "trinity_fasta": fasta_stats(trinity_fasta),
         "trinity_inchworm_fasta": fasta_stats(trinity_inchworm_fasta),
     }
+    if min_fasta_f1 is not None:
+        metrics["min_raptor_vs_trinity_selected_f1"] = min_fasta_f1
     if raptor_fasta.exists() and trinity_fasta.exists():
         metrics["raptor_trinity_fasta_match"] = reciprocal_fasta_metrics(
             raptor_fasta,
@@ -410,7 +412,6 @@ def run_dataset(
             trinity_fasta,
             coverage_sweep,
         )
-        metrics["min_raptor_vs_trinity_selected_f1"] = min_fasta_f1
     if raptor_fasta.exists() and trinity_inchworm_fasta.exists():
         metrics["raptor_trinity_inchworm_fasta_match"] = reciprocal_fasta_metrics(
             raptor_fasta,
@@ -524,6 +525,10 @@ def main() -> int:
                     failures.append(
                         f"{result['id']}: Raptor-vs-Trinity FASTA F1 {f1} < {float(min_f1)}"
                     )
+            elif isinstance(min_f1, (int, float)):
+                failures.append(
+                    f"{result['id']}: missing Raptor-vs-Trinity FASTA comparison for F1 gate"
+                )
     report = {
         "manifest": plan["manifest"],
         "status": plan["status"],

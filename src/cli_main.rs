@@ -665,6 +665,10 @@ pub enum Commands {
         #[arg(long, default_value_t = 500)]
         coverage_target: usize,
 
+        /// Minimum median k-mer abundance retained during workflow normalization
+        #[arg(long, default_value_t = 1)]
+        min_abundance: u16,
+
         /// Maximum reads or read pairs to process during normalization
         #[arg(long, default_value_t = 5_000_000)]
         max_reads: usize,

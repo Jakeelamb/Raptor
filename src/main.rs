@@ -125,6 +125,7 @@ fn main() {
             no_normalize,
             gpu,
             coverage_target,
+            min_abundance,
             max_reads,
             min_len,
         } => {
@@ -150,6 +151,7 @@ fn main() {
                 normalize: !no_normalize,
                 normalize_config: pipeline::normalize::NormalizeConfig {
                     target_coverage,
+                    min_abundance,
                     max_reads: Some(max_reads),
                     use_gpu: gpu,
                     ..pipeline::normalize::NormalizeConfig::default()
