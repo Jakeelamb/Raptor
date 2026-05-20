@@ -141,9 +141,15 @@ pub fn should_keep_read_pair_with_scratch(
     scratch_r1: &mut Vec<u16>,
     scratch_r2: &mut Vec<u16>,
 ) -> bool {
-    // Keep a pair only if both reads should be kept
-    should_keep_read_with_scratch(r1, cms, k, target, min_abund, scratch_r1)
-        && should_keep_read_with_scratch(r2, cms, k, target, min_abund, scratch_r2)
+    let paired_target = paired_effective_target(target);
+    should_keep_read_with_scratch(r1, cms, k, paired_target, min_abund, scratch_r1)
+        && should_keep_read_with_scratch(r2, cms, k, paired_target, min_abund, scratch_r2)
+}
+
+#[inline]
+fn paired_effective_target(target: u16) -> u16 {
+    let scaled = (u32::from(target) * 7).div_ceil(8);
+    scaled.clamp(1, u32::from(u16::MAX)) as u16
 }
 
 #[inline]
@@ -329,5 +335,29 @@ mod tests {
             &mut scratch_r2,
         );
         assert_eq!(observed, baseline);
+    }
+
+    #[test]
+    fn paired_normalization_uses_conservative_effective_target() {
+        let sequence = "TGCATGCATGCATGCATGCATGCATGCA";
+        let cms = build_cms_with_depth(sequence, 7, 4, 100);
+        let target = 40;
+        let min_abund = 2;
+        let mut paired_kept = 0usize;
+        let mut single_kept = 0usize;
+        let total = 2000usize;
+
+        for i in 0..total {
+            let r1 = build_record(&format!("@read_{i}/1"), sequence);
+            let r2 = build_record(&format!("@read_{i}/2"), sequence);
+            if should_keep_read(&r1, &cms, 7, target, min_abund) {
+                single_kept += 1;
+            }
+            if should_keep_read_pair(&r1, &r2, &cms, 7, target, min_abund) {
+                paired_kept += 1;
+            }
+        }
+
+        assert!(paired_kept < single_kept);
     }
 }

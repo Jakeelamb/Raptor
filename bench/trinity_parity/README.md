@@ -44,9 +44,9 @@ The panel also runs Raptor paired-read normalization and, when Trinity is
 enabled, records Trinity's `insilico_read_normalization` kept-pair counts. The
 small fixtures require exact normalized kept-pair retention. The
 `high_depth_normalization` fixture forces read reduction with a Raptor
-normalization target of `200`; current measured retention is Raptor `2262/5100`
+normalization target of `200`; current measured retention is Raptor `1703/5100`
 pairs and Trinity `1697/5100` pairs, so the candidate gate allows kept-pair
-fraction delta up to `0.12`. This is a tracked gap, not finished normalization
+fraction delta up to `0.02`. This is a retention-count gate, not finished normalization
 parity.
 
 If Trinity is installed on `PATH`, the same panel can also run Trinity:

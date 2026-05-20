@@ -64,7 +64,7 @@
       "run_raptor_workflow_stranded_rf": false,
       "run_malformed_fastq_checks": false,
       "normalize_coverage_target": 200,
-      "max_normalization_kept_pair_delta": 0.12,
+      "max_normalization_kept_pair_delta": 0.02,
       "description": "High-depth single-transcript fixture for forcing normalization to reduce paired reads."
     }
   ]
