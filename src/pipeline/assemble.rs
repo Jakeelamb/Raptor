@@ -756,15 +756,20 @@ fn assemble_read_overlap_contigs(sequences: &[String], min_len: usize) -> Vec<Co
     }
 
     let min_overlap = (min_read_len / 3).max(8).min(min_read_len - 1);
+    let prefix_index = build_read_prefix_index(&reads, min_overlap, min_read_len);
     let mut successors: Vec<Vec<(usize, usize)>> = vec![Vec::new(); reads.len()];
     let mut predecessors: Vec<Vec<(usize, usize)>> = vec![Vec::new(); reads.len()];
 
     for (left_idx, left) in reads.iter().enumerate() {
-        for (right_idx, right) in reads.iter().enumerate() {
-            if left_idx == right_idx {
+        for overlap in (min_overlap..=left.len().min(min_read_len)).rev() {
+            let suffix = &left[left.len() - overlap..];
+            let Some(candidates) = prefix_index.get(suffix) else {
                 continue;
-            }
-            if let Some(overlap) = exact_suffix_prefix_overlap(left, right, min_overlap) {
+            };
+            for &right_idx in candidates {
+                if left_idx == right_idx {
+                    continue;
+                }
                 successors[left_idx].push((right_idx, overlap));
                 predecessors[right_idx].push((left_idx, overlap));
             }
@@ -808,6 +813,21 @@ fn assemble_read_overlap_contigs(sequences: &[String], min_len: usize) -> Vec<Co
         }
     }
     contigs
+}
+
+fn build_read_prefix_index<'a>(
+    reads: &[&'a str],
+    min_overlap: usize,
+    max_overlap: usize,
+) -> AHashMap<&'a str, Vec<usize>> {
+    let mut index: AHashMap<&'a str, Vec<usize>> = AHashMap::new();
+    for (idx, read) in reads.iter().enumerate() {
+        let upper = read.len().min(max_overlap);
+        for overlap in min_overlap..=upper {
+            index.entry(&read[..overlap]).or_default().push(idx);
+        }
+    }
+    index
 }
 
 #[inline]
@@ -1909,7 +1929,7 @@ mod tests {
     use super::{
         assemble_read_overlap_contigs, assemble_reads_with_gpu, canonical_sequence_key,
         canonicalize_contig_output_order, derive_contig_expression_map, estimate_sequence_capacity,
-        maybe_rescue_fragmented_contigs_with_read_overlaps, sequence_only_record,
+        build_read_prefix_index, maybe_rescue_fragmented_contigs_with_read_overlaps, sequence_only_record,
         split_contigs_at_paired_start_gaps, summarize_assembly_quality,
         write_assembly_quality_reports, AssemblyQualitySummary,
     };
@@ -2141,6 +2161,15 @@ mod tests {
             longest > reads[0].len(),
             "overlap rescue should extend beyond a single read, got longest={longest}"
         );
+    }
+
+    #[test]
+    fn read_prefix_index_finds_exact_suffix_prefix_candidates() {
+        let reads = vec!["AAACCC", "CCCGGG", "GGGTTT"];
+        let index = build_read_prefix_index(&reads, 3, 6);
+        assert_eq!(index.get("CCC").cloned().unwrap_or_default(), vec![1]);
+        assert_eq!(index.get("GGG").cloned().unwrap_or_default(), vec![2]);
+        assert!(index.get("TTT").is_none());
     }
 
     #[test]
