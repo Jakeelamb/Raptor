@@ -330,10 +330,12 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
     raptor_workflow = payload.get("raptor_workflow") or {}
     raptor_workflow_gpu = payload.get("raptor_workflow_gpu") or {}
     raptor_workflow_single = payload.get("raptor_workflow_single") or {}
+    raptor_workflow_samples_file = payload.get("raptor_workflow_samples_file") or {}
     malformed_fastq_check = payload.get("malformed_fastq_check") or {}
     workflow_metrics = raptor_workflow.get("metrics", {})
     gpu_workflow_metrics = raptor_workflow_gpu.get("metrics", {})
     single_workflow_metrics = raptor_workflow_single.get("metrics", {})
+    samples_workflow_metrics = raptor_workflow_samples_file.get("metrics", {})
     malformed_metrics = malformed_fastq_check.get("metrics", {})
     trinity = payload.get("trinity") or {}
     trinity_result = trinity.get("result", {})
@@ -341,6 +343,7 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
     workflow_resources = raptor_workflow.get("resource_usage", {})
     gpu_workflow_resources = raptor_workflow_gpu.get("resource_usage", {})
     single_workflow_resources = raptor_workflow_single.get("resource_usage", {})
+    samples_workflow_resources = raptor_workflow_samples_file.get("resource_usage", {})
     trinity_resources = trinity_result.get("resource_usage", {})
     workflow_gpu = raptor_workflow.get("gpu_usage", {})
     gpu_workflow_gpu = raptor_workflow_gpu.get("gpu_usage", {})
@@ -399,6 +402,22 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
             "component_selected_truth_precision", {}
         ).get("f1"),
         "raptor_single_workflow_selected_isoform_lengths": single_workflow_metrics.get(
+            "component_selected_isoform_lengths"
+        ),
+        "raptor_samples_file_workflow_exit_code": raptor_workflow_samples_file.get("exit_code"),
+        "raptor_samples_file_workflow_elapsed_seconds": raptor_workflow_samples_file.get(
+            "elapsed_seconds"
+        ),
+        "raptor_samples_file_workflow_max_rss_kb": samples_workflow_resources.get("max_rss_kb"),
+        "raptor_samples_file_workflow_input_mode": samples_workflow_metrics.get("input_mode"),
+        "raptor_samples_file_workflow_sample_count": samples_workflow_metrics.get("sample_count"),
+        "raptor_samples_file_workflow_selected_precision": samples_workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("precision"),
+        "raptor_samples_file_workflow_selected_f1": samples_workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("f1"),
+        "raptor_samples_file_workflow_selected_isoform_lengths": samples_workflow_metrics.get(
             "component_selected_isoform_lengths"
         ),
         "malformed_fastq_exit_code": malformed_fastq_check.get("exit_code"),
@@ -498,6 +517,12 @@ def run_fixture(
             defaults.get("run_malformed_fastq_checks", False),
         )
     )
+    run_raptor_workflow_samples_file = bool(
+        fixture.get(
+            "run_raptor_workflow_samples_file",
+            defaults.get("run_raptor_workflow_samples_file", False),
+        )
+    )
     skip_raptor = bool(fixture.get("skip_raptor", defaults.get("skip_raptor", True)))
     command = [
         sys.executable,
@@ -523,6 +548,8 @@ def run_fixture(
         command.append("--run-raptor-workflow-gpu")
     if run_raptor_workflow_single:
         command.append("--run-raptor-workflow-single")
+    if run_raptor_workflow_samples_file:
+        command.append("--run-raptor-workflow-samples-file")
     if run_malformed_fastq_checks:
         command.append("--run-malformed-fastq-checks")
     if skip_raptor:

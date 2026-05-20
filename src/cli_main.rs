@@ -627,11 +627,15 @@ pub enum Commands {
     Trinity {
         /// Input read 1 FASTQ(.gz)
         #[arg(short = '1', long)]
-        input1: String,
+        input1: Option<String>,
 
         /// Optional input read 2 FASTQ(.gz)
         #[arg(short = '2', long)]
         input2: Option<String>,
+
+        /// Trinity-style tab-delimited sample file: condition replicate left [right]
+        #[arg(long)]
+        samples_file: Option<String>,
 
         /// Output directory for normalized reads, assembly, and report
         #[arg(short, long)]

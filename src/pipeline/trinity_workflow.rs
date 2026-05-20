@@ -4,7 +4,7 @@ use crate::graph::partition::{
     cluster_contigs_by_sequence_or_read_kmers, RaptorComponent, RaptorComponentGraph,
 };
 use crate::io::fasta::try_open_fasta;
-use crate::io::fastq::{stream_fastq_records_checked, try_open_fastq};
+use crate::io::fastq::{stream_fastq_records_checked, try_open_fastq, FastqWriter};
 use crate::kmer::kmer::reverse_complement;
 use crate::pipeline::assemble::assemble_reads_with_gpu;
 use crate::pipeline::normalize::{
@@ -22,8 +22,9 @@ const COMPONENT_CONTIG_SELECTION_METHOD: &str = "component_contig_evidence_score
 
 #[derive(Debug, Clone)]
 pub struct TrinityWorkflowConfig {
-    pub input1: String,
+    pub input1: Option<String>,
     pub input2: Option<String>,
+    pub samples_file: Option<String>,
     pub output_dir: String,
     pub output_fasta: Option<String>,
     pub report_json: Option<String>,
@@ -38,6 +39,8 @@ pub struct TrinityWorkflowReport {
     pub workflow: &'static str,
     pub input1: String,
     pub input2: Option<String>,
+    pub samples_file: Option<String>,
+    pub sample_count: usize,
     pub output_dir: String,
     pub normalized: bool,
     pub normalized_input1: Option<String>,
@@ -74,10 +77,21 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
         fs::create_dir_all(parent)?;
     }
 
+    let resolved_inputs = resolve_workflow_inputs(&config, &output_dir)?;
+
     let (assembly_input1, assembly_input2, normalization) = if config.normalize {
-        normalize_for_workflow(&config, &output_dir)?
+        normalize_for_workflow(
+            &resolved_inputs.input1,
+            resolved_inputs.input2.as_deref(),
+            &config,
+            &output_dir,
+        )?
     } else {
-        (config.input1.clone(), config.input2.clone(), None)
+        (
+            resolved_inputs.input1.clone(),
+            resolved_inputs.input2.clone(),
+            None,
+        )
     };
 
     assemble_reads_with_gpu(
@@ -141,8 +155,10 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
 
     let report = TrinityWorkflowReport {
         workflow: "raptor_trinity_de_novo",
-        input1: config.input1,
-        input2: config.input2,
+        input1: resolved_inputs.input1,
+        input2: resolved_inputs.input2,
+        samples_file: config.samples_file,
+        sample_count: resolved_inputs.sample_count,
         output_dir: config.output_dir,
         normalized: config.normalize,
         normalized_input1: if config.normalize {
@@ -183,6 +199,21 @@ struct ComponentArtifacts {
     components: Vec<RaptorComponent>,
     component_graphs: Vec<RaptorComponentGraph>,
     clustering: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TrinitySampleInput {
+    condition: String,
+    replicate: String,
+    left: String,
+    right: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedWorkflowInputs {
+    input1: String,
+    input2: Option<String>,
+    sample_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -719,15 +750,162 @@ fn read_contigs_from_fasta(path: &str) -> io::Result<Vec<Contig>> {
     Ok(contigs)
 }
 
+fn resolve_workflow_inputs(
+    config: &TrinityWorkflowConfig,
+    output_dir: &Path,
+) -> io::Result<ResolvedWorkflowInputs> {
+    if let Some(samples_file) = &config.samples_file {
+        if config.input1.is_some() || config.input2.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--samples-file cannot be combined with --input1/--input2",
+            ));
+        }
+        let samples = read_samples_file(samples_file)?;
+        return materialize_sample_inputs(&samples, output_dir);
+    }
+
+    let Some(input1) = &config.input1 else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "raptor trinity requires --input1 or --samples-file",
+        ));
+    };
+    Ok(ResolvedWorkflowInputs {
+        input1: input1.clone(),
+        input2: config.input2.clone(),
+        sample_count: 1,
+    })
+}
+
+fn read_samples_file(path: &str) -> io::Result<Vec<TrinitySampleInput>> {
+    let file = fs::File::open(path)?;
+    let reader = io::BufReader::new(file);
+    let mut samples = Vec::new();
+    for (line_idx, line) in reader.lines().enumerate() {
+        let line = line?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<&str> = if trimmed.contains('\t') {
+            trimmed.split('\t').collect()
+        } else {
+            trimmed.split(',').collect()
+        };
+        let fields: Vec<&str> = fields
+            .into_iter()
+            .map(str::trim)
+            .filter(|field| !field.is_empty())
+            .collect();
+        if fields.len() < 3 || fields.len() > 4 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "samples file line {}: expected condition replicate left [right], got {} field(s)",
+                    line_idx + 1,
+                    fields.len()
+                ),
+            ));
+        }
+        if samples.is_empty()
+            && fields[0].eq_ignore_ascii_case("condition")
+            && fields[1].eq_ignore_ascii_case("replicate")
+        {
+            continue;
+        }
+        samples.push(TrinitySampleInput {
+            condition: fields[0].to_string(),
+            replicate: fields[1].to_string(),
+            left: fields[2].to_string(),
+            right: fields.get(3).map(|field| field.to_string()),
+        });
+    }
+    if samples.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "samples file did not contain any input rows",
+        ));
+    }
+    let paired = samples[0].right.is_some();
+    if samples
+        .iter()
+        .any(|sample| sample.right.is_some() != paired)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "samples file cannot mix single-end and paired-end rows",
+        ));
+    }
+    Ok(samples)
+}
+
+fn materialize_sample_inputs(
+    samples: &[TrinitySampleInput],
+    output_dir: &Path,
+) -> io::Result<ResolvedWorkflowInputs> {
+    if samples.len() == 1 {
+        return Ok(ResolvedWorkflowInputs {
+            input1: samples[0].left.clone(),
+            input2: samples[0].right.clone(),
+            sample_count: 1,
+        });
+    }
+
+    let merged_left = output_dir.join("samples_file_left.fastq.gz");
+    let merged_left_str = path_to_str(&merged_left)?.to_string();
+    let mut left_writer = FastqWriter::try_new(&merged_left_str)?;
+    let mut right_writer = if samples[0].right.is_some() {
+        let merged_right = output_dir.join("samples_file_right.fastq.gz");
+        let merged_right_str = path_to_str(&merged_right)?.to_string();
+        Some((
+            merged_right_str,
+            FastqWriter::try_new(path_to_str(&merged_right)?)?,
+        ))
+    } else {
+        None
+    };
+
+    for sample in samples {
+        copy_fastq_records(&sample.left, &mut left_writer)?;
+        match (&sample.right, &mut right_writer) {
+            (Some(right), Some((_, writer))) => copy_fastq_records(right, writer)?,
+            (None, None) => {}
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "samples file cannot mix single-end and paired-end rows",
+                ));
+            }
+        }
+    }
+
+    Ok(ResolvedWorkflowInputs {
+        input1: merged_left_str,
+        input2: right_writer.map(|(path, _)| path),
+        sample_count: samples.len(),
+    })
+}
+
+fn copy_fastq_records(path: &str, writer: &mut FastqWriter) -> io::Result<()> {
+    let reader = try_open_fastq(path)?;
+    for record in stream_fastq_records_checked(reader) {
+        writer.write_record(&record?)?;
+    }
+    Ok(())
+}
+
 fn normalize_for_workflow(
+    input1: &str,
+    input2: Option<&str>,
     config: &TrinityWorkflowConfig,
     output_dir: &Path,
 ) -> io::Result<(String, Option<String>, Option<NormalizeSummary>)> {
     let prefix = output_dir.join("normalized_reads");
     let prefix_str = path_to_str(&prefix)?;
-    if let Some(input2) = &config.input2 {
+    if let Some(input2) = input2 {
         let summary = normalize_paired_with_config(
-            &config.input1,
+            input1,
             input2,
             prefix_str,
             config.normalize_config,
@@ -739,12 +917,8 @@ fn normalize_for_workflow(
             Some(summary),
         ))
     } else {
-        let summary = normalize_single_with_config(
-            &config.input1,
-            prefix_str,
-            config.normalize_config,
-            true,
-        )?;
+        let summary =
+            normalize_single_with_config(input1, prefix_str, config.normalize_config, true)?;
         Ok((format!("{prefix_str}.fastq.gz"), None, Some(summary)))
     }
 }
@@ -799,8 +973,9 @@ mod tests {
 
         let output_dir = temp_dir.path().join("workflow");
         let report = run_trinity_workflow(TrinityWorkflowConfig {
-            input1: r1.to_string_lossy().into_owned(),
+            input1: Some(r1.to_string_lossy().into_owned()),
             input2: Some(r2.to_string_lossy().into_owned()),
+            samples_file: None,
             output_dir: output_dir.to_string_lossy().into_owned(),
             output_fasta: None,
             report_json: None,
@@ -891,8 +1066,9 @@ mod tests {
 
         let output_dir = temp_dir.path().join("workflow_single");
         let report = run_trinity_workflow(TrinityWorkflowConfig {
-            input1: r1.to_string_lossy().into_owned(),
+            input1: Some(r1.to_string_lossy().into_owned()),
             input2: None,
+            samples_file: None,
             output_dir: output_dir.to_string_lossy().into_owned(),
             output_fasta: None,
             report_json: None,
@@ -923,5 +1099,58 @@ mod tests {
                 .expect("direct read support")
                 >= 1
         );
+    }
+
+    #[test]
+    fn trinity_workflow_accepts_trinity_style_samples_file() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let r1 = temp_dir.path().join("rep1_R1.fastq");
+        let r2 = temp_dir.path().join("rep1_R2.fastq");
+        let samples_file = temp_dir.path().join("samples.tsv");
+        let seq = "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT";
+        fs::write(&r1, format!("@r1/1\n{seq}\n+\n{}\n", "I".repeat(seq.len()))).expect("write r1");
+        fs::write(&r2, format!("@r1/2\n{seq}\n+\n{}\n", "I".repeat(seq.len()))).expect("write r2");
+        fs::write(
+            &samples_file,
+            format!(
+                "condition\treplicate\tleft\tright\ncondA\trep1\t{}\t{}\n",
+                r1.display(),
+                r2.display()
+            ),
+        )
+        .expect("write samples file");
+
+        let output_dir = temp_dir.path().join("workflow_samples");
+        let report = run_trinity_workflow(TrinityWorkflowConfig {
+            input1: None,
+            input2: None,
+            samples_file: Some(samples_file.to_string_lossy().into_owned()),
+            output_dir: output_dir.to_string_lossy().into_owned(),
+            output_fasta: None,
+            report_json: None,
+            normalize: true,
+            normalize_config: NormalizeConfig {
+                k: 5,
+                target_coverage: u16::MAX,
+                min_abundance: 1,
+                max_reads: None,
+                use_gpu: false,
+            },
+            min_len: 10,
+            use_gpu: false,
+        })
+        .expect("samples-file workflow should run");
+
+        assert_eq!(report.sample_count, 1);
+        assert_eq!(
+            report.samples_file.as_deref(),
+            Some(samples_file.to_string_lossy().as_ref())
+        );
+        assert_eq!(report.input1, r1.to_string_lossy());
+        assert_eq!(
+            report.input2.as_deref(),
+            Some(r2.to_string_lossy().as_ref())
+        );
+        assert!(std::path::Path::new(&report.assembly_fasta).exists());
     }
 }

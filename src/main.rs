@@ -117,6 +117,7 @@ fn main() {
         Commands::Trinity {
             input1,
             input2,
+            samples_file,
             output_dir,
             output_fasta,
             report_json,
@@ -140,6 +141,7 @@ fn main() {
             let config = pipeline::trinity_workflow::TrinityWorkflowConfig {
                 input1,
                 input2,
+                samples_file,
                 output_dir,
                 output_fasta,
                 report_json,
