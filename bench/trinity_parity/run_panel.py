@@ -526,6 +526,15 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
         "workflow_component_selected_false_negative": workflow_metrics.get(
             "component_selected_truth_precision", {}
         ).get("false_negative"),
+        "workflow_component_selected_trinity_precision": workflow_metrics.get(
+            "trinity_selected_isoform_match", {}
+        ).get("precision"),
+        "workflow_component_selected_trinity_recall": workflow_metrics.get(
+            "trinity_selected_isoform_match", {}
+        ).get("recall"),
+        "workflow_component_selected_trinity_f1": workflow_metrics.get(
+            "trinity_selected_isoform_match", {}
+        ).get("f1"),
         "workflow_truth_min_coverage": workflow_metrics.get("truth_recovery", {}).get(
             "min_best_coverage"
         ),
@@ -557,6 +566,15 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
         "trinity_truth_min_coverage": trinity_metrics.get("truth_recovery", {}).get(
             "min_best_coverage"
         ),
+        "trinity_raptor_selected_precision": trinity_metrics.get(
+            "raptor_selected_isoform_match", {}
+        ).get("precision"),
+        "trinity_raptor_selected_recall": trinity_metrics.get(
+            "raptor_selected_isoform_match", {}
+        ).get("recall"),
+        "trinity_raptor_selected_f1": trinity_metrics.get(
+            "raptor_selected_isoform_match", {}
+        ).get("f1"),
     }
 
 

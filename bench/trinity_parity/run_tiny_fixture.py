@@ -1266,6 +1266,30 @@ def add_cpu_gpu_workflow_comparison(report: dict[str, object]) -> None:
     )
 
 
+def add_raptor_trinity_workflow_comparison(
+    report: dict[str, object], min_match_coverage: float
+) -> None:
+    workflow = report.get("raptor_workflow") or {}
+    trinity = report.get("trinity") or {}
+    workflow_metrics = workflow.get("metrics", {})
+    trinity_result = trinity.get("result", {})
+    trinity_metrics = trinity_result.get("metrics", {})
+    raptor_selected = workflow_metrics.get("component_selected_isoforms_fasta")
+    trinity_fasta = trinity_metrics.get("output_fasta")
+    if not raptor_selected or not trinity_fasta:
+        return
+    raptor_path = Path(raptor_selected)
+    trinity_path = Path(trinity_fasta)
+    if not raptor_path.exists() or not trinity_path.exists():
+        return
+    workflow_metrics["trinity_selected_isoform_match"] = fasta_precision_recall_metrics(
+        trinity_path, raptor_path, min_match_coverage
+    )
+    trinity_metrics["raptor_selected_isoform_match"] = fasta_precision_recall_metrics(
+        raptor_path, trinity_path, min_match_coverage
+    )
+
+
 def run_malformed_fastq_check(out_dir: Path, fixture: dict[str, object]) -> dict[str, object]:
     malformed_dir = out_dir / "malformed_fastq_check"
     malformed_dir.mkdir(parents=True, exist_ok=True)
@@ -1537,9 +1561,18 @@ def run_one_fixture(
             ]
             report["trinity"]["ran"] = True
             result = run_command(command, ROOT)
-            output_fasta = trinity_out / "Trinity.fasta"
+            output_fasta_candidates = [
+                trinity_out / "Trinity.fasta",
+                trinity_out.with_name(f"{trinity_out.name}.Trinity.fasta"),
+            ]
+            output_fasta = next(
+                (candidate for candidate in output_fasta_candidates if candidate.exists()),
+                output_fasta_candidates[0],
+            )
             metrics = {
                 "output_exists": output_fasta.exists(),
+                "output_fasta": str(output_fasta),
+                "output_fasta_candidates": [str(path) for path in output_fasta_candidates],
                 "output_fasta_bytes": file_size_bytes(output_fasta),
                 "output_dir_footprint": directory_footprint(trinity_out),
             }
@@ -1564,6 +1597,8 @@ def run_one_fixture(
                     report["oracle"]["frozen_from_trinity"] = str(output_fasta)
             result["metrics"] = metrics
             report["trinity"]["result"] = result
+
+    add_raptor_trinity_workflow_comparison(report, min_match_coverage)
 
     report_path = out_dir / "report.json"
     write_text(report_path, json.dumps(report, indent=2) + "\n")
@@ -2350,6 +2385,15 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         "workflow_component_selected_false_negative": workflow_metrics.get(
             "component_selected_truth_precision", {}
         ).get("false_negative"),
+        "workflow_component_selected_trinity_precision": workflow_metrics.get(
+            "trinity_selected_isoform_match", {}
+        ).get("precision"),
+        "workflow_component_selected_trinity_recall": workflow_metrics.get(
+            "trinity_selected_isoform_match", {}
+        ).get("recall"),
+        "workflow_component_selected_trinity_f1": workflow_metrics.get(
+            "trinity_selected_isoform_match", {}
+        ).get("f1"),
         "workflow_component_selected_oracle_min_coverage": workflow_metrics.get(
             "component_selected_oracle_recovery", {}
         ).get("min_best_coverage"),
@@ -2398,6 +2442,15 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         "trinity_truth_min_coverage": trinity_metrics.get("truth_recovery", {}).get(
             "min_best_coverage"
         ),
+        "trinity_raptor_selected_precision": trinity_metrics.get(
+            "raptor_selected_isoform_match", {}
+        ).get("precision"),
+        "trinity_raptor_selected_recall": trinity_metrics.get(
+            "raptor_selected_isoform_match", {}
+        ).get("recall"),
+        "trinity_raptor_selected_f1": trinity_metrics.get(
+            "raptor_selected_isoform_match", {}
+        ).get("f1"),
     }
 
 

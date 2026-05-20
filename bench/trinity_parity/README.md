@@ -25,8 +25,9 @@ python3 bench/trinity_parity/run_panel.py
 The runner writes `target/trinity_parity/candidate_panel/panel_report.json`
 with per-fixture commands, pass/fail state, selected-isoform precision/recall/F1,
 component counts, graph counts, lengths, elapsed time, resource usage, output
-file counts, output byte counts, GPU telemetry, and Trinity metrics when
-requested. Resource usage is captured with GNU
+file counts, output byte counts, GPU telemetry, Trinity metrics when requested,
+and reciprocal Raptor-vs-Trinity selected-isoform precision/recall/F1 whenever
+both FASTAs exist. Resource usage is captured with GNU
 `/usr/bin/time -v` when available; otherwise the harness records peak observed
 process-group RSS by polling `/proc`. GPU telemetry is captured with
 `nvidia-smi` when available.
@@ -58,6 +59,14 @@ the container, which matches the harness because it writes all inputs and
 outputs under this repo.
 
 Use `--require-trinity` when Trinity output is mandatory for the gate.
+
+Current Trinity-backed candidate evidence with
+`trinityrnaseq/trinityrnaseq:2.15.2`:
+
+- `tiny_alt_isoform`: Raptor and Trinity both emit `[252,240]`, reciprocal selected F1 `1.0` across inserts `110,140,160,180`.
+- `ambiguous_paralog`: Raptor emits `[240,234,240]`; Trinity emits `[234,240]` with truth min coverage `0.3`; reciprocal selected F1 is `0.8`.
+- `compact_fusion`: Raptor emits `[216,216]`; Trinity emits `[336]`; reciprocal selected F1 is `0.0`.
+- `antisense_overlap` and `partial_antisense_overlap`: Trinity exits `2` under the current unstranded paired invocation, while Raptor's RF workflow still passes the truth gates.
 
 The panel also runs a GPU-requested Raptor workflow with
 `cargo run --features gpu -- trinity --gpu` for each case and compares its
