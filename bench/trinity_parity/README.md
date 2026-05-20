@@ -59,8 +59,8 @@ python3 bench/trinity_parity/run_tiny_fixture.py --freeze-trinity-oracle
 By default the harness fails if minimum best truth coverage is below `0.95`.
 It also fails if minimum best oracle coverage is below `0.95`. Selected
 component isoforms also need reciprocal truth matches at `0.95` coverage, with
-precision at least `0.75` and F1 at least `0.85`. Those precision defaults are
-current rescue baselines, not final parity thresholds.
+precision at least `0.95` and F1 at least `0.95`. Those precision defaults are
+current synthetic-fixture gates, not final public-panel parity thresholds.
 
 Outputs are written under `target/trinity_parity/tiny_alt_isoform/`.
 Sweep mode writes one report per insert plus `insert_sweep_report.json`.

@@ -11,10 +11,14 @@ use crate::pipeline::normalize::{
     normalize_paired_with_config, normalize_single_with_config, NormalizeConfig, NormalizeSummary,
 };
 use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+const MIN_SELECTED_NOVEL_SEQUENCE_FRACTION: f64 = 0.5;
+const COMPONENT_CONTIG_SELECTION_METHOD: &str = "component_contig_evidence_score_v2";
 
 #[derive(Debug, Clone)]
 pub struct TrinityWorkflowConfig {
@@ -372,58 +376,14 @@ fn select_component_isoforms(
     reads1: &[String],
     reads2: Option<&[String]>,
 ) -> Vec<SelectedComponentIsoform> {
-    let contigs_by_id: std::collections::BTreeMap<usize, &Contig> =
+    let contigs_by_id: BTreeMap<usize, &Contig> =
         contigs.iter().map(|contig| (contig.id, contig)).collect();
     let mut selected = Vec::new();
     for graph in component_graphs {
-        let mut component_isoforms = Vec::new();
-        for node in &graph.nodes {
-            let Some(contig) = contigs_by_id.get(&node.contig_id) else {
-                continue;
-            };
-            let (direct_read_support, direct_pair_support) =
-                contig_read_pair_support(&contig.sequence, reads1, reads2);
-            let overlapping_paths: Vec<&crate::graph::partition::RaptorReadKmerPath> = graph
-                .read_kmer_paths
-                .iter()
-                .filter(|path| sequences_overlap(&contig.sequence, &path.sequence))
-                .collect();
-            let max_path_support = overlapping_paths
-                .iter()
-                .map(|path| path.min_support)
-                .max()
-                .unwrap_or(0);
-            let evidence_score = selected_isoform_evidence_score(
-                direct_read_support,
-                direct_pair_support,
-                overlapping_paths.len(),
-                max_path_support,
-            );
-            component_isoforms.push(SelectedComponentIsoform {
-                id: String::new(),
-                component_id: graph.component_id,
-                component_rank: 0,
-                source_contig_id: node.contig_id,
-                length: contig.sequence.len(),
-                selection_method: "component_contig_evidence_score_v1",
-                evidence_score,
-                component_assigned_reads: graph.assigned_read_count,
-                component_assigned_pairs: graph.assigned_pair_count,
-                direct_read_support,
-                direct_pair_support,
-                overlapping_read_kmer_path_count: overlapping_paths.len(),
-                max_overlapping_read_kmer_path_support: max_path_support,
-            });
-        }
-        component_isoforms.sort_by(|left, right| {
-            right
-                .evidence_score
-                .cmp(&left.evidence_score)
-                .then_with(|| right.direct_pair_support.cmp(&left.direct_pair_support))
-                .then_with(|| right.direct_read_support.cmp(&left.direct_read_support))
-                .then_with(|| right.length.cmp(&left.length))
-                .then_with(|| left.source_contig_id.cmp(&right.source_contig_id))
-        });
+        let component_isoforms =
+            ranked_component_contig_isoforms(graph, &contigs_by_id, reads1, reads2);
+        let component_isoforms =
+            select_non_redundant_component_isoforms(component_isoforms, &contigs_by_id);
         for (idx, mut isoform) in component_isoforms.into_iter().enumerate() {
             isoform.component_rank = idx + 1;
             isoform.id = format!("component_{}_isoform_{}", graph.component_id, idx);
@@ -439,49 +399,37 @@ fn component_isoform_candidates(
     reads1: &[String],
     reads2: Option<&[String]>,
 ) -> Vec<ComponentIsoformCandidate> {
-    let contigs_by_id: std::collections::BTreeMap<usize, &Contig> =
+    let contigs_by_id: BTreeMap<usize, &Contig> =
         contigs.iter().map(|contig| (contig.id, contig)).collect();
     let mut candidates = Vec::new();
     for graph in component_graphs {
         let mut component_candidates = Vec::new();
-        for node in &graph.nodes {
-            let Some(contig) = contigs_by_id.get(&node.contig_id) else {
-                continue;
-            };
-            let (direct_read_support, direct_pair_support) =
-                contig_read_pair_support(&contig.sequence, reads1, reads2);
-            let overlapping_paths: Vec<&crate::graph::partition::RaptorReadKmerPath> = graph
-                .read_kmer_paths
-                .iter()
-                .filter(|path| sequences_overlap(&contig.sequence, &path.sequence))
+        let contig_isoforms =
+            ranked_component_contig_isoforms(graph, &contigs_by_id, reads1, reads2);
+        let selected_contig_ids: BTreeSet<usize> =
+            select_non_redundant_component_isoforms(contig_isoforms.clone(), &contigs_by_id)
+                .into_iter()
+                .map(|isoform| isoform.source_contig_id)
                 .collect();
-            let max_path_support = overlapping_paths
-                .iter()
-                .map(|path| path.min_support)
-                .max()
-                .unwrap_or(0);
+        for isoform in contig_isoforms {
             component_candidates.push(ComponentIsoformCandidate {
                 id: String::new(),
                 component_id: graph.component_id,
                 candidate_rank: 0,
                 source_kind: "contig",
-                source_contig_id: Some(node.contig_id),
+                source_contig_id: Some(isoform.source_contig_id),
                 source_path_index: None,
-                length: contig.sequence.len(),
-                selected: direct_read_support > 0 && direct_pair_support > 0,
-                selection_method: "component_contig_evidence_score_v1",
-                evidence_score: selected_isoform_evidence_score(
-                    direct_read_support,
-                    direct_pair_support,
-                    overlapping_paths.len(),
-                    max_path_support,
-                ),
+                length: isoform.length,
+                selected: selected_contig_ids.contains(&isoform.source_contig_id),
+                selection_method: COMPONENT_CONTIG_SELECTION_METHOD,
+                evidence_score: isoform.evidence_score,
                 component_assigned_reads: graph.assigned_read_count,
                 component_assigned_pairs: graph.assigned_pair_count,
-                direct_read_support,
-                direct_pair_support,
-                overlapping_read_kmer_path_count: overlapping_paths.len(),
-                max_overlapping_read_kmer_path_support: max_path_support,
+                direct_read_support: isoform.direct_read_support,
+                direct_pair_support: isoform.direct_pair_support,
+                overlapping_read_kmer_path_count: isoform.overlapping_read_kmer_path_count,
+                max_overlapping_read_kmer_path_support: isoform
+                    .max_overlapping_read_kmer_path_support,
             });
         }
         for (path_idx, read_path) in graph.read_kmer_paths.iter().enumerate() {
@@ -494,7 +442,7 @@ fn component_isoform_candidates(
                 source_path_index: Some(path_idx),
                 length: read_path.sequence.len(),
                 selected: false,
-                selection_method: "component_contig_evidence_score_v1",
+                selection_method: COMPONENT_CONTIG_SELECTION_METHOD,
                 evidence_score: read_path.min_support * 2 + read_path.edge_count,
                 component_assigned_reads: graph.assigned_read_count,
                 component_assigned_pairs: graph.assigned_pair_count,
@@ -522,6 +470,125 @@ fn component_isoform_candidates(
         }
     }
     candidates
+}
+
+fn ranked_component_contig_isoforms(
+    graph: &RaptorComponentGraph,
+    contigs_by_id: &BTreeMap<usize, &Contig>,
+    reads1: &[String],
+    reads2: Option<&[String]>,
+) -> Vec<SelectedComponentIsoform> {
+    let mut component_isoforms = Vec::new();
+    for node in &graph.nodes {
+        let Some(contig) = contigs_by_id.get(&node.contig_id) else {
+            continue;
+        };
+        let (direct_read_support, direct_pair_support) =
+            contig_read_pair_support(&contig.sequence, reads1, reads2);
+        let overlapping_paths: Vec<&crate::graph::partition::RaptorReadKmerPath> = graph
+            .read_kmer_paths
+            .iter()
+            .filter(|path| sequences_overlap(&contig.sequence, &path.sequence))
+            .collect();
+        let max_path_support = overlapping_paths
+            .iter()
+            .map(|path| path.min_support)
+            .max()
+            .unwrap_or(0);
+        let evidence_score = selected_isoform_evidence_score(
+            direct_read_support,
+            direct_pair_support,
+            overlapping_paths.len(),
+            max_path_support,
+        );
+        component_isoforms.push(SelectedComponentIsoform {
+            id: String::new(),
+            component_id: graph.component_id,
+            component_rank: 0,
+            source_contig_id: node.contig_id,
+            length: contig.sequence.len(),
+            selection_method: COMPONENT_CONTIG_SELECTION_METHOD,
+            evidence_score,
+            component_assigned_reads: graph.assigned_read_count,
+            component_assigned_pairs: graph.assigned_pair_count,
+            direct_read_support,
+            direct_pair_support,
+            overlapping_read_kmer_path_count: overlapping_paths.len(),
+            max_overlapping_read_kmer_path_support: max_path_support,
+        });
+    }
+    component_isoforms.sort_by(|left, right| {
+        right
+            .direct_read_support
+            .cmp(&left.direct_read_support)
+            .then_with(|| right.direct_pair_support.cmp(&left.direct_pair_support))
+            .then_with(|| right.evidence_score.cmp(&left.evidence_score))
+            .then_with(|| right.length.cmp(&left.length))
+            .then_with(|| left.source_contig_id.cmp(&right.source_contig_id))
+    });
+    component_isoforms
+}
+
+fn select_non_redundant_component_isoforms(
+    ranked_isoforms: Vec<SelectedComponentIsoform>,
+    contigs_by_id: &BTreeMap<usize, &Contig>,
+) -> Vec<SelectedComponentIsoform> {
+    let mut selected = Vec::new();
+    let mut selected_sequences: Vec<&str> = Vec::new();
+    for isoform in ranked_isoforms {
+        let Some(contig) = contigs_by_id.get(&isoform.source_contig_id) else {
+            continue;
+        };
+        if isoform.direct_read_support == 0 || isoform.direct_pair_support == 0 {
+            continue;
+        }
+        if novel_sequence_fraction(&contig.sequence, &selected_sequences)
+            >= MIN_SELECTED_NOVEL_SEQUENCE_FRACTION
+        {
+            selected_sequences.push(&contig.sequence);
+            selected.push(isoform);
+        }
+    }
+    selected
+}
+
+fn novel_sequence_fraction(candidate: &str, selected_sequences: &[&str]) -> f64 {
+    if candidate.is_empty() {
+        return 0.0;
+    }
+    let best_overlap = selected_sequences
+        .iter()
+        .map(|selected| {
+            longest_common_substring_len(candidate.as_bytes(), selected.as_bytes()).max(
+                longest_common_substring_len(
+                    candidate.as_bytes(),
+                    reverse_complement(selected).as_bytes(),
+                ),
+            )
+        })
+        .max()
+        .unwrap_or(0);
+    (candidate.len().saturating_sub(best_overlap)) as f64 / candidate.len() as f64
+}
+
+fn longest_common_substring_len(left: &[u8], right: &[u8]) -> usize {
+    if left.is_empty() || right.is_empty() {
+        return 0;
+    }
+    let mut previous = vec![0usize; right.len() + 1];
+    let mut best = 0usize;
+    for left_base in left {
+        let mut current = vec![0usize; right.len() + 1];
+        for (idx, right_base) in right.iter().enumerate() {
+            if left_base == right_base {
+                let len = previous[idx] + 1;
+                current[idx + 1] = len;
+                best = best.max(len);
+            }
+        }
+        previous = current;
+    }
+    best
 }
 
 fn selected_isoform_evidence_score(
@@ -707,7 +774,7 @@ fn sidecar_path(output_path: &str, suffix: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{run_trinity_workflow, TrinityWorkflowConfig};
+    use super::{run_trinity_workflow, TrinityWorkflowConfig, COMPONENT_CONTIG_SELECTION_METHOD};
     use crate::pipeline::normalize::NormalizeConfig;
     use std::fs;
     use tempfile::TempDir;
@@ -779,7 +846,7 @@ mod tests {
         assert_eq!(selected_isoforms[0]["component_rank"], 1);
         assert_eq!(
             selected_isoforms[0]["selection_method"],
-            "component_contig_evidence_score_v1"
+            COMPONENT_CONTIG_SELECTION_METHOD
         );
         assert!(
             selected_isoforms[0]["evidence_score"]

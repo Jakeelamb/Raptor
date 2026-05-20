@@ -1011,7 +1011,7 @@ def check_report_thresholds(
             "component_selected_isoform_count", 0
         ):
             failures.append("selected isoform evidence records do not match selected FASTA records")
-        if "component_contig_evidence_score_v1" not in workflow_metrics.get(
+        if "component_contig_evidence_score_v2" not in workflow_metrics.get(
             "component_selected_selection_methods", []
         ):
             failures.append("selected isoforms do not report the expected scoring method")
@@ -1376,13 +1376,13 @@ def main() -> int:
     parser.add_argument(
         "--min-selected-precision",
         type=float,
-        default=0.75,
+        default=0.95,
         help="Minimum selected isoform precision against truth transcripts",
     )
     parser.add_argument(
         "--min-selected-f1",
         type=float,
-        default=0.85,
+        default=0.95,
         help="Minimum selected isoform F1 against truth transcripts",
     )
     args = parser.parse_args()
