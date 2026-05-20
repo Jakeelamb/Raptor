@@ -10,9 +10,9 @@ Start by building the parity map and benchmark harness before changing core algo
 
 ## Phases
 
-- [ ] Create Trinity parity map.
+- [x] Create Trinity parity map.
 - [ ] Freeze benchmark panel.
-- [ ] Build Trinity-vs-Raptor benchmark harness.
+- [ ] Build Trinity-vs-Raptor benchmark harness. Initial tiny fixture scaffold exists; full Trinity comparison and frozen panel still missing.
 - [ ] Close normalization parity.
 - [ ] Close Inchworm-equivalent contig construction parity.
 - [ ] Close Chrysalis-equivalent clustering/graph partitioning parity.
@@ -28,3 +28,10 @@ Start by building the parity map and benchmark harness before changing core algo
 - Metric thresholds and tolerance for "comparable biological outputs" need to be encoded after the first benchmark harness draft.
 - CUDA backend work is deferred until CPU/OpenCL correctness baselines are stable and comparable.
 
+## Current Findings
+
+- `docs/trinity-parity-map.md` is the current stage inventory.
+- Overall Trinity replacement readiness is currently 0 because multiple Trinity-stage equivalents and the frozen comparison artifacts are missing or unproven.
+- `bench/trinity_parity/run_tiny_fixture.py` now generates a tiny truth-known alternative-isoform fixture and runs current `raptor assemble`.
+- Current tiny fixture result: Raptor exits 0 but emits 51 short contigs/transcripts with N50 27 against truth transcript lengths 252 and 240; this is a useful failing biological proxy, not parity.
+- Normalization has a single-codepath problem: CLI knobs and standalone binaries do not currently converge on one parameterized implementation/default set.

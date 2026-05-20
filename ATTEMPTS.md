@@ -3,4 +3,5 @@
 | Time | Attempt | Evidence | Result | Next Adjustment |
 | --- | --- | --- | --- | --- |
 | 2026-05-20 | Rescued old GPU-enabled branch and established OpenCL baseline. | `cargo test --features gpu`; `./scripts/rescue_smoke.sh`; `./bench/gpu_kmer_baseline.sh` | Passed; OpenCL baseline was faster than CPU exact on small synthetic k-mer run. | Build Trinity parity map and benchmark harness. |
-
+| 2026-05-20 | Created first Trinity parity map from current repo inventory and official Trinity wiki/running-guide architecture. | `docs/trinity-parity-map.md`; `cargo run -- --help`; `cargo run -- assemble --help`; source inventory via `rg`/`find` | Current overall readiness is 0; useful pieces exist, but major Trinity-stage equivalence is unproven or missing. | Build `bench/trinity_parity/` tiny fixture and runner, then fix normalization codepath drift. |
+| 2026-05-20 | Added and ran first tiny truth-known transcriptome fixture harness. | `python3 bench/trinity_parity/run_tiny_fixture.py`; `target/trinity_parity/tiny_alt_isoform/report.json` | Raptor exited 0 but produced 51 short contigs/transcripts, total 1364 bases, N50 27, against truth transcript lengths 252 and 240; Trinity was not on PATH. | Use this failing fixture to drive Inchworm-equivalent contig construction and add Trinity/oracle comparison support. |

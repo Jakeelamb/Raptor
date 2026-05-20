@@ -5,4 +5,6 @@
 - 2026-05-20 Raptor was restored to `rescue/gpu-trinity`; current head includes OpenCL rescue smoke and CPU-vs-OpenCL k-mer baseline.
 - 2026-05-20 Current evidence proves GPU k-mer acceleration and general test health, not Trinity replacement parity.
 - 2026-05-20 Trinity parity requires explicit normalization, Inchworm, Chrysalis, Butterfly, paired-end evidence, output/evaluation, and end-to-end workflow gates.
-
+- 2026-05-20 Official Trinity docs describe normalization, Inchworm, Chrysalis, Butterfly, paired-end/strand-specific handling, optional Jaccard clipping, staged execution, and final transcript outputs. Raptor currently has pieces for several of these, but no frozen Trinity-vs-Raptor biological benchmark.
+- 2026-05-20 The biggest immediate engineering risk is single-codepath drift in normalization: `raptor normalize`, `normalize_reads`, and `normalize_paired_reads` do not present one parameterized implementation.
+- 2026-05-20 First tiny alternative-isoform harness is `bench/trinity_parity/run_tiny_fixture.py`. Current Raptor result is deliberately recorded as a failing proxy: 51 short contigs, N50 27, while truth transcripts are 252 and 240 bp.

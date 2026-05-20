@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+"""Run a tiny truth-known transcriptome fixture through current Raptor.
+
+This is a fast-loop harness, not a parity claim. It creates a small fixture with
+two related isoforms, runs the production Raptor CLI, and writes machine-readable
+metrics that expose current gaps.
+"""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import json
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_OUT = ROOT / "target" / "trinity_parity" / "tiny_alt_isoform"
+
+
+def repeat_pattern(pattern: str, length: int) -> str:
+    return (pattern * ((length // len(pattern)) + 1))[:length]
+
+
+def revcomp(seq: str) -> str:
+    table = str.maketrans("ACGTacgt", "TGCAtgca")
+    return seq.translate(table)[::-1].upper()
+
+
+def write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def write_fastq_gz(path: Path, records: list[tuple[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        for name, seq in records:
+            handle.write(f"@{name}\n{seq}\n+\n{'I' * len(seq)}\n")
+
+
+def read_fasta_lengths(path: Path) -> list[int]:
+    opener = gzip.open if path.suffix == ".gz" else open
+    lengths: list[int] = []
+    current = 0
+    with opener(path, "rt", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith(">"):
+                if current:
+                    lengths.append(current)
+                current = 0
+            else:
+                current += len(line)
+    if current:
+        lengths.append(current)
+    return lengths
+
+
+def n50(lengths: list[int]) -> int:
+    if not lengths:
+        return 0
+    total = sum(lengths)
+    acc = 0
+    for length in sorted(lengths, reverse=True):
+        acc += length
+        if acc * 2 >= total:
+            return length
+    return 0
+
+
+def run_command(command: list[str], cwd: Path) -> dict[str, object]:
+    start = time.monotonic()
+    completed = subprocess.run(
+        command,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    elapsed = time.monotonic() - start
+    return {
+        "command": command,
+        "exit_code": completed.returncode,
+        "elapsed_seconds": round(elapsed, 6),
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+    }
+
+
+def generate_fixture(out_dir: Path) -> dict[str, object]:
+    exon_a = repeat_pattern("ACGTTGCAAGTC", 90)
+    exon_b = repeat_pattern("GGAACCTTACGA", 72)
+    exon_alt = repeat_pattern("TTGACCGATGAA", 60)
+    exon_c = repeat_pattern("CGTACGATTCGA", 90)
+
+    tx1 = exon_a + exon_b + exon_c
+    tx2 = exon_a + exon_alt + exon_c
+    transcripts = {"tx_dominant": tx1, "tx_alt": tx2}
+
+    truth_fasta = out_dir / "truth" / "transcripts.fa"
+    truth_lines = []
+    for name, seq in transcripts.items():
+        truth_lines.append(f">{name} length={len(seq)}")
+        truth_lines.extend(seq[i : i + 80] for i in range(0, len(seq), 80))
+    write_text(truth_fasta, "\n".join(truth_lines) + "\n")
+
+    single_records: list[tuple[str, str]] = []
+    r1_records: list[tuple[str, str]] = []
+    r2_records: list[tuple[str, str]] = []
+    read_len = 75
+    insert = 160
+    step = 24
+
+    for tx_name, seq in transcripts.items():
+        coverage_rounds = 3 if tx_name == "tx_dominant" else 2
+        for round_idx in range(coverage_rounds):
+            for start in range(0, len(seq) - read_len + 1, step):
+                read = seq[start : start + read_len]
+                single_records.append((f"{tx_name}_se_{round_idx}_{start}", read))
+            for start in range(0, len(seq) - insert + 1, step * 2):
+                frag = seq[start : start + insert]
+                r1_records.append((f"{tx_name}_pe_{round_idx}_{start}/1", frag[:read_len]))
+                r2_records.append((f"{tx_name}_pe_{round_idx}_{start}/2", revcomp(frag[-read_len:])))
+
+    single_fastq = out_dir / "reads" / "single.fastq.gz"
+    r1_fastq = out_dir / "reads" / "R1.fastq.gz"
+    r2_fastq = out_dir / "reads" / "R2.fastq.gz"
+    write_fastq_gz(single_fastq, single_records)
+    write_fastq_gz(r1_fastq, r1_records)
+    write_fastq_gz(r2_fastq, r2_records)
+
+    metadata = {
+        "fixture": "tiny_alt_isoform",
+        "read_len": read_len,
+        "insert": insert,
+        "truth_transcripts": {name: len(seq) for name, seq in transcripts.items()},
+        "single_end_reads": len(single_records),
+        "paired_end_pairs": len(r1_records),
+        "paths": {
+            "truth_fasta": str(truth_fasta),
+            "single_fastq": str(single_fastq),
+            "r1_fastq": str(r1_fastq),
+            "r2_fastq": str(r2_fastq),
+        },
+    }
+    write_text(out_dir / "truth" / "metadata.json", json.dumps(metadata, indent=2) + "\n")
+    return metadata
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--skip-raptor", action="store_true")
+    parser.add_argument("--run-trinity", action="store_true")
+    args = parser.parse_args()
+
+    out_dir = args.out_dir.resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fixture = generate_fixture(out_dir)
+
+    report: dict[str, object] = {
+        "fixture": fixture,
+        "repo": str(ROOT),
+        "raptor": None,
+        "trinity": {
+            "available": shutil.which("Trinity") is not None,
+            "ran": False,
+            "note": "Trinity is optional for this scaffold until the benchmark panel is frozen.",
+        },
+        "known_limitations": [
+            "Current raptor assemble CLI accepts one input FASTQ, so this scaffold runs single-end reads only.",
+            "No Trinity parity claim is made from this tiny fixture.",
+        ],
+    }
+
+    if not args.skip_raptor:
+        output_fasta = out_dir / "raptor" / "assembly.fa.gz"
+        output_fasta.parent.mkdir(parents=True, exist_ok=True)
+        command = [
+            "cargo",
+            "run",
+            "--quiet",
+            "--",
+            "assemble",
+            "--input",
+            fixture["paths"]["single_fastq"],
+            "--output",
+            str(output_fasta),
+            "--min-len",
+            "25",
+            "--threads",
+            "1",
+        ]
+        result = run_command(command, ROOT)
+        metrics = {"output_exists": output_fasta.exists()}
+        if output_fasta.exists():
+            lengths = read_fasta_lengths(output_fasta)
+            metrics.update(
+                {
+                    "transcript_count": len(lengths),
+                    "total_bases": sum(lengths),
+                    "n50": n50(lengths),
+                    "lengths": lengths,
+                }
+            )
+        result["metrics"] = metrics
+        report["raptor"] = result
+
+    if args.run_trinity:
+        trinity_bin = shutil.which("Trinity")
+        if not trinity_bin:
+            report["trinity"]["ran"] = False
+            report["trinity"]["error"] = "Trinity executable not found on PATH"
+        else:
+            trinity_out = out_dir / "trinity"
+            command = [
+                trinity_bin,
+                "--seqType",
+                "fq",
+                "--single",
+                fixture["paths"]["single_fastq"],
+                "--CPU",
+                "1",
+                "--max_memory",
+                "2G",
+                "--output",
+                str(trinity_out),
+            ]
+            report["trinity"]["ran"] = True
+            report["trinity"]["result"] = run_command(command, ROOT)
+
+    report_path = out_dir / "report.json"
+    write_text(report_path, json.dumps(report, indent=2) + "\n")
+
+    print(f"wrote {report_path}")
+    if report["raptor"] and report["raptor"]["exit_code"] != 0:
+        print("raptor assemble failed; see report.json", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
