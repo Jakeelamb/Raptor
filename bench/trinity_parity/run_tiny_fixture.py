@@ -43,6 +43,16 @@ def write_fastq_gz(path: Path, records: list[tuple[str, str]]) -> None:
             handle.write(f"@{name}\n{seq}\n+\n{'I' * len(seq)}\n")
 
 
+def tiled_starts(sequence_len: int, window_len: int, step: int) -> list[int]:
+    if sequence_len < window_len:
+        return []
+    last = sequence_len - window_len
+    starts = list(range(0, last + 1, step))
+    if starts[-1] != last:
+        starts.append(last)
+    return starts
+
+
 def read_fasta_lengths(path: Path) -> list[int]:
     opener = gzip.open if path.suffix == ".gz" else open
     lengths: list[int] = []
@@ -61,6 +71,83 @@ def read_fasta_lengths(path: Path) -> list[int]:
     if current:
         lengths.append(current)
     return lengths
+
+
+def read_fasta_records(path: Path) -> dict[str, str]:
+    opener = gzip.open if path.suffix == ".gz" else open
+    records: dict[str, str] = {}
+    name: str | None = None
+    parts: list[str] = []
+    with opener(path, "rt", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith(">"):
+                if name is not None:
+                    records[name] = "".join(parts)
+                name = line[1:].split()[0]
+                parts = []
+            else:
+                parts.append(line.upper())
+    if name is not None:
+        records[name] = "".join(parts)
+    return records
+
+
+def longest_common_substring_len(a: str, b: str) -> int:
+    if not a or not b:
+        return 0
+    previous = [0] * (len(b) + 1)
+    best = 0
+    for base_a in a:
+        current = [0] * (len(b) + 1)
+        for idx, base_b in enumerate(b, start=1):
+            if base_a == base_b:
+                value = previous[idx - 1] + 1
+                current[idx] = value
+                if value > best:
+                    best = value
+        previous = current
+    return best
+
+
+def truth_recovery_metrics(truth_fasta: Path, assembly_fasta: Path) -> dict[str, object]:
+    truth = read_fasta_records(truth_fasta)
+    assembled = read_fasta_records(assembly_fasta)
+    per_transcript: dict[str, object] = {}
+    for truth_name, truth_seq in truth.items():
+        best = 0
+        best_contig = None
+        for contig_name, contig_seq in assembled.items():
+            forward = longest_common_substring_len(truth_seq, contig_seq)
+            reverse = longest_common_substring_len(truth_seq, revcomp(contig_seq))
+            observed = max(forward, reverse)
+            if observed > best:
+                best = observed
+                best_contig = contig_name
+        coverage = best / len(truth_seq) if truth_seq else 0.0
+        per_transcript[truth_name] = {
+            "truth_length": len(truth_seq),
+            "best_matching_bases": best,
+            "best_contig": best_contig,
+            "best_coverage": round(coverage, 6),
+        }
+
+    coverages = [
+        entry["best_coverage"]
+        for entry in per_transcript.values()
+        if isinstance(entry, dict)
+    ]
+    return {
+        "truth_transcript_count": len(truth),
+        "assembled_record_count": len(assembled),
+        "mean_best_coverage": round(sum(coverages) / len(coverages), 6)
+        if coverages
+        else 0.0,
+        "min_best_coverage": min(coverages) if coverages else 0.0,
+        "per_transcript": per_transcript,
+    }
 
 
 def n50(lengths: list[int]) -> int:
@@ -122,10 +209,10 @@ def generate_fixture(out_dir: Path) -> dict[str, object]:
     for tx_name, seq in transcripts.items():
         coverage_rounds = 3 if tx_name == "tx_dominant" else 2
         for round_idx in range(coverage_rounds):
-            for start in range(0, len(seq) - read_len + 1, step):
+            for start in tiled_starts(len(seq), read_len, step):
                 read = seq[start : start + read_len]
                 single_records.append((f"{tx_name}_se_{round_idx}_{start}", read))
-            for start in range(0, len(seq) - insert + 1, step * 2):
+            for start in tiled_starts(len(seq), insert, step * 2):
                 frag = seq[start : start + insert]
                 r1_records.append((f"{tx_name}_pe_{round_idx}_{start}/1", frag[:read_len]))
                 r2_records.append((f"{tx_name}_pe_{round_idx}_{start}/2", revcomp(frag[-read_len:])))
@@ -210,6 +297,9 @@ def main() -> int:
                     "n50": n50(lengths),
                     "lengths": lengths,
                 }
+            )
+            metrics["truth_recovery"] = truth_recovery_metrics(
+                Path(fixture["paths"]["truth_fasta"]), output_fasta
             )
         result["metrics"] = metrics
         report["raptor"] = result

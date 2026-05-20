@@ -70,7 +70,7 @@ Result file:
 
 - `target/trinity_parity/tiny_alt_isoform/report.json`
 
-Observed current Raptor output on the generated single-end reads:
+Initial rescue-baseline Raptor output on the generated single-end reads:
 
 - exit code: 0
 - transcript/contig count: 51
@@ -79,7 +79,18 @@ Observed current Raptor output on the generated single-end reads:
 - truth transcripts: 252 bp and 240 bp
 - Trinity executable on PATH: false
 
-Interpretation: current `raptor assemble` runs, but it fragments a tiny two-isoform transcript fixture into many short contigs. That is expected for the current rescue baseline and is direct evidence that Inchworm-equivalent and Butterfly-equivalent parity are not achieved yet.
+After adding bounded read-overlap rescue for small fragmented transcriptome inputs:
+
+- exit code: 0
+- transcript/contig count: 2
+- total output bases: 426
+- N50: 231
+- mean best truth coverage: 0.864583
+- minimum best truth coverage: 0.8125
+- truth transcripts: 252 bp and 240 bp
+- Trinity executable on PATH: false
+
+Interpretation: current `raptor assemble` now recovers transcript-scale contigs on this tiny two-isoform fixture. This is useful Inchworm-direction progress, but it is still not Trinity parity: Trinity is not yet run or frozen as an oracle, paired-end evidence is not consumed by this path, and isoform correctness is not measured.
 
 ## Misleading Or Risky Areas
 
@@ -94,5 +105,5 @@ Interpretation: current `raptor assemble` runs, but it fragments a tiny two-isof
 1. Extend `bench/trinity_parity/run_tiny_fixture.py` to compare against Trinity when Trinity is installed or a frozen Trinity oracle is supplied.
 2. Replace stale `bench/README.md` claims about missing scripts with the new harness contract.
 3. Fix normalization single-codepath drift: one implementation should own k, target coverage, min abundance, paired/single behavior, and GPU/no-GPU semantics.
-4. Use the tiny fixture to drive Inchworm-equivalent improvements until the output recovers long transcript-scale contigs before moving to broader public datasets.
+4. Use the tiny fixture to drive Inchworm-equivalent improvements until the output matches truth/transcript-oracle identity and not just length scale.
 5. Only after the fast fixture is stable, decide the frozen public benchmark panel and require approval before changing it.

@@ -13,6 +13,8 @@ use std::fs;
 use std::io::{self, Write};
 use tracing::{info, warn};
 
+const READ_OVERLAP_RESCUE_MAX_READS: usize = 200_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 struct AssemblyQualitySummary {
     total_contigs: usize,
@@ -699,6 +701,87 @@ fn write_assembly_quality_reports(
 }
 
 #[inline]
+fn should_try_read_overlap_rescue(contigs: &[Contig], read_len: usize) -> bool {
+    if read_len == 0 {
+        return false;
+    }
+    let longest = contigs
+        .iter()
+        .map(|contig| contig.sequence.len())
+        .max()
+        .unwrap_or(0);
+    longest < read_len
+}
+
+fn assemble_read_overlap_contigs(sequences: &[String], min_len: usize) -> Vec<Contig> {
+    if sequences.is_empty() {
+        return Vec::new();
+    }
+
+    let min_read_len = sequences.iter().map(|seq| seq.len()).min().unwrap_or(0);
+    if min_read_len < 2 {
+        return Vec::new();
+    }
+
+    let min_overlap = (min_read_len / 2).max(16).min(min_read_len - 1);
+    let builder = OverlapGraphBuilder::new(min_overlap, 0, 0);
+    let graph = builder.build_overlap_graph(sequences);
+    let (stitched, _) = builder.stitch_contigs(&graph);
+
+    let mut contigs = Vec::new();
+    for sequence in stitched {
+        if sequence.len() >= min_len {
+            contigs.push(Contig {
+                id: contigs.len(),
+                sequence,
+                kmer_path: Vec::new(),
+            });
+        }
+    }
+    contigs
+}
+
+fn maybe_rescue_fragmented_contigs_with_read_overlaps(
+    contigs: Vec<Contig>,
+    sequences: &[String],
+    min_len: usize,
+) -> Vec<Contig> {
+    if sequences.len() > READ_OVERLAP_RESCUE_MAX_READS {
+        return contigs;
+    }
+
+    let min_read_len = sequences.iter().map(|seq| seq.len()).min().unwrap_or(0);
+    if !should_try_read_overlap_rescue(&contigs, min_read_len) {
+        return contigs;
+    }
+
+    let rescued = assemble_read_overlap_contigs(sequences, min_len);
+    let original_longest = contigs
+        .iter()
+        .map(|contig| contig.sequence.len())
+        .max()
+        .unwrap_or(0);
+    let rescued_longest = rescued
+        .iter()
+        .map(|contig| contig.sequence.len())
+        .max()
+        .unwrap_or(0);
+
+    if rescued_longest > original_longest {
+        info!(
+            "Read-overlap rescue improved longest contig from {} bp to {} bp ({} -> {} contigs)",
+            original_longest,
+            rescued_longest,
+            contigs.len(),
+            rescued.len()
+        );
+        rescued
+    } else {
+        contigs
+    }
+}
+
+#[inline]
 fn sequence_only_record(record: FastqRecord) -> FastqRecord {
     FastqRecord {
         header: String::new(),
@@ -845,6 +928,7 @@ pub fn assemble_reads_with_gpu(
 
     let num_sequences = sequences.len();
     info!("Loaded {} sequences", num_sequences);
+    let can_try_read_overlap_rescue = num_sequences <= READ_OVERLAP_RESCUE_MAX_READS;
 
     if use_gpu {
         info!("GPU requested; current assembly path uses CPU k-mer/graph kernels");
@@ -885,11 +969,11 @@ pub fn assemble_reads_with_gpu(
 
     if need_sequence_only_records {
         records = sequences
-            .into_iter()
+            .iter()
             .map(|sequence| {
                 sequence_only_record(FastqRecord {
                     header: String::new(),
-                    sequence,
+                    sequence: sequence.clone(),
                     plus: String::new(),
                     quality: String::new(),
                 })
@@ -899,7 +983,7 @@ pub fn assemble_reads_with_gpu(
             "Reused {} input sequences for polishing/TPM (no second FASTQ pass)",
             records.len()
         );
-    } else {
+    } else if !can_try_read_overlap_rescue {
         // Sequence strings are no longer needed after k-mer counting.
         // Releasing this buffer early reduces peak RSS during graph cleanup/polishing.
         let released_records = sequences.len();
@@ -935,6 +1019,19 @@ pub fn assemble_reads_with_gpu(
     // Perform greedy assembly using u64 k-mers
     info!("Assembling contigs with minimum length: {}", min_len);
     let mut contigs = greedy_assembly_u64(k, &kmer_counts_u64, &adjacency, min_len);
+    if can_try_read_overlap_rescue {
+        contigs = maybe_rescue_fragmented_contigs_with_read_overlaps(contigs, &sequences, min_len);
+    }
+
+    if !need_sequence_only_records && !sequences.is_empty() {
+        let released_records = sequences.len();
+        sequences.clear();
+        sequences.shrink_to_fit();
+        info!(
+            "Released {} input sequences from memory after contig construction",
+            released_records
+        );
+    }
 
     // Collapse repeats if requested
     if collapse_repeats {
@@ -1488,8 +1585,9 @@ fn canonicalize_contig_output_order(contigs: &mut [Contig]) {
 #[cfg(test)]
 mod tests {
     use super::{
-        assemble_reads_with_gpu, canonical_sequence_key, canonicalize_contig_output_order,
-        derive_contig_expression_map, estimate_sequence_capacity, sequence_only_record,
+        assemble_read_overlap_contigs, assemble_reads_with_gpu, canonical_sequence_key,
+        canonicalize_contig_output_order, derive_contig_expression_map, estimate_sequence_capacity,
+        maybe_rescue_fragmented_contigs_with_read_overlaps, sequence_only_record,
         summarize_assembly_quality, write_assembly_quality_reports, AssemblyQualitySummary,
     };
     use crate::graph::assembler::Contig;
@@ -1654,6 +1752,52 @@ mod tests {
         assert_eq!(compact.sequence, "ACGT");
         assert!(compact.plus.is_empty());
         assert!(compact.quality.is_empty());
+    }
+
+    #[test]
+    fn read_overlap_rescue_builds_longer_contigs_from_overlapping_reads() {
+        let reads = vec![
+            "ACGTACGTACGTACGTACGT".to_string(),
+            "ACGTACGTACGTGGGGGGGG".to_string(),
+            "ACGTGGGGGGGGTTTTTTTT".to_string(),
+            "GGGGGGGGTTTTTTTTCCCC".to_string(),
+        ];
+
+        let rescued = assemble_read_overlap_contigs(&reads, 10);
+        let longest = rescued
+            .iter()
+            .map(|contig| contig.sequence.len())
+            .max()
+            .unwrap_or(0);
+
+        assert!(
+            longest > reads[0].len(),
+            "overlap rescue should extend beyond a single read, got longest={longest}"
+        );
+    }
+
+    #[test]
+    fn fragmented_kmer_contigs_are_replaced_by_better_read_overlap_rescue() {
+        let fragmented = vec![Contig {
+            id: 0,
+            sequence: "ACGTACGT".to_string(),
+            kmer_path: vec![],
+        }];
+        let reads = vec![
+            "ACGTACGTACGTACGTACGT".to_string(),
+            "ACGTACGTACGTGGGGGGGG".to_string(),
+            "ACGTGGGGGGGGTTTTTTTT".to_string(),
+            "GGGGGGGGTTTTTTTTCCCC".to_string(),
+        ];
+
+        let rescued = maybe_rescue_fragmented_contigs_with_read_overlaps(fragmented, &reads, 8);
+        let longest = rescued
+            .iter()
+            .map(|contig| contig.sequence.len())
+            .max()
+            .unwrap_or(0);
+
+        assert!(longest > reads[0].len());
     }
 
     #[test]
