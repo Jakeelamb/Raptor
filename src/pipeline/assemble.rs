@@ -945,9 +945,18 @@ fn split_contigs_at_paired_start_gaps(
     paired_sequences: &[(String, String)],
     min_len: usize,
 ) -> Vec<Contig> {
+    let max_read_len = paired_sequences
+        .iter()
+        .map(|(read1, read2)| read1.len().max(read2.len()))
+        .max()
+        .unwrap_or(0);
     let mut split_contigs = Vec::with_capacity(contigs.len());
     let mut split_count = 0usize;
     for contig in contigs {
+        if !should_try_paired_start_gap_split(&contig.sequence, max_read_len) {
+            split_contigs.push(contig);
+            continue;
+        }
         let pieces = paired_start_gap_splits(&contig.sequence, paired_sequences, min_len);
         if pieces.len() <= 1 {
             split_contigs.push(contig);
@@ -969,6 +978,10 @@ fn split_contigs_at_paired_start_gaps(
         );
     }
     split_contigs
+}
+
+fn should_try_paired_start_gap_split(contig: &str, max_read_len: usize) -> bool {
+    max_read_len > 0 && contig.len() <= max_read_len.saturating_mul(5)
 }
 
 fn count_kmers_u64_filtered_with_optional_gpu(
@@ -1927,9 +1940,10 @@ fn canonicalize_contig_output_order(contigs: &mut [Contig]) {
 #[cfg(test)]
 mod tests {
     use super::{
-        assemble_read_overlap_contigs, assemble_reads_with_gpu, canonical_sequence_key,
-        canonicalize_contig_output_order, derive_contig_expression_map, estimate_sequence_capacity,
-        build_read_prefix_index, maybe_rescue_fragmented_contigs_with_read_overlaps, sequence_only_record,
+        assemble_read_overlap_contigs, assemble_reads_with_gpu, build_read_prefix_index,
+        canonical_sequence_key, canonicalize_contig_output_order, derive_contig_expression_map,
+        estimate_sequence_capacity, maybe_rescue_fragmented_contigs_with_read_overlaps,
+        sequence_only_record, should_try_paired_start_gap_split,
         split_contigs_at_paired_start_gaps, summarize_assembly_quality,
         write_assembly_quality_reports, AssemblyQualitySummary,
     };
@@ -2123,6 +2137,12 @@ mod tests {
         assert_eq!(lengths, vec![216, 216]);
         assert_eq!(split[0].sequence, format!("{left_unique}{shared}"));
         assert_eq!(split[1].sequence, format!("{shared}{right_unique}"));
+    }
+
+    #[test]
+    fn paired_start_gap_split_skips_long_public_scale_contigs() {
+        assert!(should_try_paired_start_gap_split(&"A".repeat(380), 76));
+        assert!(!should_try_paired_start_gap_split(&"A".repeat(381), 76));
     }
 
     #[test]
