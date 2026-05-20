@@ -325,6 +325,7 @@ def component_candidate_metrics(
     selected_path: Path | None,
     truth_fasta: Path,
     oracle_fasta: Path,
+    min_match_coverage: float,
 ) -> dict[str, object]:
     if not path.exists():
         return {"component_paths_fasta_exists": False}
@@ -350,6 +351,9 @@ def component_candidate_metrics(
         metrics["component_selected_isoform_lengths"] = [len(seq) for seq in selected.values()]
         metrics["component_selected_truth_recovery"] = truth_recovery_metrics(
             truth_fasta, selected_path
+        )
+        metrics["component_selected_truth_precision"] = fasta_precision_recall_metrics(
+            truth_fasta, selected_path, min_match_coverage
         )
         if oracle_fasta.exists():
             metrics["component_selected_oracle_recovery"] = fasta_recovery_metrics(
@@ -410,6 +414,67 @@ def fasta_recovery_metrics(reference_fasta: Path, assembly_fasta: Path) -> dict[
         else 0.0,
         "min_best_coverage": min(coverages) if coverages else 0.0,
         "per_reference": per_reference,
+    }
+
+
+def fasta_precision_recall_metrics(
+    truth_fasta: Path,
+    assembly_fasta: Path,
+    min_match_coverage: float,
+) -> dict[str, object]:
+    truth = read_fasta_records(truth_fasta)
+    assembled = read_fasta_records(assembly_fasta)
+    candidates: list[tuple[float, str, str, int]] = []
+    for truth_name, truth_seq in truth.items():
+        for assembled_name, assembled_seq in assembled.items():
+            forward = longest_common_substring_len(truth_seq, assembled_seq)
+            reverse = longest_common_substring_len(truth_seq, revcomp(assembled_seq))
+            matching_bases = max(forward, reverse)
+            truth_coverage = matching_bases / len(truth_seq) if truth_seq else 0.0
+            assembled_coverage = matching_bases / len(assembled_seq) if assembled_seq else 0.0
+            score = min(truth_coverage, assembled_coverage)
+            if score >= min_match_coverage:
+                candidates.append((score, truth_name, assembled_name, matching_bases))
+
+    candidates.sort(key=lambda item: (-item[0], item[1], item[2]))
+    matched_truth: set[str] = set()
+    matched_assembled: set[str] = set()
+    matches: list[dict[str, object]] = []
+    for score, truth_name, assembled_name, matching_bases in candidates:
+        if truth_name in matched_truth or assembled_name in matched_assembled:
+            continue
+        matched_truth.add(truth_name)
+        matched_assembled.add(assembled_name)
+        matches.append(
+            {
+                "truth": truth_name,
+                "assembled": assembled_name,
+                "matching_bases": matching_bases,
+                "match_coverage": round(score, 6),
+            }
+        )
+
+    true_positive = len(matches)
+    false_positive = len(assembled) - true_positive
+    false_negative = len(truth) - true_positive
+    precision = true_positive / len(assembled) if assembled else 0.0
+    recall = true_positive / len(truth) if truth else 0.0
+    f1 = (
+        2 * precision * recall / (precision + recall)
+        if precision + recall > 0.0
+        else 0.0
+    )
+    return {
+        "match_min_coverage": min_match_coverage,
+        "truth_transcript_count": len(truth),
+        "assembled_record_count": len(assembled),
+        "true_positive": true_positive,
+        "false_positive": false_positive,
+        "false_negative": false_negative,
+        "precision": round(precision, 6),
+        "recall": round(recall, 6),
+        "f1": round(f1, 6),
+        "matches": matches,
     }
 
 
@@ -576,6 +641,7 @@ def run_one_fixture(
     require_trinity: bool,
     freeze_trinity_oracle: bool,
     skip_raptor: bool,
+    min_match_coverage: float,
 ) -> dict[str, object]:
     out_dir.mkdir(parents=True, exist_ok=True)
     fixture = generate_fixture(out_dir, fixture_name, insert)
@@ -767,6 +833,7 @@ def run_one_fixture(
                         else None,
                         Path(fixture["paths"]["truth_fasta"]),
                         oracle_fasta,
+                        min_match_coverage,
                     )
                 )
         if workflow_fasta.exists():
@@ -847,6 +914,8 @@ def check_report_thresholds(
     report: dict[str, object],
     min_truth_coverage: float,
     min_oracle_coverage: float,
+    min_selected_precision: float,
+    min_selected_f1: float,
 ) -> list[str]:
     failures: list[str] = []
     trinity = report.get("trinity", {})
@@ -997,6 +1066,17 @@ def check_report_thresholds(
         if selected_min_coverage < min_truth_coverage:
             failures.append(
                 f"selected component isoform truth recovery below threshold: {selected_min_coverage} < {min_truth_coverage}"
+            )
+        selected_truth_precision = workflow_metrics.get("component_selected_truth_precision", {})
+        selected_precision = selected_truth_precision.get("precision", 0.0)
+        selected_f1 = selected_truth_precision.get("f1", 0.0)
+        if selected_precision < min_selected_precision:
+            failures.append(
+                f"selected component isoform precision below threshold: {selected_precision} < {min_selected_precision}"
+            )
+        if selected_f1 < min_selected_f1:
+            failures.append(
+                f"selected component isoform F1 below threshold: {selected_f1} < {min_selected_f1}"
             )
         oracle_recovery = workflow_metrics.get("oracle_recovery")
         if oracle_recovery:
@@ -1195,6 +1275,24 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         "workflow_component_selected_truth_min_coverage": workflow_metrics.get(
             "component_selected_truth_recovery", {}
         ).get("min_best_coverage"),
+        "workflow_component_selected_precision": workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("precision"),
+        "workflow_component_selected_recall": workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("recall"),
+        "workflow_component_selected_f1": workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("f1"),
+        "workflow_component_selected_true_positive": workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("true_positive"),
+        "workflow_component_selected_false_positive": workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("false_positive"),
+        "workflow_component_selected_false_negative": workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("false_negative"),
         "workflow_component_selected_oracle_min_coverage": workflow_metrics.get(
             "component_selected_oracle_recovery", {}
         ).get("min_best_coverage"),
@@ -1269,6 +1367,24 @@ def main() -> int:
     )
     parser.add_argument("--min-truth-coverage", type=float, default=0.95)
     parser.add_argument("--min-oracle-coverage", type=float, default=0.95)
+    parser.add_argument(
+        "--min-selected-match-coverage",
+        type=float,
+        default=0.95,
+        help="Minimum reciprocal coverage for a selected isoform to count as a truth match",
+    )
+    parser.add_argument(
+        "--min-selected-precision",
+        type=float,
+        default=0.75,
+        help="Minimum selected isoform precision against truth transcripts",
+    )
+    parser.add_argument(
+        "--min-selected-f1",
+        type=float,
+        default=0.85,
+        help="Minimum selected isoform F1 against truth transcripts",
+    )
     args = parser.parse_args()
 
     out_dir = args.out_dir.resolve()
@@ -1302,12 +1418,17 @@ def main() -> int:
             require_trinity,
             args.freeze_trinity_oracle,
             args.skip_raptor,
+            args.min_selected_match_coverage,
         )
         reports.append(report)
         failures.extend(
             f"insert {insert}: {failure}"
             for failure in check_report_thresholds(
-                report, args.min_truth_coverage, args.min_oracle_coverage
+                report,
+                args.min_truth_coverage,
+                args.min_oracle_coverage,
+                args.min_selected_precision,
+                args.min_selected_f1,
             )
         )
         print(f"wrote {report['report_path']}")

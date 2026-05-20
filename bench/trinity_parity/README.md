@@ -57,7 +57,10 @@ python3 bench/trinity_parity/run_tiny_fixture.py --freeze-trinity-oracle
 ```
 
 By default the harness fails if minimum best truth coverage is below `0.95`.
-It also fails if minimum best oracle coverage is below `0.95`.
+It also fails if minimum best oracle coverage is below `0.95`. Selected
+component isoforms also need reciprocal truth matches at `0.95` coverage, with
+precision at least `0.75` and F1 at least `0.85`. Those precision defaults are
+current rescue baselines, not final parity thresholds.
 
 Outputs are written under `target/trinity_parity/tiny_alt_isoform/`.
 Sweep mode writes one report per insert plus `insert_sweep_report.json`.
@@ -69,7 +72,7 @@ The script records:
 - transcript length/count metrics
 - truth and oracle recovery metrics
 - Raptor normalization command and kept-pair metrics when requested
-- Raptor `trinity` workflow command, report path, component clustering mode, component JSON path/count, component graph JSON path/count, component transcript candidate and selected-isoform FASTA metrics, selected-isoform evidence JSON support metrics, scored isoform candidate JSON selection/rejection metrics, graph node/edge counts, edge read/pair/k-mer support, read k-mer node/edge counts, serialized read k-mer node/edge record counts, reconstructed read k-mer path counts/support, capped read k-mer edge sample count, component assigned read/pair counts, and recovery metrics when requested
+- Raptor `trinity` workflow command, report path, component clustering mode, component JSON path/count, component graph JSON path/count, component transcript candidate and selected-isoform FASTA metrics, selected-isoform precision/recall/F1 metrics, selected-isoform evidence JSON support metrics, scored isoform candidate JSON selection/rejection metrics, graph node/edge counts, edge read/pair/k-mer support, read k-mer node/edge counts, serialized read k-mer node/edge record counts, reconstructed read k-mer path counts/support, capped read k-mer edge sample count, component assigned read/pair counts, and recovery metrics when requested
 - Trinity paired-end command, exit status, output metrics, and truth recovery when requested
 - whether Trinity was available on `PATH`
 - the current Raptor limitation that paired-end evidence is only used as reverse-complemented mate sequence evidence, not yet full Butterfly-style pair path constraints
