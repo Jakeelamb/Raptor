@@ -23,6 +23,7 @@ pub struct RaptorComponentGraph {
     pub read_kmer_k: usize,
     pub read_kmer_node_count: usize,
     pub read_kmer_edge_count: usize,
+    pub read_kmer_edges_sample: Vec<RaptorReadKmerEdge>,
     pub assigned_read_count: usize,
     pub assigned_pair_count: usize,
 }
@@ -41,6 +42,13 @@ pub struct RaptorComponentEdge {
     pub shared_read_count: usize,
     pub shared_pair_count: usize,
     pub shared_observed_kmer_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RaptorReadKmerEdge {
+    pub from: String,
+    pub to: String,
+    pub support: usize,
 }
 
 pub fn merge_clusters(
@@ -216,17 +224,28 @@ pub fn build_component_graphs(
                     }
                 }
             }
+            let read_kmer_k = component_read_kmer_k(contigs, component, reads1, reads2, 25);
+            let read_kmer_nodes =
+                component_read_kmer_nodes(contigs, component, reads1, reads2, read_kmer_k);
+            let read_kmer_edges =
+                component_read_kmer_edges(contigs, component, reads1, reads2, read_kmer_k);
+            let read_kmer_edges_sample = read_kmer_edges
+                .iter()
+                .take(32)
+                .map(|((from, to), support)| RaptorReadKmerEdge {
+                    from: from.clone(),
+                    to: to.clone(),
+                    support: *support,
+                })
+                .collect();
             RaptorComponentGraph {
                 component_id: component.id,
                 node_count: nodes.len(),
                 edge_count: edges.len(),
-                read_kmer_k: component_read_kmer_k(contigs, component, reads1, reads2, 25),
-                read_kmer_node_count: component_read_kmer_node_count(
-                    contigs, component, reads1, reads2, 25,
-                ),
-                read_kmer_edge_count: component_read_kmer_edge_count(
-                    contigs, component, reads1, reads2, 25,
-                ),
+                read_kmer_k,
+                read_kmer_node_count: read_kmer_nodes.len(),
+                read_kmer_edge_count: read_kmer_edges.len(),
+                read_kmer_edges_sample,
                 nodes,
                 edges,
                 assigned_read_count: component.assigned_read_count,
@@ -251,46 +270,38 @@ fn component_read_kmer_k(
         .unwrap_or(preferred_k.max(1))
 }
 
-fn component_read_kmer_node_count(
+fn component_read_kmer_edges(
     contigs: &[Contig],
     component: &RaptorComponent,
     reads1: &[String],
     reads2: Option<&[String]>,
-    preferred_k: usize,
-) -> usize {
+    k: usize,
+) -> BTreeMap<(String, String), usize> {
     let assigned_reads = assigned_component_reads(contigs, component, reads1, reads2);
-    let k = assigned_reads
-        .iter()
-        .map(|read| read.len())
-        .min()
-        .map(|min_len| preferred_k.min(min_len).max(1))
-        .unwrap_or(preferred_k.max(1));
-    let mut nodes = BTreeSet::new();
-    collect_observed_kmers(&assigned_reads, k, &mut nodes);
-    nodes.len()
-}
-
-fn component_read_kmer_edge_count(
-    contigs: &[Contig],
-    component: &RaptorComponent,
-    reads1: &[String],
-    reads2: Option<&[String]>,
-    preferred_k: usize,
-) -> usize {
-    let assigned_reads = assigned_component_reads(contigs, component, reads1, reads2);
-    let k = assigned_reads
-        .iter()
-        .map(|read| read.len())
-        .min()
-        .map(|min_len| preferred_k.min(min_len).max(1))
-        .unwrap_or(preferred_k.max(1));
-    let mut edges = BTreeSet::new();
+    let mut edges = BTreeMap::new();
     for read in &assigned_reads {
         collect_read_kmer_edges(read, k, &mut edges);
         let read_rc = reverse_complement(read);
         collect_read_kmer_edges(&read_rc, k, &mut edges);
     }
-    edges.len()
+    edges
+}
+
+fn component_read_kmer_nodes(
+    contigs: &[Contig],
+    component: &RaptorComponent,
+    reads1: &[String],
+    reads2: Option<&[String]>,
+    k: usize,
+) -> BTreeSet<String> {
+    let assigned_reads = assigned_component_reads(contigs, component, reads1, reads2);
+    let mut nodes = BTreeSet::new();
+    for read in &assigned_reads {
+        collect_observed_kmers(std::slice::from_ref(read), k, &mut nodes);
+        let read_rc = reverse_complement(read);
+        collect_observed_kmers(std::slice::from_ref(&read_rc), k, &mut nodes);
+    }
+    nodes
 }
 
 fn assigned_component_reads(
@@ -326,7 +337,7 @@ fn assigned_component_reads(
     reads
 }
 
-fn collect_read_kmer_edges(read: &str, k: usize, edges: &mut BTreeSet<(String, String)>) {
+fn collect_read_kmer_edges(read: &str, k: usize, edges: &mut BTreeMap<(String, String), usize>) {
     if read.len() <= k {
         return;
     }
@@ -336,7 +347,7 @@ fn collect_read_kmer_edges(read: &str, k: usize, edges: &mut BTreeSet<(String, S
         .map(|window| String::from_utf8_lossy(window).to_ascii_uppercase())
         .collect();
     for pair in kmers.windows(2) {
-        edges.insert((pair[0].clone(), pair[1].clone()));
+        *edges.entry((pair[0].clone(), pair[1].clone())).or_default() += 1;
     }
 }
 
@@ -614,6 +625,7 @@ mod tests {
         assert_eq!(graphs[0].read_kmer_k, 8);
         assert_eq!(graphs[0].read_kmer_node_count, 1);
         assert_eq!(graphs[0].read_kmer_edge_count, 0);
+        assert!(graphs[0].read_kmer_edges_sample.is_empty());
         assert_eq!(graphs[0].edges[0].left_contig_id, 10);
         assert_eq!(graphs[0].edges[0].right_contig_id, 20);
         assert_eq!(graphs[0].edges[0].shared_bases, 8);
@@ -622,5 +634,23 @@ mod tests {
         assert_eq!(graphs[0].edges[0].shared_observed_kmer_count, 1);
         assert_eq!(graphs[1].node_count, 1);
         assert_eq!(graphs[1].edge_count, 0);
+    }
+
+    #[test]
+    fn component_graphs_include_read_kmer_edge_sample() {
+        let contigs = vec![contig(0, "AAAACCCCGGGGTTTT")];
+        let components = cluster_contigs_by_shared_sequence(&contigs, 8);
+        let reads1 = vec!["AAAACCCCG".to_string(), "AAAACCCCGG".to_string()];
+
+        let graphs = build_component_graphs(&contigs, &components, 8, &reads1, None);
+
+        assert_eq!(graphs[0].read_kmer_k, 9);
+        assert!(graphs[0].read_kmer_node_count >= 2);
+        assert!(graphs[0].read_kmer_edge_count >= 1);
+        assert!(!graphs[0].read_kmer_edges_sample.is_empty());
+        assert!(graphs[0]
+            .read_kmer_edges_sample
+            .iter()
+            .all(|edge| edge.support >= 1));
     }
 }
