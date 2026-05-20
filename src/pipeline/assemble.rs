@@ -919,6 +919,101 @@ fn maybe_rescue_fragmented_contigs_with_read_overlaps(
     }
 }
 
+fn split_contigs_at_paired_start_gaps(
+    contigs: Vec<Contig>,
+    paired_sequences: &[(String, String)],
+    min_len: usize,
+) -> Vec<Contig> {
+    let mut split_contigs = Vec::with_capacity(contigs.len());
+    let mut split_count = 0usize;
+    for contig in contigs {
+        let pieces = paired_start_gap_splits(&contig.sequence, paired_sequences, min_len);
+        if pieces.len() <= 1 {
+            split_contigs.push(contig);
+            continue;
+        }
+        split_count += pieces.len() - 1;
+        for sequence in pieces {
+            split_contigs.push(Contig {
+                id: split_contigs.len(),
+                sequence,
+                kmer_path: Vec::new(),
+            });
+        }
+    }
+    if split_count > 0 {
+        info!(
+            "Split {} paired-supported compact-overlap contig segment(s) by read-pair start gaps",
+            split_count
+        );
+    }
+    split_contigs
+}
+
+fn paired_start_gap_splits(
+    contig: &str,
+    paired_sequences: &[(String, String)],
+    min_len: usize,
+) -> Vec<String> {
+    let mut spans = Vec::new();
+    let mut max_read_len = 0usize;
+    for (read1, read2) in paired_sequences {
+        max_read_len = max_read_len.max(read1.len()).max(read2.len());
+        let Some(read1_start) = contig.find(read1) else {
+            continue;
+        };
+        let Some(read2_start) = contig.find(read2) else {
+            continue;
+        };
+        let start = read1_start.min(read2_start);
+        let end = (read1_start + read1.len()).max(read2_start + read2.len());
+        spans.push((start, end));
+    }
+    if spans.len() < 4 || max_read_len == 0 {
+        return vec![contig.to_string()];
+    }
+    spans.sort_unstable();
+    spans.dedup();
+
+    let gap_threshold = ((max_read_len * 2) / 3).max(1);
+    let mut groups: Vec<Vec<(usize, usize)>> = Vec::new();
+    for span in spans {
+        if let Some(group) = groups.last_mut() {
+            let previous_start = group.last().map(|(start, _)| *start).unwrap_or(span.0);
+            if span.0.saturating_sub(previous_start) <= gap_threshold {
+                group.push(span);
+                continue;
+            }
+        }
+        groups.push(vec![span]);
+    }
+
+    if groups.len() <= 1 {
+        return vec![contig.to_string()];
+    }
+
+    let mut pieces = Vec::with_capacity(groups.len());
+    for group in groups {
+        let start = group.iter().map(|(start, _)| *start).min().unwrap_or(0);
+        let end = group
+            .iter()
+            .map(|(_, end)| *end)
+            .max()
+            .unwrap_or(start)
+            .min(contig.len());
+        if end.saturating_sub(start) < min_len {
+            return vec![contig.to_string()];
+        }
+        pieces.push(contig[start..end].to_string());
+    }
+
+    if pieces.iter().any(|piece| piece.len() == contig.len()) {
+        vec![contig.to_string()]
+    } else {
+        pieces
+    }
+}
+
 #[inline]
 fn sequence_only_record(record: FastqRecord) -> FastqRecord {
     FastqRecord {
@@ -1065,12 +1160,15 @@ pub fn assemble_reads_with_gpu(
         estimate_sequence_capacity(std::fs::metadata(input_path).ok().map(|m| m.len()));
 
     let mut sequences: Vec<String> = Vec::with_capacity(estimated_count);
+    let mut paired_sequences: Vec<(String, String)> = Vec::new();
     if let Some(input2_path) = input2_path {
         let reader2 = try_open_fastq(input2_path)?;
         for pair in stream_paired_fastq_records_checked(reader, reader2) {
             let (r1, r2) = pair?;
+            let mate_sequence = reverse_complement_dna(&r2.sequence);
+            paired_sequences.push((r1.sequence.clone(), mate_sequence.clone()));
             sequences.push(r1.sequence);
-            sequences.push(reverse_complement_dna(&r2.sequence));
+            sequences.push(mate_sequence);
         }
     } else {
         // First pass: collect sequences for k optimization (sample if large)
@@ -1197,6 +1295,10 @@ pub fn assemble_reads_with_gpu(
             contigs.len(),
             before_count - contigs.len()
         );
+    }
+
+    if !paired_sequences.is_empty() {
+        contigs = split_contigs_at_paired_start_gaps(contigs, &paired_sequences, min_len);
     }
 
     // Polish contigs if requested (using parallel implementation for 4-8x speedup)
@@ -1741,7 +1843,8 @@ mod tests {
         assemble_read_overlap_contigs, assemble_reads_with_gpu, canonical_sequence_key,
         canonicalize_contig_output_order, derive_contig_expression_map, estimate_sequence_capacity,
         maybe_rescue_fragmented_contigs_with_read_overlaps, sequence_only_record,
-        summarize_assembly_quality, write_assembly_quality_reports, AssemblyQualitySummary,
+        split_contigs_at_paired_start_gaps, summarize_assembly_quality,
+        write_assembly_quality_reports, AssemblyQualitySummary,
     };
     use crate::graph::assembler::Contig;
     use crate::io::fastq::FastqRecord;
@@ -1889,6 +1992,50 @@ mod tests {
                 (3, "AAA", &[8][..]),
             ]
         );
+    }
+
+    #[test]
+    fn paired_start_gap_split_breaks_compact_overlap_fusion() {
+        fn pseudo_dna(seed: u64, len: usize) -> String {
+            let mut state = seed;
+            let mut sequence = String::with_capacity(len);
+            for _ in 0..len {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let base = match (state >> 32) & 3 {
+                    0 => 'A',
+                    1 => 'C',
+                    2 => 'G',
+                    _ => 'T',
+                };
+                sequence.push(base);
+            }
+            sequence
+        }
+
+        let left_unique = pseudo_dna(11, 120);
+        let shared = pseudo_dna(29, 96);
+        let right_unique = pseudo_dna(47, 120);
+        let fused = format!("{left_unique}{shared}{right_unique}");
+        let paired_sequences = vec![
+            (fused[0..75].to_string(), fused[85..160].to_string()),
+            (fused[48..123].to_string(), fused[133..208].to_string()),
+            (fused[56..131].to_string(), fused[141..216].to_string()),
+            (fused[120..195].to_string(), fused[205..280].to_string()),
+            (fused[168..243].to_string(), fused[253..328].to_string()),
+            (fused[176..251].to_string(), fused[261..336].to_string()),
+        ];
+        let contigs = vec![Contig {
+            id: 0,
+            sequence: fused,
+            kmer_path: Vec::new(),
+        }];
+
+        let split = split_contigs_at_paired_start_gaps(contigs, &paired_sequences, 25);
+        let lengths: Vec<usize> = split.iter().map(|contig| contig.sequence.len()).collect();
+
+        assert_eq!(lengths, vec![216, 216]);
+        assert_eq!(split[0].sequence, format!("{left_unique}{shared}"));
+        assert_eq!(split[1].sequence, format!("{shared}{right_unique}"));
     }
 
     #[test]
