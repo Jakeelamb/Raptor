@@ -90,6 +90,17 @@ def read_fasta_lengths(path: Path) -> list[int]:
     return lengths
 
 
+def count_fastq_records(path: Path) -> int:
+    opener = gzip.open if path.suffix == ".gz" else open
+    lines = 0
+    with opener(path, "rt", encoding="utf-8") as handle:
+        for lines, _ in enumerate(handle, start=1):
+            pass
+    if lines % 4 != 0:
+        raise ValueError(f"FASTQ line count is not divisible by 4: {path}")
+    return lines // 4
+
+
 def read_fasta_records(path: Path) -> dict[str, str]:
     opener = gzip.open if path.suffix == ".gz" else open
     records: dict[str, str] = {}
@@ -287,6 +298,8 @@ def run_one_fixture(
     out_dir: Path,
     insert: int,
     oracle_fasta: Path,
+    normalize_raptor: bool,
+    assemble_normalized: bool,
     run_trinity: bool,
     require_trinity: bool,
     freeze_trinity_oracle: bool,
@@ -298,6 +311,7 @@ def run_one_fixture(
     report: dict[str, object] = {
         "fixture": fixture,
         "repo": str(ROOT),
+        "raptor_normalize": None,
         "raptor": None,
         "trinity": {
             "available": shutil.which("Trinity") is not None,
@@ -317,6 +331,59 @@ def run_one_fixture(
         ],
     }
 
+    raptor_r1 = Path(fixture["paths"]["r1_fastq"])
+    raptor_r2 = Path(fixture["paths"]["r2_fastq"])
+    if normalize_raptor:
+        normalized_prefix = out_dir / "raptor_normalized" / "reads"
+        normalized_prefix.parent.mkdir(parents=True, exist_ok=True)
+        command = [
+            "cargo",
+            "run",
+            "--quiet",
+            "--",
+            "normalize",
+            "--input1",
+            fixture["paths"]["r1_fastq"],
+            "--input2",
+            fixture["paths"]["r2_fastq"],
+            "--output",
+            str(normalized_prefix),
+            "--coverage-target",
+            "500",
+            "--max-reads",
+            "5000000",
+        ]
+        result = run_command(command, ROOT)
+        normalized_r1 = Path(f"{normalized_prefix}_R1.fastq.gz")
+        normalized_r2 = Path(f"{normalized_prefix}_R2.fastq.gz")
+        metrics: dict[str, object] = {
+            "input_pairs": fixture["paired_end_pairs"],
+            "output_r1": str(normalized_r1),
+            "output_r2": str(normalized_r2),
+            "output_exists": normalized_r1.exists() and normalized_r2.exists(),
+        }
+        if normalized_r1.exists() and normalized_r2.exists():
+            r1_count = count_fastq_records(normalized_r1)
+            r2_count = count_fastq_records(normalized_r2)
+            metrics.update(
+                {
+                    "kept_r1_reads": r1_count,
+                    "kept_r2_reads": r2_count,
+                    "kept_pairs": min(r1_count, r2_count),
+                    "kept_pair_fraction": round(
+                        min(r1_count, r2_count) / fixture["paired_end_pairs"], 6
+                    )
+                    if fixture["paired_end_pairs"]
+                    else 0.0,
+                    "paired_counts_match": r1_count == r2_count,
+                }
+            )
+            if assemble_normalized:
+                raptor_r1 = normalized_r1
+                raptor_r2 = normalized_r2
+        result["metrics"] = metrics
+        report["raptor_normalize"] = result
+
     if not skip_raptor:
         output_fasta = out_dir / "raptor" / "assembly.fa.gz"
         output_fasta.parent.mkdir(parents=True, exist_ok=True)
@@ -327,9 +394,9 @@ def run_one_fixture(
             "--",
             "assemble",
             "--input",
-            fixture["paths"]["r1_fastq"],
+            str(raptor_r1),
             "--input2",
-            fixture["paths"]["r2_fastq"],
+            str(raptor_r2),
             "--output",
             str(output_fasta),
             "--min-len",
@@ -338,7 +405,12 @@ def run_one_fixture(
             "1",
         ]
         result = run_command(command, ROOT)
-        metrics = {"output_exists": output_fasta.exists()}
+        metrics = {
+            "output_exists": output_fasta.exists(),
+            "assembled_from_normalized_reads": assemble_normalized and normalize_raptor,
+            "input_r1": str(raptor_r1),
+            "input_r2": str(raptor_r2),
+        }
         if output_fasta.exists():
             lengths = read_fasta_lengths(output_fasta)
             metrics.update(
@@ -432,6 +504,16 @@ def check_report_thresholds(
             failures.append("required Trinity run did not produce Trinity.fasta")
 
     raptor = report.get("raptor")
+    raptor_normalize = report.get("raptor_normalize")
+    if raptor_normalize:
+        if raptor_normalize.get("exit_code") != 0:
+            failures.append("raptor normalize failed")
+        normalize_metrics = raptor_normalize.get("metrics", {})
+        if not normalize_metrics.get("output_exists"):
+            failures.append("raptor normalize did not produce paired outputs")
+        if normalize_metrics.get("paired_counts_match") is False:
+            failures.append("raptor normalize produced mismatched R1/R2 record counts")
+
     if not raptor:
         return failures
 
@@ -460,6 +542,7 @@ def check_report_thresholds(
 
 def summarize_report(report: dict[str, object]) -> dict[str, object]:
     metrics = report.get("raptor", {}).get("metrics", {})
+    normalize_metrics = report.get("raptor_normalize", {}).get("metrics", {})
     trinity_result = report.get("trinity", {}).get("result", {})
     trinity_metrics = trinity_result.get("metrics", {})
     return {
@@ -467,6 +550,10 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         "paired_end_pairs": report["fixture"]["paired_end_pairs"],
         "report_path": report.get("report_path"),
         "raptor_exit_code": report.get("raptor", {}).get("exit_code"),
+        "raptor_normalize_exit_code": report.get("raptor_normalize", {}).get("exit_code"),
+        "normalized_kept_pairs": normalize_metrics.get("kept_pairs"),
+        "normalized_kept_pair_fraction": normalize_metrics.get("kept_pair_fraction"),
+        "assembled_from_normalized_reads": metrics.get("assembled_from_normalized_reads"),
         "lengths": metrics.get("lengths"),
         "n50": metrics.get("n50"),
         "truth_min_coverage": metrics.get("truth_recovery", {}).get("min_best_coverage"),
@@ -486,6 +573,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--skip-raptor", action="store_true")
+    parser.add_argument(
+        "--normalize-raptor",
+        action="store_true",
+        help="Run raptor normalize on the paired FASTQs before assembly and record kept-pair metrics",
+    )
+    parser.add_argument(
+        "--assemble-normalized",
+        action="store_true",
+        help="Assemble Raptor output from --normalize-raptor instead of raw fixture reads",
+    )
     parser.add_argument("--run-trinity", action="store_true")
     parser.add_argument("--oracle-fasta", type=Path, default=DEFAULT_ORACLE)
     parser.add_argument("--insert", type=int, default=160)
@@ -509,6 +606,9 @@ def main() -> int:
     args = parser.parse_args()
 
     out_dir = args.out_dir.resolve()
+    if args.assemble_normalized and not args.normalize_raptor:
+        print("--assemble-normalized requires --normalize-raptor", file=sys.stderr)
+        return 2
     run_trinity = args.run_trinity or args.require_trinity or args.freeze_trinity_oracle
     require_trinity = args.require_trinity or args.freeze_trinity_oracle
 
@@ -521,6 +621,8 @@ def main() -> int:
             run_dir,
             insert,
             args.oracle_fasta,
+            args.normalize_raptor,
+            args.assemble_normalized,
             run_trinity,
             require_trinity,
             args.freeze_trinity_oracle,

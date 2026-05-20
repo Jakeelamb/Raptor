@@ -25,6 +25,12 @@ For the current paired-insert stress gate:
 python3 bench/trinity_parity/run_tiny_fixture.py --insert-sweep 110,140,160,180
 ```
 
+To exercise the current Raptor normalize -> assemble path:
+
+```bash
+python3 bench/trinity_parity/run_tiny_fixture.py --normalize-raptor --assemble-normalized
+```
+
 If Trinity is installed on `PATH`, the same fixture can run Trinity on the same
 paired-end reads:
 
@@ -50,6 +56,7 @@ The script records:
 - tool versions where available
 - transcript length/count metrics
 - truth and oracle recovery metrics
+- Raptor normalization command and kept-pair metrics when requested
 - Trinity paired-end command, exit status, output metrics, and truth recovery when requested
 - whether Trinity was available on `PATH`
 - the current Raptor limitation that paired-end evidence is only used as reverse-complemented mate sequence evidence, not yet full Butterfly-style pair path constraints

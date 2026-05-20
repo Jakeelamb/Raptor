@@ -37,7 +37,7 @@ The current overall readiness is the minimum stage score: **0**. That is not a v
 | Trinity responsibility | Raptor evidence | Current status | Readiness | Next required proof |
 | --- | --- | --- | --- | --- |
 | Input FASTQ handling | `src/io/fastq.rs`, checked streaming readers, gzip-capable callers | Real infrastructure exists; needs transcriptome benchmark fixtures and CLI compatibility review | 1 | Add parity fixtures covering single-end, paired-end, gzip, malformed FASTQ, and Trinity-style input combinations |
-| In silico normalization | `src/pipeline/normalize.rs`, `src/kmer/normalize.rs`, `src/bin/normalize_reads.rs`, `src/bin/normalize_paired_reads.rs`, `normalize` CLI | Two-pass CMS/ntHash normalization exists for single and paired reads. `NormalizeConfig` now centralizes k, target coverage, min abundance, max read/pair limit, and GPU request state for the CLI and standalone binaries. GPU is still a logged CPU fallback, and no Trinity kept-read comparison exists yet. | 1 | Compare kept-read behavior to Trinity normalization on fixtures, then add CPU/GPU output-equivalence if GPU normalization becomes real |
+| In silico normalization | `src/pipeline/normalize.rs`, `src/kmer/normalize.rs`, `src/bin/normalize_reads.rs`, `src/bin/normalize_paired_reads.rs`, `normalize` CLI, `bench/trinity_parity/run_tiny_fixture.py` | Two-pass CMS/ntHash normalization exists for single and paired reads. `NormalizeConfig` now centralizes k, target coverage, min abundance, max read/pair limit, and GPU request state for the CLI and standalone binaries. The tiny harness can run Raptor normalize -> assemble and record kept-pair metrics. GPU is still a logged CPU fallback, and no Trinity kept-read comparison exists yet. | 1 | Compare kept-read behavior to Trinity normalization on fixtures, then add CPU/GPU output-equivalence if GPU normalization becomes real |
 | GPU/OpenCL k-mer acceleration | `src/gpu/kmer_gpu.rs`, `src/bin/count_gpu.rs`, `bench/gpu_kmer_baseline.sh`, `docs/rescue-baseline.md` | OpenCL k-mer smoke and CPU/OpenCL baseline exist. This is useful acceleration infrastructure, not Trinity parity. | 2 | Add CPU-vs-GPU output-equivalence checks on normalization/assembly inputs before using acceleration in any parity claim |
 | Inchworm-equivalent k-mer contig construction | `src/graph/assembler.rs`, `src/kmer/*`, `src/pipeline/assemble.rs`, `src/pipeline/large_genome_assembler.rs`, `tests/greedy.rs`, `benches/greedy_assembly.rs` | Greedy/adaptive k-mer assembly and a larger de Bruijn-style genome path exist. They are not yet mapped to Inchworm's transcript behavior: dominant isoform recovery plus unique alternative segments. | 1 | Build controlled transcript fixtures with shared exons/alternative exons and compare contig outputs to Trinity Inchworm-stage outputs or a frozen Trinity oracle |
 | Chrysalis-equivalent clustering and graph partitioning | `src/graph/partition.rs`, `src/dist/partition.rs`, `src/graph/builder.rs`, `src/pipeline/large_genome_assembler.rs` weighted graph functions | Generic graph and partitioning pieces exist, plus large-genome unitig graph logic. No evidence yet that Inchworm-like contigs are clustered into locus-level transcript graph components or that reads are partitioned among those disjoint components. | 0 | Define `RaptorComponent` semantics, emit component graph artifacts, and prove component membership/read assignment against Trinity on small fixtures |
@@ -99,7 +99,15 @@ python3 bench/trinity_parity/run_tiny_fixture.py --run-trinity --require-trinity
 python3 bench/trinity_parity/run_tiny_fixture.py --freeze-trinity-oracle
 ```
 
-Interpretation: current `raptor assemble --input R1 --input2 R2` now recovers the two truth transcripts exactly on this tiny non-repetitive two-isoform fixture across insert sweep 110,140,160,180 and matches the checked-in frozen oracle at `bench/trinity_parity/oracles/tiny_alt_isoform.fa`. This is useful Inchworm and paired-ingestion progress, but it is still not Trinity parity: Trinity is not installed on this machine's `PATH` yet, paired-end evidence is not yet used as full path/scaffold constraints, and broader isoform correctness is not measured.
+Raptor normalization can now be included before assembly:
+
+```bash
+python3 bench/trinity_parity/run_tiny_fixture.py --normalize-raptor --assemble-normalized
+```
+
+On the default insert 160 fixture, this kept 15/15 pairs with matched R1/R2 counts and still recovered [252,240] with truth/oracle minimum coverage 1.0.
+
+Interpretation: current `raptor assemble --input R1 --input2 R2` now recovers the two truth transcripts exactly on this tiny non-repetitive two-isoform fixture across insert sweep 110,140,160,180 and matches the checked-in frozen oracle at `bench/trinity_parity/oracles/tiny_alt_isoform.fa`. This is useful normalization/Inchworm/paired-ingestion progress, but it is still not Trinity parity: Trinity is not installed on this machine's `PATH` yet, paired-end evidence is not yet used as full path/scaffold constraints, and broader isoform correctness is not measured.
 
 ## Misleading Or Risky Areas
 
