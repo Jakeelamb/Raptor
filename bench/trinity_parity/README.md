@@ -32,6 +32,13 @@ both FASTAs exist. Resource usage is captured with GNU
 process-group RSS by polling `/proc`. GPU telemetry is captured with
 `nvidia-smi` when available.
 
+When Trinity is enabled, `panel.json` can also set
+`min_trinity_selected_f1` per fixture. The current candidate panel enforces
+Raptor-vs-Trinity selected-output F1 `0.95` for `tiny_alt_isoform`,
+`antisense_overlap`, and `partial_antisense_overlap`. `ambiguous_paralog` and
+`compact_fusion` remain recorded divergence probes until their policy is
+explicitly decided.
+
 If Trinity is installed on `PATH`, the same panel can also run Trinity:
 
 ```bash

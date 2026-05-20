@@ -1695,6 +1695,7 @@ def check_report_thresholds(
     min_oracle_coverage: float,
     min_selected_precision: float,
     min_selected_f1: float,
+    min_trinity_selected_f1: float | None,
 ) -> list[str]:
     failures: list[str] = []
     trinity = report.get("trinity", {})
@@ -1902,6 +1903,17 @@ def check_report_thresholds(
                 failures.append(
                     f"selected component isoform oracle recovery below threshold: {selected_min_oracle} < {min_oracle_coverage}"
                 )
+
+        if min_trinity_selected_f1 is not None:
+            trinity_match = workflow_metrics.get("trinity_selected_isoform_match")
+            if not trinity_match:
+                failures.append("Raptor-vs-Trinity selected isoform comparison is missing")
+            else:
+                trinity_f1 = trinity_match.get("f1", 0.0)
+                if trinity_f1 < min_trinity_selected_f1:
+                    failures.append(
+                        f"Raptor-vs-Trinity selected isoform F1 below threshold: {trinity_f1} < {min_trinity_selected_f1}"
+                    )
 
     if raptor_workflow_gpu:
         if raptor_workflow_gpu.get("exit_code") != 0:
@@ -2647,6 +2659,12 @@ def main() -> int:
         default=0.95,
         help="Minimum selected isoform F1 against truth transcripts",
     )
+    parser.add_argument(
+        "--min-trinity-selected-f1",
+        type=float,
+        default=None,
+        help="Optional minimum selected isoform F1 between Raptor workflow output and Trinity output",
+    )
     args = parser.parse_args()
 
     out_dir = args.out_dir.resolve()
@@ -2699,6 +2717,7 @@ def main() -> int:
                 args.min_oracle_coverage,
                 args.min_selected_precision,
                 args.min_selected_f1,
+                args.min_trinity_selected_f1,
             )
         )
         print(f"wrote {report['report_path']}")

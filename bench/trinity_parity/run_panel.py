@@ -652,6 +652,11 @@ def run_fixture(
         "--min-selected-f1",
         str(defaults["min_selected_f1"]),
     ]
+    min_trinity_selected_f1 = fixture.get(
+        "min_trinity_selected_f1", defaults.get("min_trinity_selected_f1")
+    )
+    if min_trinity_selected_f1 is not None and (run_trinity or require_trinity):
+        command.extend(["--min-trinity-selected-f1", str(min_trinity_selected_f1)])
     if run_raptor_workflow:
         command.append("--run-raptor-workflow")
     if run_raptor_workflow_gpu:

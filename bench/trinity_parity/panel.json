@@ -21,6 +21,7 @@
     {
       "name": "tiny_alt_isoform",
       "inserts": [110, 140, 160, 180],
+      "min_trinity_selected_f1": 0.95,
       "description": "Two related isoforms with shared terminal exons and one alternative exon."
     },
     {
@@ -39,12 +40,14 @@
       "name": "antisense_overlap",
       "inserts": [160],
       "run_raptor_workflow_single": false,
+      "min_trinity_selected_f1": 0.95,
       "description": "Opposite-strand transcript pair with reverse-complement overlap that requires strand-aware RF handling."
     },
     {
       "name": "partial_antisense_overlap",
       "inserts": [160],
       "run_raptor_workflow_single": false,
+      "min_trinity_selected_f1": 0.95,
       "description": "Transcript pair with only the middle segment in antisense orientation, stressing strand-aware overlap partitioning."
     }
   ]
