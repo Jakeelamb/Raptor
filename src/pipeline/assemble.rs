@@ -11,13 +11,15 @@ use crate::io::fastq::{
 use crate::io::gfa::GfaWriter;
 use crate::io::gfa2::Gfa2Writer;
 use crate::kmer::variable_k::{kmer_coverage_histogram, optimal_k, select_best_k};
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 use serde::Serialize;
 use std::fs;
 use std::io::{self, Write};
 use tracing::{info, warn};
 
 const READ_OVERLAP_RESCUE_MAX_READS: usize = 200_000;
+const ORIENTED_BOUNDARY_MAX_STEPS: usize = 10_000;
+const DNA_BASE_BYTES: [u8; 4] = [b'A', b'C', b'G', b'T'];
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 struct AssemblyQualitySummary {
@@ -941,6 +943,108 @@ fn maybe_rescue_fragmented_contigs_with_read_overlaps(
     }
 }
 
+fn extend_oriented_contig_boundaries(
+    contigs: Vec<Contig>,
+    adjacency: &AdjacencyTableU64,
+    k: usize,
+) -> Vec<Contig> {
+    if contigs.is_empty() || !(1..=32).contains(&k) {
+        return contigs;
+    }
+
+    let mut extended = Vec::with_capacity(contigs.len());
+    let mut extended_count = 0usize;
+    for contig in contigs {
+        if contig.kmer_path.is_empty() {
+            extended.push(contig);
+            continue;
+        }
+        let original_len = contig.sequence.len();
+        let extended_contig = extend_oriented_contig_boundary(contig, adjacency, k);
+        if extended_contig.sequence.len() > original_len {
+            extended_count += 1;
+        }
+        extended.push(extended_contig);
+    }
+    if extended_count > 0 {
+        info!(
+            "Oriented graph boundary extension lengthened {} contig(s)",
+            extended_count
+        );
+    }
+    extended
+}
+
+fn extend_oriented_contig_boundary(
+    contig: Contig,
+    adjacency: &AdjacencyTableU64,
+    k: usize,
+) -> Contig {
+    let mut sequence = contig.sequence.into_bytes();
+    let mut path = contig.kmer_path;
+    let mut local_seen: AHashSet<u64> = path.iter().copied().collect();
+
+    let mut steps = 0usize;
+    while steps < ORIENTED_BOUNDARY_MAX_STEPS {
+        let Some(&first) = path.first() else {
+            break;
+        };
+        let Some((prev, _count)) =
+            best_boundary_neighbor(adjacency.get_predecessors(first), &local_seen)
+        else {
+            break;
+        };
+        let shift = (k - 1) * 2;
+        sequence.insert(0, DNA_BASE_BYTES[((prev >> shift) & 0b11) as usize]);
+        path.insert(0, prev);
+        local_seen.insert(prev);
+        steps += 1;
+    }
+
+    steps = 0;
+    while steps < ORIENTED_BOUNDARY_MAX_STEPS {
+        let Some(&last) = path.last() else {
+            break;
+        };
+        let Some((next, _count)) =
+            best_boundary_neighbor(adjacency.get_successors(last), &local_seen)
+        else {
+            break;
+        };
+        sequence.push(DNA_BASE_BYTES[(next & 0b11) as usize]);
+        path.push(next);
+        local_seen.insert(next);
+        steps += 1;
+    }
+
+    Contig {
+        id: 0,
+        sequence: String::from_utf8(sequence).expect("DNA boundary extension remains valid UTF-8"),
+        kmer_path: path,
+    }
+}
+
+fn best_boundary_neighbor(
+    neighbors: Option<&Vec<(u64, u32)>>,
+    local_seen: &AHashSet<u64>,
+) -> Option<(u64, u32)> {
+    let mut best: Option<(u64, u32)> = None;
+    for &(node, count) in neighbors? {
+        if local_seen.contains(&node) {
+            continue;
+        }
+        match best {
+            None => best = Some((node, count)),
+            Some((best_node, best_count)) => {
+                if count > best_count || (count == best_count && node < best_node) {
+                    best = Some((node, count));
+                }
+            }
+        }
+    }
+    best
+}
+
 fn maybe_replace_fragmented_contigs_with_oriented_kmer_paths(
     contigs: Vec<Contig>,
     sequences: &[String],
@@ -970,8 +1074,10 @@ fn maybe_replace_fragmented_contigs_with_oriented_kmer_paths(
         let oriented_counts =
             count_oriented_kmers_u64_filtered(sequences, candidate_k, min_kmer_count);
         let oriented_adjacency = build_oriented_adjacency_u64(&oriented_counts, candidate_k);
-        let oriented =
+        let mut oriented =
             greedy_assembly_u64(candidate_k, &oriented_counts, &oriented_adjacency, min_len);
+        oriented = extend_oriented_contig_boundaries(oriented, &oriented_adjacency, candidate_k);
+        canonicalize_contig_output_order(&mut oriented);
         if assembly_contiguity_key(&oriented) > assembly_contiguity_key(&best_oriented) {
             best_k = candidate_k;
             best_oriented = oriented;
@@ -2100,9 +2206,11 @@ fn canonicalize_contig_output_order(contigs: &mut [Contig]) {
 mod tests {
     use super::{
         assemble_read_overlap_contigs, assemble_reads_with_gpu, assembly_contiguity_key,
-        build_read_prefix_index, canonical_sequence_key, canonicalize_contig_output_order,
-        count_oriented_kmers_u64_filtered, derive_contig_expression_map,
-        estimate_sequence_capacity, maybe_replace_fragmented_contigs_with_oriented_kmer_paths,
+        build_oriented_adjacency_u64, build_read_prefix_index, canonical_sequence_key,
+        canonicalize_contig_output_order, count_oriented_kmers_u64_filtered,
+        derive_contig_expression_map, encode_kmer_bytes, estimate_sequence_capacity,
+        extend_oriented_contig_boundaries,
+        maybe_replace_fragmented_contigs_with_oriented_kmer_paths,
         maybe_rescue_fragmented_contigs_with_read_overlaps, sequence_only_record,
         should_try_paired_start_gap_split, split_contigs_at_paired_start_gaps,
         summarize_assembly_quality, write_assembly_quality_reports, AssemblyQualitySummary,
@@ -2386,6 +2494,27 @@ mod tests {
         let counts = count_oriented_kmers_u64_filtered(&reads, 4, 1);
 
         assert_eq!(counts.len(), 1);
+    }
+
+    #[test]
+    fn oriented_graph_boundary_extension_reuses_graph_kmers_outside_contig_path() {
+        let reads = vec!["AAACCCGGGTTT".to_string()];
+        let counts = count_oriented_kmers_u64_filtered(&reads, 3, 1);
+        let adjacency = build_oriented_adjacency_u64(&counts, 3);
+        let partial = Contig {
+            id: 0,
+            sequence: "CCCGGG".to_string(),
+            kmer_path: vec![
+                encode_kmer_bytes(b"CCC").unwrap(),
+                encode_kmer_bytes(b"CCG").unwrap(),
+                encode_kmer_bytes(b"CGG").unwrap(),
+                encode_kmer_bytes(b"GGG").unwrap(),
+            ],
+        };
+
+        let extended = extend_oriented_contig_boundaries(vec![partial], &adjacency, 3);
+
+        assert_eq!(extended[0].sequence, "AAACCCGGGTTT");
     }
 
     #[test]
