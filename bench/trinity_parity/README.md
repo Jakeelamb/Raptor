@@ -14,6 +14,7 @@ gate across the current truth-known stress cases:
 - `ambiguous_paralog` at insert size `160`
 - `compact_fusion` at insert size `160`
 - `antisense_overlap` at insert size `160`
+- `partial_antisense_overlap` at insert size `160`
 
 Run the full candidate panel:
 
@@ -65,8 +66,9 @@ The panel also gates the current strand-specific workflow path with
 workflow materializes strand-oriented FASTQs before assembly, and requires
 forward-strand selected-isoform precision/F1. The current panel includes an
 `antisense_overlap` fixture with a reverse-complement transcript pair. This is
-still not final strand-specific parity because it needs Trinity comparison and
-more realistic antisense partial-overlap cases.
+paired with `partial_antisense_overlap`, where only the middle segment is in
+opposite-strand orientation. This is still not final strand-specific parity
+because it needs Trinity comparison and broader real-data coverage.
 
 The panel also runs a malformed FASTQ negative check. `raptor trinity` must fail
 with a nonzero exit code, avoid writing an assembly FASTA, and report FASTQ
@@ -157,6 +159,12 @@ This fixture is a compact-overlap fusion-control gate. It previously exposed one
 fused 336 bp contig from two 216 bp truth transcripts; the current workflow
 splits that compact overlap with paired-start evidence and recovers both truth
 transcripts.
+
+To run the current partial antisense-overlap stress fixture:
+
+```bash
+python3 bench/trinity_parity/run_tiny_fixture.py --fixture partial_antisense_overlap --run-raptor-workflow-stranded-rf --skip-raptor
+```
 
 If Trinity is installed on `PATH`, the same fixture can run Trinity on the same
 paired-end reads:

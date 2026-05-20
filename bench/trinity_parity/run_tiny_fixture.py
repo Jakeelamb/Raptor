@@ -975,6 +975,26 @@ def antisense_overlap_transcripts() -> tuple[dict[str, str], dict[str, int]]:
     return transcripts, coverage
 
 
+def partial_antisense_overlap_transcripts() -> tuple[dict[str, str], dict[str, int]]:
+    shared_forward = deterministic_dna("partial_antisense_shared", 96)
+    tx_forward = (
+        deterministic_dna("partial_antisense_forward_left", 96)
+        + shared_forward
+        + deterministic_dna("partial_antisense_forward_right", 96)
+    )
+    tx_antisense = (
+        deterministic_dna("partial_antisense_reverse_left", 96)
+        + revcomp(shared_forward)
+        + deterministic_dna("partial_antisense_reverse_right", 96)
+    )
+    transcripts = {
+        "tx_forward_partial": tx_forward,
+        "tx_antisense_partial": tx_antisense,
+    }
+    coverage = {"tx_forward_partial": 3, "tx_antisense_partial": 3}
+    return transcripts, coverage
+
+
 def generate_fixture(out_dir: Path, fixture_name: str, insert: int) -> dict[str, object]:
     if fixture_name == "tiny_alt_isoform":
         transcripts, coverage = tiny_alt_isoform_transcripts()
@@ -984,6 +1004,8 @@ def generate_fixture(out_dir: Path, fixture_name: str, insert: int) -> dict[str,
         transcripts, coverage = compact_fusion_transcripts()
     elif fixture_name == "antisense_overlap":
         transcripts, coverage = antisense_overlap_transcripts()
+    elif fixture_name == "partial_antisense_overlap":
+        transcripts, coverage = partial_antisense_overlap_transcripts()
     else:
         raise ValueError(f"unknown fixture: {fixture_name}")
     return write_fixture_files(out_dir, fixture_name, transcripts, insert, coverage)
@@ -2351,6 +2373,7 @@ def main() -> int:
             "ambiguous_paralog",
             "compact_fusion",
             "antisense_overlap",
+            "partial_antisense_overlap",
         ],
         default=DEFAULT_FIXTURE,
     )

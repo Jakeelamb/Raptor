@@ -40,6 +40,12 @@
       "inserts": [160],
       "run_raptor_workflow_single": false,
       "description": "Opposite-strand transcript pair with reverse-complement overlap that requires strand-aware RF handling."
+    },
+    {
+      "name": "partial_antisense_overlap",
+      "inserts": [160],
+      "run_raptor_workflow_single": false,
+      "description": "Transcript pair with only the middle segment in antisense orientation, stressing strand-aware overlap partitioning."
     }
   ]
 }
