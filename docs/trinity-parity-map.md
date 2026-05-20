@@ -153,8 +153,11 @@ The workflow also emits a first component artifact:
 - selected component isoform total/max evidence scores across insert sweep 110,140,160,180: total [258,288,221,233], max [138,150,115,127]
 - isoform candidate counts across insert sweep 110,140,160,180: total [10,10,10,10], selected [2,2,2,2], rejected [8,8,8,8]
 - read-kmer path candidate rejection across insert sweep 110,140,160,180: path candidates [8,8,8,8], rejected paths [8,8,8,8], rejected max score [108,108,102,102]
+- ambiguous paralog fixture at insert 160: truth transcripts [240,234,240], workflow selected lengths [240,240,234,240], truth min coverage 1.0, 1 component, 5 component graph edges, 20 isoform candidates, 4 selected contig candidates, 16 rejected read-kmer path candidates
 
 Interpretation: the two related assembled transcripts are grouped into one deterministic component graph on the tiny fixture using `sequence_or_read_kmer` clustering, every workflow read pair is assigned back to that component, the component edge has direct read/pair/k-mer support, the workflow emits component transcript candidates that recover the tiny truth/oracle, and `raptor trinity` now emits selected component isoforms [252,240] with explicit read/pair/read-kmer-path evidence and deterministic evidence-score ranking. The workflow also scores competing contig/path candidates and rejects the 8 shorter read-kmer path fragments on every insert sweep run. This is useful Chrysalis/Butterfly-shaped evidence, but it is not yet Trinity parity because the scoring has not been challenged against ambiguous isoform/paralog/fusion fixtures and Trinity component membership comparison is still missing.
+
+The first ambiguous isoform/paralog fixture now exists and passes the workflow gate at insert 160, recovering all three truth transcripts while surfacing one extra selected 240 bp contig. That is useful pressure on candidate scoring, but it also shows the next precision problem plainly: recall is good on this stress fixture, precision is not yet constrained against Trinity or a stricter truth-membership metric.
 
 Interpretation: current `raptor assemble --input R1 --input2 R2` now recovers the two truth transcripts exactly on this tiny non-repetitive two-isoform fixture across insert sweep 110,140,160,180 and matches the checked-in frozen oracle at `bench/trinity_parity/oracles/tiny_alt_isoform.fa`. This is useful normalization/Inchworm/paired-ingestion progress, but it is still not Trinity parity: Trinity is not installed on this machine's `PATH` yet, paired-end evidence is not yet used as full path/scaffold constraints, and broader isoform correctness is not measured.
 
@@ -169,7 +172,7 @@ Interpretation: current `raptor assemble --input R1 --input2 R2` now recovers th
 ## Immediate Next Work
 
 1. Capture a real Trinity tiny oracle on a machine with Trinity installed, or install Trinity locally.
-2. Add ambiguous isoform/paralog/fusion fixtures that force the scorer to choose among competing plausible graph paths, then compare component membership/read assignment against Trinity.
+2. Add precision/F1 gates for selected isoforms, then expand from the ambiguous paralog fixture to fusion stress and Trinity component/read-assignment comparison.
 3. Compare Raptor normalization kept-read behavior to Trinity normalization on a small transcriptome fixture.
 4. Replace stale `bench/README.md` claims about missing scripts with the new harness contract.
 5. Only after the fast fixture is stable, decide the frozen public benchmark panel and require approval before changing it.

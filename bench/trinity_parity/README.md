@@ -37,6 +37,12 @@ To exercise the single-command Raptor Trinity-like workflow:
 python3 bench/trinity_parity/run_tiny_fixture.py --run-raptor-workflow --skip-raptor
 ```
 
+To run the first harder ambiguous isoform/paralog stress fixture:
+
+```bash
+python3 bench/trinity_parity/run_tiny_fixture.py --fixture ambiguous_paralog --run-raptor-workflow --skip-raptor
+```
+
 If Trinity is installed on `PATH`, the same fixture can run Trinity on the same
 paired-end reads:
 

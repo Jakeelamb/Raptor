@@ -21,6 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUT = ROOT / "target" / "trinity_parity" / "tiny_alt_isoform"
 DEFAULT_ORACLE = ROOT / "bench" / "trinity_parity" / "oracles" / "tiny_alt_isoform.fa"
+DEFAULT_FIXTURE = "tiny_alt_isoform"
 
 
 def deterministic_dna(label: str, length: int) -> str:
@@ -469,16 +470,13 @@ def parse_insert_sweep(text: str) -> list[int]:
     return inserts
 
 
-def generate_fixture(out_dir: Path, insert: int) -> dict[str, object]:
-    exon_a = deterministic_dna("shared_exon_a", 90)
-    exon_b = deterministic_dna("dominant_exon_b", 72)
-    exon_alt = deterministic_dna("alternative_exon", 60)
-    exon_c = deterministic_dna("shared_exon_c", 90)
-
-    tx1 = exon_a + exon_b + exon_c
-    tx2 = exon_a + exon_alt + exon_c
-    transcripts = {"tx_dominant": tx1, "tx_alt": tx2}
-
+def write_fixture_files(
+    out_dir: Path,
+    fixture_name: str,
+    transcripts: dict[str, str],
+    insert: int,
+    coverage_rounds_by_transcript: dict[str, int],
+) -> dict[str, object]:
     truth_fasta = out_dir / "truth" / "transcripts.fa"
     truth_lines = []
     for name, seq in transcripts.items():
@@ -493,7 +491,7 @@ def generate_fixture(out_dir: Path, insert: int) -> dict[str, object]:
     step = 24
 
     for tx_name, seq in transcripts.items():
-        coverage_rounds = 3 if tx_name == "tx_dominant" else 2
+        coverage_rounds = coverage_rounds_by_transcript[tx_name]
         for round_idx in range(coverage_rounds):
             for start in tiled_starts(len(seq), read_len, step):
                 read = seq[start : start + read_len]
@@ -511,7 +509,7 @@ def generate_fixture(out_dir: Path, insert: int) -> dict[str, object]:
     write_fastq_gz(r2_fastq, r2_records)
 
     metadata = {
-        "fixture": "tiny_alt_isoform",
+        "fixture": fixture_name,
         "read_len": read_len,
         "insert": insert,
         "truth_transcripts": {name: len(seq) for name, seq in transcripts.items()},
@@ -528,8 +526,47 @@ def generate_fixture(out_dir: Path, insert: int) -> dict[str, object]:
     return metadata
 
 
+def tiny_alt_isoform_transcripts() -> tuple[dict[str, str], dict[str, int]]:
+    exon_a = deterministic_dna("shared_exon_a", 90)
+    exon_b = deterministic_dna("dominant_exon_b", 72)
+    exon_alt = deterministic_dna("alternative_exon", 60)
+    exon_c = deterministic_dna("shared_exon_c", 90)
+
+    tx1 = exon_a + exon_b + exon_c
+    tx2 = exon_a + exon_alt + exon_c
+    return {"tx_dominant": tx1, "tx_alt": tx2}, {"tx_dominant": 3, "tx_alt": 2}
+
+
+def ambiguous_paralog_transcripts() -> tuple[dict[str, str], dict[str, int]]:
+    shared_a = deterministic_dna("ambiguous_shared_exon_a", 84)
+    shared_c = deterministic_dna("ambiguous_shared_exon_c", 84)
+    dominant_mid = deterministic_dna("ambiguous_dominant_mid", 72)
+    alt_mid = deterministic_dna("ambiguous_alt_mid", 66)
+    paralog_a = deterministic_dna("ambiguous_paralog_a", 84)
+    paralog_c = deterministic_dna("ambiguous_paralog_c", 84)
+
+    transcripts = {
+        "tx_major": shared_a + dominant_mid + shared_c,
+        "tx_alt": shared_a + alt_mid + shared_c,
+        "tx_paralog": paralog_a + dominant_mid + paralog_c,
+    }
+    coverage = {"tx_major": 4, "tx_alt": 2, "tx_paralog": 2}
+    return transcripts, coverage
+
+
+def generate_fixture(out_dir: Path, fixture_name: str, insert: int) -> dict[str, object]:
+    if fixture_name == "tiny_alt_isoform":
+        transcripts, coverage = tiny_alt_isoform_transcripts()
+    elif fixture_name == "ambiguous_paralog":
+        transcripts, coverage = ambiguous_paralog_transcripts()
+    else:
+        raise ValueError(f"unknown fixture: {fixture_name}")
+    return write_fixture_files(out_dir, fixture_name, transcripts, insert, coverage)
+
+
 def run_one_fixture(
     out_dir: Path,
+    fixture_name: str,
     insert: int,
     oracle_fasta: Path,
     normalize_raptor: bool,
@@ -541,7 +578,7 @@ def run_one_fixture(
     skip_raptor: bool,
 ) -> dict[str, object]:
     out_dir.mkdir(parents=True, exist_ok=True)
-    fixture = generate_fixture(out_dir, insert)
+    fixture = generate_fixture(out_dir, fixture_name, insert)
 
     report: dict[str, object] = {
         "fixture": fixture,
@@ -1191,6 +1228,11 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
+    parser.add_argument(
+        "--fixture",
+        choices=["tiny_alt_isoform", "ambiguous_paralog"],
+        default=DEFAULT_FIXTURE,
+    )
     parser.add_argument("--skip-raptor", action="store_true")
     parser.add_argument(
         "--normalize-raptor",
@@ -1230,6 +1272,13 @@ def main() -> int:
     args = parser.parse_args()
 
     out_dir = args.out_dir.resolve()
+    if args.fixture != DEFAULT_FIXTURE and args.out_dir == DEFAULT_OUT:
+        out_dir = ROOT / "target" / "trinity_parity" / args.fixture
+    oracle_fasta = args.oracle_fasta
+    if args.fixture != DEFAULT_FIXTURE and args.oracle_fasta == DEFAULT_ORACLE:
+        oracle_fasta = (
+            ROOT / "bench" / "trinity_parity" / "oracles" / f"{args.fixture}.fa"
+        )
     if args.assemble_normalized and not args.normalize_raptor:
         print("--assemble-normalized requires --normalize-raptor", file=sys.stderr)
         return 2
@@ -1243,8 +1292,9 @@ def main() -> int:
         run_dir = out_dir if len(inserts) == 1 else out_dir / f"insert_{insert}"
         report = run_one_fixture(
             run_dir,
+            args.fixture,
             insert,
-            args.oracle_fasta,
+            oracle_fasta,
             args.normalize_raptor,
             args.assemble_normalized,
             args.run_raptor_workflow,
