@@ -1,5 +1,5 @@
 <goal>
-Build Raptor into a full-fledged Rust replacement for Trinity RNA-seq de novo transcriptome assembly. Do not stop at feature resemblance: Raptor is complete only when every major Trinity pipeline stage has a mapped Raptor equivalent, reproducible benchmarks, and comparable biological outputs across a frozen benchmark panel.
+Build Raptor into a full-fledged Rust replacement for Trinity RNA-seq de novo transcriptome assembly, continuing from the `rescue/gpu-trinity` infrastructure rather than restarting. Raptor is complete only when every major Trinity pipeline stage has a mapped Raptor equivalent, reproducible benchmarks, and comparable biological outputs across the frozen public benchmark panel.
 </goal>
 
 <context>
@@ -28,6 +28,13 @@ Use these discovery commands:
 - `cargo test --features gpu`
 
 Use Trinity's documented architecture as the external reference: normalization, Inchworm, Chrysalis, Butterfly, paired-end evidence, optional genome-guided mode, and downstream assembly quality assessment.
+
+Current infrastructure state:
+- Public-panel manifest and runner exist under `bench/trinity_parity/`.
+- Docker-backed Trinity comparison works through `scripts/trinity_docker.sh`.
+- The first public blocker is `trinity_source_test_assembly`.
+- Current Raptor public contiguity is Trinity-scale, but biological matching is not: Raptor emits about 30 contigs with N50 about 5.4 kb and max length about 8.8 kb, while strict reciprocal final FASTA F1 is still about 0.019 versus the required 0.9.
+- Threshold sweeps, best-match diagnostics, Trinity Inchworm comparison, and performance-frontier docs exist and must stay current.
 </context>
 
 <constraints>
@@ -36,7 +43,7 @@ Use Trinity's documented architecture as the external reference: normalization, 
 - Delete dead paths when evidence proves they are obsolete, but do not delete major functionality without a benchmark-backed replacement.
 - Do not claim Trinity parity from unit tests, synthetic smoke tests, or README language.
 - Do not tune by discarding hard biological cases.
-- Do not add CUDA, OpenCL changes, or other accelerator dependencies unless CPU output equivalence and benchmark benefit are measured.
+- CUDA/OpenCL work is allowed when it is tied to a measured bottleneck. CPU output equivalence and benchmark benefit are mandatory before acceleration is used in parity claims.
 - Keep one production codepath per behavior. Tests should exercise the same codepath users run.
 - Preserve unrelated user changes.
 - Benchmark claims must include exact commands, versions, hardware, input data, metrics, and artifacts.
@@ -71,11 +78,13 @@ Regression checks:
 
 Scoring artifacts:
 - `docs/trinity-parity-map.md`
+- `docs/performance-frontier.md`
 - `docs/trinity-parity-report.md`
 - `bench/trinity_parity/results/`
+- `target/trinity_parity/public_panel_*/*report*.json`
 - `ATTEMPTS.md`
 
-Stop condition: only stop when every `done_when` item is true and `docs/trinity-parity-report.md` supports the conclusion that Raptor is a credible Rust Trinity replacement.
+Stop condition: only stop when every `done_when` item is true, the frozen public panel passes its encoded thresholds, and `docs/trinity-parity-report.md` supports the conclusion that Raptor is a credible Rust Trinity replacement.
 </scorecard>
 
 <done_when>
@@ -84,6 +93,8 @@ The goal is complete only when all items below are true:
 - `docs/trinity-parity-map.md` maps Trinity stages to Raptor modules and marks every core stage complete with evidence links.
 - `bench/trinity_parity/` contains reproducible scripts for downloading/preparing fixtures, running Trinity, running Raptor, and comparing outputs.
 - `docs/trinity-parity-report.md` records the frozen benchmark panel, exact commands, versions, hardware, biological metrics, resource metrics, and pass/fail conclusions.
+- `bench/trinity_parity/run_public_panel.py` passes the frozen public panel with final Raptor-vs-Trinity reciprocal FASTA F1 at or above 0.9 for each gated dataset.
+- Threshold sweep and best-match diagnostics show that the final pass is not a threshold artifact or one-dataset overfit.
 - Every core stage reaches scorecard level 5.
 - Raptor end-to-end outputs are biologically comparable to Trinity across the approved benchmark panel.
 - Raptor runtime and peak memory are no worse than Trinity by more than the approved tolerance on the benchmark panel, and at least one major stage is measurably faster or lower-memory.
@@ -103,9 +114,15 @@ Fast loop:
 
 Medium loop:
 - Run before phase transitions.
-- Commands: `cargo test --features gpu`, `./scripts/rescue_smoke.sh`, `./bench/gpu_kmer_baseline.sh`, and active stage benchmark scripts.
+- Commands: `cargo test --features gpu`, `./scripts/rescue_smoke.sh`, `./bench/gpu_kmer_baseline.sh`, `python3 bench/trinity_parity/run_panel.py`, and active stage benchmark scripts.
 - Expected runtime: minutes.
 - Proxy validity: checks rescue baseline, GPU health, and active-stage biological proxies.
+
+Public blocker loop:
+- Run after assembly-path changes that could affect real biological output.
+- Command: `python3 bench/trinity_parity/run_public_panel.py --dataset trinity_source_test_assembly --out-root target/trinity_parity/public_panel_probe --report target/trinity_parity/public_panel_probe/report.json`
+- Expected runtime: minutes to tens of minutes depending on whether Trinity/Raptor outputs are reused.
+- Proxy validity: this is the current real-data blocker and catches fragmentation, overextension, false path selection, and biological mismatch that synthetic fixtures miss.
 
 Final loop:
 - Run before claiming parity.
@@ -120,17 +137,17 @@ Final loop:
    - Inventory Trinity stages and current Raptor modules.
    - Mark each stage as complete, partial, missing, or misleading.
 
-2. Freeze the benchmark panel.
+2. Freeze and maintain the benchmark panel.
    - Create `bench/trinity_parity/`.
    - Add scripts to prepare synthetic and public RNA-seq datasets.
    - Add scripts to run Trinity and Raptor with exact captured versions.
    - Require explicit approval before changing the frozen panel after it is set.
 
-3. Build the comparison harness.
+3. Maintain and extend the comparison harness.
    - Add metrics extraction for transcript FASTA, read representation, BUSCO or equivalent completeness, full-length recovery on truth-known sets, isoform precision/recall where possible, fusion/paralog indicators, runtime, RSS, disk, and GPU usage.
    - Save raw outputs outside git and curated summaries in docs.
 
-4. Close stages one at a time.
+4. Close stages one at a time, using public F1 as the hard biological gate.
    - Normalization.
    - Inchworm-equivalent contig construction.
    - Chrysalis-equivalent clustering/partitioning.
@@ -141,7 +158,7 @@ Final loop:
 
 5. Optimize only after correctness is measurable.
    - Use CPU baselines first.
-   - Use OpenCL/CUDA only when output equivalence is demonstrated.
+   - Use OpenCL/CUDA when a measured bottleneck justifies it and output equivalence is demonstrated.
    - Keep before/after metrics in `ATTEMPTS.md` and reports.
 
 6. Final parity review.

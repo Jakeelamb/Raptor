@@ -6,7 +6,7 @@ Build Raptor into a full-fledged Rust replacement for Trinity with stage-by-stag
 
 ## Current Strategy
 
-Start by building the parity map and benchmark harness before changing core algorithms. No parity claim is allowed until Trinity and Raptor are compared on a frozen benchmark panel.
+Continue from the rescue infrastructure and push the current public-panel blocker until biological matching passes. Contiguity is now Trinity-scale on `trinity_source_test_assembly`; the active problem is path correctness, overextension/underextension, and reciprocal final FASTA F1.
 
 ## Phases
 
@@ -21,12 +21,13 @@ Start by building the parity map and benchmark harness before changing core algo
 - [ ] Close output/evaluation/reporting parity.
 - [ ] Run final full benchmark panel.
 - [ ] Update docs and parity claim only after evidence passes.
+- [ ] Drive the active public blocker `trinity_source_test_assembly` from strict reciprocal final FASTA F1 ~0.019 to the encoded 0.9 gate without losing Trinity-scale contiguity.
 
 ## Open Decisions
 
 - The proposed public RNA-seq benchmark panel needs final approval before its status is promoted from `proposed_frozen_v0` to frozen.
 - Public-panel download/execution tooling still needs to materialize the declared inputs and run Raptor/Trinity under the encoded thresholds.
-- CUDA backend work is deferred until CPU/OpenCL correctness baselines are stable and comparable.
+- CUDA backend work is allowed on measured bottlenecks, but CPU/GPU biological output equivalence is mandatory before any accelerator-backed parity claim.
 
 ## Current Findings
 

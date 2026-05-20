@@ -47,7 +47,6 @@ require_approval_for:
 - public_api_change
 - benchmark_panel_change_after_freeze
 - metric_threshold_weakening
-- cuda_backend_dependency
 - parity_completion_claim
 
 ## Sidecar Inputs
@@ -59,4 +58,4 @@ review_queue_file: none
 
 ## Latest Human Nudge
 
-Build Raptor into a full-fledged Trinity replacement in Rust. Do not stop until every pipeline stage has comparable biological outputs and benchmark evidence.
+Pursue Raptor to the end as a full Trinity replacement using the better infrastructure now in place. CUDA is allowed on this NVIDIA host when it is justified by a measured bottleneck and preserves biological output equivalence.

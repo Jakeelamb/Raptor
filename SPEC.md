@@ -18,7 +18,7 @@ Raptor should become a production-grade transcriptome assembler for Illumina RNA
 
 - Do not preserve genome-assembly features at the expense of transcriptome correctness.
 - Do not claim Trinity parity from synthetic smoke tests alone.
-- Do not add CUDA, OpenCL, or other acceleration paths unless they preserve outputs and beat a saved baseline.
+- CUDA, OpenCL, and other acceleration paths are allowed when tied to a measured bottleneck, but they must preserve outputs and beat a saved baseline before they are used in parity claims.
 - Do not rewrite the whole repository blindly. Work stage by stage, with tests and benchmark artifacts.
 - Do not tune metrics by filtering away hard cases.
 
@@ -127,6 +127,7 @@ The goal is complete only when all of these are true:
 - `docs/trinity-parity-map.md` maps Trinity stages to Raptor modules and marks every core stage complete with evidence links.
 - `bench/trinity_parity/` contains reproducible scripts for downloading/preparing fixtures, running Trinity, running Raptor, and comparing outputs.
 - `docs/trinity-parity-report.md` records the frozen benchmark panel, commands, versions, hardware, metrics, and pass/fail conclusions.
+- `bench/trinity_parity/run_public_panel.py` passes the frozen public panel with final Raptor-vs-Trinity reciprocal FASTA F1 at or above 0.9 for each gated dataset.
 - Every core stage reaches scorecard level 5.
 - Raptor end-to-end outputs are biologically comparable to Trinity across the approved benchmark panel.
 - Raptor runtime and peak memory are no worse than Trinity by more than the approved tolerance on the benchmark panel, and at least one major stage is measurably faster or lower-memory.
@@ -142,6 +143,4 @@ Require Jake's explicit approval before:
 - changing the benchmark panel after it is frozen
 - weakening biological metric thresholds
 - deleting major existing pipeline functionality
-- adding a new GPU backend dependency
 - declaring parity complete
-
