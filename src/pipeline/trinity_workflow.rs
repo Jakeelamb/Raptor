@@ -771,11 +771,16 @@ fn resolve_workflow_inputs(
             "raptor trinity requires --input1 or --samples-file",
         ));
     };
-    Ok(ResolvedWorkflowInputs {
-        input1: input1.clone(),
-        input2: config.input2.clone(),
-        sample_count: 1,
-    })
+    materialize_direct_inputs(input1, config.input2.as_deref(), output_dir)
+}
+
+fn split_input_list(input: &str) -> Vec<String> {
+    input
+        .split(',')
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 fn read_samples_file(path: &str) -> io::Result<Vec<TrinitySampleInput>> {
@@ -884,6 +889,76 @@ fn materialize_sample_inputs(
         input1: merged_left_str,
         input2: right_writer.map(|(path, _)| path),
         sample_count: samples.len(),
+    })
+}
+
+fn materialize_direct_inputs(
+    input1: &str,
+    input2: Option<&str>,
+    output_dir: &Path,
+) -> io::Result<ResolvedWorkflowInputs> {
+    let left_paths = split_input_list(input1);
+    if left_paths.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--input1 did not contain any read paths",
+        ));
+    }
+    let right_paths = input2.map(split_input_list);
+    if let Some(right_paths) = &right_paths {
+        if right_paths.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--input2 did not contain any read paths",
+            ));
+        }
+        if right_paths.len() != left_paths.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "--input1 and --input2 comma-separated lists must contain the same number of paths ({} != {})",
+                    left_paths.len(),
+                    right_paths.len()
+                ),
+            ));
+        }
+    }
+
+    if left_paths.len() == 1 {
+        return Ok(ResolvedWorkflowInputs {
+            input1: left_paths[0].clone(),
+            input2: right_paths.map(|paths| paths[0].clone()),
+            sample_count: 1,
+        });
+    }
+
+    let merged_left = output_dir.join("comma_input_left.fastq.gz");
+    let merged_left_str = path_to_str(&merged_left)?.to_string();
+    {
+        let mut left_writer = FastqWriter::try_new(&merged_left_str)?;
+        for left_path in &left_paths {
+            copy_fastq_records(left_path, &mut left_writer)?;
+        }
+    }
+
+    let merged_right_str = if let Some(right_paths) = right_paths {
+        let merged_right = output_dir.join("comma_input_right.fastq.gz");
+        let merged_right_str = path_to_str(&merged_right)?.to_string();
+        {
+            let mut right_writer = FastqWriter::try_new(&merged_right_str)?;
+            for right_path in &right_paths {
+                copy_fastq_records(right_path, &mut right_writer)?;
+            }
+        }
+        Some(merged_right_str)
+    } else {
+        None
+    };
+
+    Ok(ResolvedWorkflowInputs {
+        input1: merged_left_str,
+        input2: merged_right_str,
+        sample_count: left_paths.len(),
     })
 }
 
@@ -1206,5 +1281,81 @@ mod tests {
         assert!(std::path::Path::new(&report.input1).exists());
         assert!(std::path::Path::new(report.input2.as_ref().unwrap()).exists());
         assert!(std::path::Path::new(&report.assembly_fasta).exists());
+    }
+
+    #[test]
+    fn trinity_workflow_merges_comma_separated_direct_inputs() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let r1 = temp_dir.path().join("rep_R1.fastq");
+        let r2 = temp_dir.path().join("rep_R2.fastq");
+        let seq = "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT";
+        fs::write(&r1, format!("@r1/1\n{seq}\n+\n{}\n", "I".repeat(seq.len()))).expect("write r1");
+        fs::write(&r2, format!("@r1/2\n{seq}\n+\n{}\n", "I".repeat(seq.len()))).expect("write r2");
+
+        let output_dir = temp_dir.path().join("workflow_comma_inputs");
+        let report = run_trinity_workflow(TrinityWorkflowConfig {
+            input1: Some(format!("{},{}", r1.display(), r1.display())),
+            input2: Some(format!("{},{}", r2.display(), r2.display())),
+            samples_file: None,
+            output_dir: output_dir.to_string_lossy().into_owned(),
+            output_fasta: None,
+            report_json: None,
+            normalize: true,
+            normalize_config: NormalizeConfig {
+                k: 5,
+                target_coverage: u16::MAX,
+                min_abundance: 1,
+                max_reads: None,
+                use_gpu: false,
+            },
+            min_len: 10,
+            use_gpu: false,
+        })
+        .expect("comma-separated direct input workflow should run");
+
+        assert_eq!(report.sample_count, 2);
+        assert!(report.input1.ends_with("comma_input_left.fastq.gz"));
+        assert!(report
+            .input2
+            .as_deref()
+            .expect("merged right FASTQ")
+            .ends_with("comma_input_right.fastq.gz"));
+        assert!(std::path::Path::new(&report.input1).exists());
+        assert!(std::path::Path::new(report.input2.as_ref().unwrap()).exists());
+        assert!(std::path::Path::new(&report.assembly_fasta).exists());
+    }
+
+    #[test]
+    fn trinity_workflow_rejects_mismatched_comma_input_lists() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let r1 = temp_dir.path().join("rep_R1.fastq");
+        let r2 = temp_dir.path().join("rep_R2.fastq");
+        let seq = "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT";
+        fs::write(&r1, format!("@r1/1\n{seq}\n+\n{}\n", "I".repeat(seq.len()))).expect("write r1");
+        fs::write(&r2, format!("@r1/2\n{seq}\n+\n{}\n", "I".repeat(seq.len()))).expect("write r2");
+
+        let output_dir = temp_dir.path().join("workflow_bad_comma_inputs");
+        let err = run_trinity_workflow(TrinityWorkflowConfig {
+            input1: Some(format!("{},{}", r1.display(), r1.display())),
+            input2: Some(r2.to_string_lossy().into_owned()),
+            samples_file: None,
+            output_dir: output_dir.to_string_lossy().into_owned(),
+            output_fasta: None,
+            report_json: None,
+            normalize: true,
+            normalize_config: NormalizeConfig {
+                k: 5,
+                target_coverage: u16::MAX,
+                min_abundance: 1,
+                max_reads: None,
+                use_gpu: false,
+            },
+            min_len: 10,
+            use_gpu: false,
+        })
+        .expect_err("mismatched comma input lists should fail");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("same number of paths"));
     }
 }

@@ -54,6 +54,11 @@ isoforms match the same biological thresholds as direct paired input. It gates
 both one-row files and multi-row files that are merged into workflow-owned
 left/right FASTQs before normalization.
 
+The panel also gates Trinity-style comma-separated direct read inputs. The
+current fixture passes duplicated left/right FASTQ paths through `--input1` and
+`--input2` comma lists, verifies they are materialized into workflow-owned merged
+FASTQs, and applies the same selected-isoform thresholds as direct paired input.
+
 The panel also runs a malformed FASTQ negative check. `raptor trinity` must fail
 with a nonzero exit code, avoid writing an assembly FASTA, and report FASTQ
 record context for the validation error.
@@ -107,6 +112,12 @@ To exercise multi-row samples-file merging:
 
 ```bash
 python3 bench/trinity_parity/run_tiny_fixture.py --run-raptor-workflow-samples-file-multi --skip-raptor
+```
+
+To exercise comma-separated direct read-list merging:
+
+```bash
+python3 bench/trinity_parity/run_tiny_fixture.py --run-raptor-workflow-comma-lists --skip-raptor
 ```
 
 To exercise malformed FASTQ rejection:
@@ -163,6 +174,7 @@ The script records:
 - Raptor normalization command and kept-pair metrics when requested
 - Raptor `trinity` workflow command, input mode, report path, component clustering mode, component JSON path/count, component graph JSON path/count, component transcript candidate and selected-isoform FASTA metrics, selected-isoform precision/recall/F1 metrics, selected-isoform evidence JSON support metrics, scored isoform candidate JSON selection/rejection metrics, graph node/edge counts, edge read/pair/k-mer support, read k-mer node/edge counts, serialized read k-mer node/edge record counts, reconstructed read k-mer path counts/support, capped read k-mer edge sample count, component assigned read/pair counts, and recovery metrics when requested
 - Trinity-style samples-file path and reported sample count when requested
+- comma-separated direct input mode and reported input-group count when requested
 - malformed FASTQ rejection command, exit status, output absence, and stderr context
 - Trinity paired-end command, exit status, output metrics, and truth recovery when requested
 - whether Trinity was available on `PATH`

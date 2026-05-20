@@ -8,6 +8,7 @@
     "run_raptor_workflow_single": true,
     "run_raptor_workflow_samples_file": true,
     "run_raptor_workflow_samples_file_multi": true,
+    "run_raptor_workflow_comma_lists": true,
     "run_malformed_fastq_checks": true,
     "skip_raptor": true,
     "min_truth_coverage": 0.95,

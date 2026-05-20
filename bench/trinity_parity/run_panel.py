@@ -332,12 +332,14 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
     raptor_workflow_single = payload.get("raptor_workflow_single") or {}
     raptor_workflow_samples_file = payload.get("raptor_workflow_samples_file") or {}
     raptor_workflow_samples_file_multi = payload.get("raptor_workflow_samples_file_multi") or {}
+    raptor_workflow_comma_lists = payload.get("raptor_workflow_comma_lists") or {}
     malformed_fastq_check = payload.get("malformed_fastq_check") or {}
     workflow_metrics = raptor_workflow.get("metrics", {})
     gpu_workflow_metrics = raptor_workflow_gpu.get("metrics", {})
     single_workflow_metrics = raptor_workflow_single.get("metrics", {})
     samples_workflow_metrics = raptor_workflow_samples_file.get("metrics", {})
     samples_multi_workflow_metrics = raptor_workflow_samples_file_multi.get("metrics", {})
+    comma_workflow_metrics = raptor_workflow_comma_lists.get("metrics", {})
     malformed_metrics = malformed_fastq_check.get("metrics", {})
     trinity = payload.get("trinity") or {}
     trinity_result = trinity.get("result", {})
@@ -347,6 +349,7 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
     single_workflow_resources = raptor_workflow_single.get("resource_usage", {})
     samples_workflow_resources = raptor_workflow_samples_file.get("resource_usage", {})
     samples_multi_workflow_resources = raptor_workflow_samples_file_multi.get("resource_usage", {})
+    comma_workflow_resources = raptor_workflow_comma_lists.get("resource_usage", {})
     trinity_resources = trinity_result.get("resource_usage", {})
     workflow_gpu = raptor_workflow.get("gpu_usage", {})
     gpu_workflow_gpu = raptor_workflow_gpu.get("gpu_usage", {})
@@ -445,6 +448,22 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
             "component_selected_truth_precision", {}
         ).get("f1"),
         "raptor_samples_file_multi_workflow_selected_isoform_lengths": samples_multi_workflow_metrics.get(
+            "component_selected_isoform_lengths"
+        ),
+        "raptor_comma_list_workflow_exit_code": raptor_workflow_comma_lists.get("exit_code"),
+        "raptor_comma_list_workflow_elapsed_seconds": raptor_workflow_comma_lists.get(
+            "elapsed_seconds"
+        ),
+        "raptor_comma_list_workflow_max_rss_kb": comma_workflow_resources.get("max_rss_kb"),
+        "raptor_comma_list_workflow_input_mode": comma_workflow_metrics.get("input_mode"),
+        "raptor_comma_list_workflow_sample_count": comma_workflow_metrics.get("sample_count"),
+        "raptor_comma_list_workflow_selected_precision": comma_workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("precision"),
+        "raptor_comma_list_workflow_selected_f1": comma_workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("f1"),
+        "raptor_comma_list_workflow_selected_isoform_lengths": comma_workflow_metrics.get(
             "component_selected_isoform_lengths"
         ),
         "malformed_fastq_exit_code": malformed_fastq_check.get("exit_code"),
@@ -556,6 +575,12 @@ def run_fixture(
             defaults.get("run_raptor_workflow_samples_file_multi", False),
         )
     )
+    run_raptor_workflow_comma_lists = bool(
+        fixture.get(
+            "run_raptor_workflow_comma_lists",
+            defaults.get("run_raptor_workflow_comma_lists", False),
+        )
+    )
     skip_raptor = bool(fixture.get("skip_raptor", defaults.get("skip_raptor", True)))
     command = [
         sys.executable,
@@ -585,6 +610,8 @@ def run_fixture(
         command.append("--run-raptor-workflow-samples-file")
     if run_raptor_workflow_samples_file_multi:
         command.append("--run-raptor-workflow-samples-file-multi")
+    if run_raptor_workflow_comma_lists:
+        command.append("--run-raptor-workflow-comma-lists")
     if run_malformed_fastq_checks:
         command.append("--run-malformed-fastq-checks")
     if skip_raptor:
