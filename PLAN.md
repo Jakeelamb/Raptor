@@ -12,7 +12,7 @@ Start by building the parity map and benchmark harness before changing core algo
 
 - [x] Create Trinity parity map.
 - [ ] Freeze benchmark panel.
-- [ ] Build Trinity-vs-Raptor benchmark harness. Initial tiny fixture scaffold exists; full Trinity comparison and frozen panel still missing.
+- [ ] Build Trinity-vs-Raptor benchmark harness. Initial tiny fixture scaffold exists and can capture a paired-end Trinity oracle when Trinity is installed; frozen public panel still missing.
 - [ ] Close normalization parity.
 - [ ] Close Inchworm-equivalent contig construction parity.
 - [ ] Close Chrysalis-equivalent clustering/graph partitioning parity.
@@ -32,6 +32,6 @@ Start by building the parity map and benchmark harness before changing core algo
 
 - `docs/trinity-parity-map.md` is the current stage inventory.
 - Overall Trinity replacement readiness is currently 0 because multiple Trinity-stage equivalents and the frozen comparison artifacts are missing or unproven.
-- `bench/trinity_parity/run_tiny_fixture.py` now generates a tiny truth-known alternative-isoform fixture, runs current `raptor assemble`, and checks both generated truth and the frozen oracle at `bench/trinity_parity/oracles/tiny_alt_isoform.fa`.
+- `bench/trinity_parity/run_tiny_fixture.py` now generates a tiny truth-known alternative-isoform fixture, runs current `raptor assemble`, checks both generated truth and the frozen oracle at `bench/trinity_parity/oracles/tiny_alt_isoform.fa`, and can run paired-end Trinity with optional oracle freeze when Trinity is installed.
 - Current tiny paired-end fixture result after read-overlap rescue and non-repetitive fixture correction: Raptor exits 0 with `assemble --input R1 --input2 R2` across insert sweep 110,140,160,180 and emits 2 contigs/transcripts with N50 252 against truth/oracle transcript lengths 252 and 240 for every insert. Mean and minimum best truth/oracle coverage are 1.0. Previous baseline was 51 contigs with N50 27. This is Inchworm/paired-ingestion progress, not Trinity parity.
 - Normalization has a single-codepath problem: CLI knobs and standalone binaries do not currently converge on one parameterized implementation/default set.

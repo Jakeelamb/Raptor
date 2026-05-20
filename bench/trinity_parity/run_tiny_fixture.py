@@ -288,6 +288,8 @@ def run_one_fixture(
     insert: int,
     oracle_fasta: Path,
     run_trinity: bool,
+    require_trinity: bool,
+    freeze_trinity_oracle: bool,
     skip_raptor: bool,
 ) -> dict[str, object]:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -300,7 +302,9 @@ def run_one_fixture(
         "trinity": {
             "available": shutil.which("Trinity") is not None,
             "ran": False,
-            "note": "Trinity is optional for this scaffold until the benchmark panel is frozen.",
+            "required": require_trinity,
+            "freeze_oracle_requested": freeze_trinity_oracle,
+            "note": "Trinity is optional unless --require-trinity or --freeze-trinity-oracle is set.",
         },
         "oracle": {
             "path": str(oracle_fasta),
@@ -308,7 +312,7 @@ def run_one_fixture(
             "note": "Checked-in tiny oracle is a frozen stand-in until Trinity is installed or a Trinity oracle is captured.",
         },
         "known_limitations": [
-            "Tiny fixture now exercises raptor assemble paired-end input, but downstream path scoring still needs stronger read-pair constraints.",
+            "Tiny fixture now exercises paired-end input for both Raptor and Trinity, but downstream Raptor path scoring still needs stronger read-pair constraints.",
             "No Trinity parity claim is made from this tiny fixture.",
         ],
     }
@@ -360,12 +364,16 @@ def run_one_fixture(
             report["trinity"]["error"] = "Trinity executable not found on PATH"
         else:
             trinity_out = out_dir / "trinity"
+            if trinity_out.exists():
+                shutil.rmtree(trinity_out)
             command = [
                 trinity_bin,
                 "--seqType",
                 "fq",
-                "--single",
-                fixture["paths"]["single_fastq"],
+                "--left",
+                fixture["paths"]["r1_fastq"],
+                "--right",
+                fixture["paths"]["r2_fastq"],
                 "--CPU",
                 "1",
                 "--max_memory",
@@ -374,7 +382,30 @@ def run_one_fixture(
                 str(trinity_out),
             ]
             report["trinity"]["ran"] = True
-            report["trinity"]["result"] = run_command(command, ROOT)
+            result = run_command(command, ROOT)
+            output_fasta = trinity_out / "Trinity.fasta"
+            metrics = {"output_exists": output_fasta.exists()}
+            if output_fasta.exists():
+                lengths = read_fasta_lengths(output_fasta)
+                metrics.update(
+                    {
+                        "transcript_count": len(lengths),
+                        "total_bases": sum(lengths),
+                        "n50": n50(lengths),
+                        "lengths": lengths,
+                    }
+                )
+                metrics["truth_recovery"] = truth_recovery_metrics(
+                    Path(fixture["paths"]["truth_fasta"]), output_fasta
+                )
+                if freeze_trinity_oracle and result["exit_code"] == 0:
+                    oracle_fasta.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(output_fasta, oracle_fasta)
+                    report["oracle"]["path"] = str(oracle_fasta)
+                    report["oracle"]["available"] = True
+                    report["oracle"]["frozen_from_trinity"] = str(output_fasta)
+            result["metrics"] = metrics
+            report["trinity"]["result"] = result
 
     report_path = out_dir / "report.json"
     write_text(report_path, json.dumps(report, indent=2) + "\n")
@@ -388,6 +419,18 @@ def check_report_thresholds(
     min_oracle_coverage: float,
 ) -> list[str]:
     failures: list[str] = []
+    trinity = report.get("trinity", {})
+    if trinity.get("required") and not trinity.get("available"):
+        failures.append("Trinity required but executable was not found on PATH")
+    if trinity.get("required") and trinity.get("available") and not trinity.get("ran"):
+        failures.append("Trinity required but run was not requested")
+    if trinity.get("required") and trinity.get("ran"):
+        result = trinity.get("result", {})
+        if result.get("exit_code") != 0:
+            failures.append("required Trinity run failed")
+        elif not result.get("metrics", {}).get("output_exists"):
+            failures.append("required Trinity run did not produce Trinity.fasta")
+
     raptor = report.get("raptor")
     if not raptor:
         return failures
@@ -417,6 +460,8 @@ def check_report_thresholds(
 
 def summarize_report(report: dict[str, object]) -> dict[str, object]:
     metrics = report.get("raptor", {}).get("metrics", {})
+    trinity_result = report.get("trinity", {}).get("result", {})
+    trinity_metrics = trinity_result.get("metrics", {})
     return {
         "insert": report["fixture"]["insert"],
         "paired_end_pairs": report["fixture"]["paired_end_pairs"],
@@ -426,6 +471,14 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         "n50": metrics.get("n50"),
         "truth_min_coverage": metrics.get("truth_recovery", {}).get("min_best_coverage"),
         "oracle_min_coverage": metrics.get("oracle_recovery", {}).get("min_best_coverage"),
+        "trinity_available": report.get("trinity", {}).get("available"),
+        "trinity_ran": report.get("trinity", {}).get("ran"),
+        "trinity_exit_code": trinity_result.get("exit_code"),
+        "trinity_lengths": trinity_metrics.get("lengths"),
+        "trinity_n50": trinity_metrics.get("n50"),
+        "trinity_truth_min_coverage": trinity_metrics.get("truth_recovery", {}).get(
+            "min_best_coverage"
+        ),
     }
 
 
@@ -437,6 +490,16 @@ def main() -> int:
     parser.add_argument("--oracle-fasta", type=Path, default=DEFAULT_ORACLE)
     parser.add_argument("--insert", type=int, default=160)
     parser.add_argument(
+        "--require-trinity",
+        action="store_true",
+        help="Fail when --run-trinity cannot execute Trinity and produce Trinity.fasta",
+    )
+    parser.add_argument(
+        "--freeze-trinity-oracle",
+        action="store_true",
+        help="After a successful --run-trinity run, copy Trinity.fasta to --oracle-fasta",
+    )
+    parser.add_argument(
         "--insert-sweep",
         default=None,
         help="Comma-separated paired insert sizes to run as a sweep, e.g. 110,160,200",
@@ -446,6 +509,8 @@ def main() -> int:
     args = parser.parse_args()
 
     out_dir = args.out_dir.resolve()
+    run_trinity = args.run_trinity or args.require_trinity or args.freeze_trinity_oracle
+    require_trinity = args.require_trinity or args.freeze_trinity_oracle
 
     inserts = parse_insert_sweep(args.insert_sweep) if args.insert_sweep else [args.insert]
     reports = []
@@ -456,7 +521,9 @@ def main() -> int:
             run_dir,
             insert,
             args.oracle_fasta,
-            args.run_trinity,
+            run_trinity,
+            require_trinity,
+            args.freeze_trinity_oracle,
             args.skip_raptor,
         )
         reports.append(report)

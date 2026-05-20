@@ -25,6 +25,19 @@ For the current paired-insert stress gate:
 python3 bench/trinity_parity/run_tiny_fixture.py --insert-sweep 110,140,160,180
 ```
 
+If Trinity is installed on `PATH`, the same fixture can run Trinity on the same
+paired-end reads:
+
+```bash
+python3 bench/trinity_parity/run_tiny_fixture.py --run-trinity --require-trinity
+```
+
+To replace the tiny frozen oracle with a freshly captured Trinity output:
+
+```bash
+python3 bench/trinity_parity/run_tiny_fixture.py --freeze-trinity-oracle
+```
+
 By default the harness fails if minimum best truth coverage is below `0.95`.
 It also fails if minimum best oracle coverage is below `0.95`.
 
@@ -37,6 +50,7 @@ The script records:
 - tool versions where available
 - transcript length/count metrics
 - truth and oracle recovery metrics
+- Trinity paired-end command, exit status, output metrics, and truth recovery when requested
 - whether Trinity was available on `PATH`
 - the current Raptor limitation that paired-end evidence is only used as reverse-complemented mate sequence evidence, not yet full Butterfly-style pair path constraints
 
