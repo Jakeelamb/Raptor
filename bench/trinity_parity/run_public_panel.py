@@ -77,16 +77,52 @@ def fasta_stats(path: Path) -> dict[str, object]:
     }
 
 
-def best_reciprocal_coverage(query: str, references: list[str]) -> float:
-    best = 0.0
+def best_containment_match(
+    query_name: str,
+    query: str,
+    references: dict[str, str],
+) -> dict[str, object]:
+    best: dict[str, object] = {
+        "query": query_name,
+        "reference": None,
+        "coverage": 0.0,
+        "orientation": None,
+        "query_length": len(query),
+        "reference_length": 0,
+        "query_contains_reference": False,
+        "query_offset": None,
+        "reference_offset": None,
+        "left_missing": None,
+        "right_missing": None,
+    }
     rc_query = reverse_complement(query)
-    for reference in references:
-        for candidate in (query, rc_query):
-            if candidate in reference or reference in candidate:
-                coverage = min(len(candidate), len(reference)) / max(
-                    len(candidate), len(reference)
-                )
-                best = max(best, coverage)
+    for reference_name, reference in references.items():
+        for candidate, orientation in ((query, "forward"), (rc_query, "reverse_complement")):
+            reference_offset = reference.find(candidate)
+            query_offset = candidate.find(reference)
+            if reference_offset < 0 and query_offset < 0:
+                continue
+            coverage = min(len(candidate), len(reference)) / max(len(candidate), len(reference))
+            if coverage <= float(best["coverage"]):
+                continue
+            query_contains_reference = query_offset >= 0
+            best = {
+                "query": query_name,
+                "reference": reference_name,
+                "coverage": round(coverage, 6),
+                "orientation": orientation,
+                "query_length": len(query),
+                "reference_length": len(reference),
+                "query_contains_reference": query_contains_reference,
+                "query_offset": query_offset if query_contains_reference else None,
+                "reference_offset": None if query_contains_reference else reference_offset,
+                "left_missing": query_offset if query_contains_reference else reference_offset,
+                "right_missing": (
+                    len(candidate) - query_offset - len(reference)
+                    if query_contains_reference
+                    else len(reference) - reference_offset - len(candidate)
+                ),
+            }
     return best
 
 
@@ -102,15 +138,25 @@ def fasta_match_metrics(
 ) -> dict[str, object]:
     query = read_fasta_records(query_fasta)
     reference = read_fasta_records(reference_fasta)
-    reference_sequences = list(reference.values())
     matched = 0
     coverages: list[float] = []
-    for sequence in query.values():
-        coverage = best_reciprocal_coverage(sequence, reference_sequences)
+    matches: list[dict[str, object]] = []
+    for name, sequence in query.items():
+        match = best_containment_match(name, sequence, reference)
+        coverage = float(match["coverage"])
         coverages.append(round(coverage, 6))
+        matches.append(match)
         if coverage >= min_coverage:
             matched += 1
     precision = matched / len(query) if query else 0.0
+    matches.sort(
+        key=lambda match: (
+            float(match["coverage"]),
+            int(match["query_length"]),
+            str(match["query"]),
+        ),
+        reverse=True,
+    )
     return {
         "query_count": len(query),
         "reference_count": len(reference),
@@ -118,6 +164,7 @@ def fasta_match_metrics(
         "precision": round(precision, 6),
         "min_match_coverage": min_coverage,
         "best_coverages_top20": sorted(coverages, reverse=True)[:20],
+        "best_matches_top20": matches[:20],
     }
 
 

@@ -97,8 +97,30 @@ Chrysalis/Butterfly-style stages, not only k selection or raw contig length.
 - Trying Trinity-style k=25 improves final FASTA reciprocal matching, but it
   does not solve the boundary problem and reduces fresh-run Inchworm-stage
   matches from the prior 31-contig frontier.
+- Naive exact read-backed end extension is a trap. It lengthened 25 public
+  contigs and raised total bases to 51,804, but final FASTA F1 regressed to 0.0,
+  best final coverage dropped to 0.634298, and two one-base `N`s appeared in the
+  output. Do not revive that path without a stronger graph/evidence gate.
 - Full component graph artifact generation is not yet public-scale. Current
   caps are honest bounded-reporting guards, not a Chrysalis parity solution.
+
+## Boundary Diagnostics
+
+`run_public_panel.py` now records `best_matches_top20` for each FASTA comparison
+direction. Each record includes query/reference IDs, orientation, lengths,
+whether the query contains the reference, containment offsets, and missing-end
+sizes.
+
+Current k25 frontier diagnostics:
+
+- `contig_1` matches `TRINITY_DN13_c0_g1_i5` at 8,756 / 8,757 bp
+  (`0.999886` coverage), missing 1 bp on the left.
+- `contig_6` matches `TRINITY_DN7_c0_g1_i1` at 3,507 / 3,823 bp
+  (`0.917342` coverage), reverse-complemented in final Trinity, with 271 bp
+  missing on one side and 45 bp on the other.
+- Against Trinity Inchworm, the same `contig_6` maps to `a645;19` with the same
+  coverage and missing-end sizes, so this is an Inchworm/path-boundary problem
+  before final transcript selection.
 
 ## Next Serious Moves
 
