@@ -47,6 +47,7 @@ pub struct TrinityWorkflowReport {
     pub component_paths_fasta: String,
     pub component_selected_isoforms_fasta: String,
     pub component_selected_isoforms_json: String,
+    pub component_isoform_candidates_json: String,
     pub component_clustering: &'static str,
     pub component_count: usize,
     pub component_graph_count: usize,
@@ -114,6 +115,8 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
         output_dir.join("raptor_component_selected_isoforms.fasta");
     let component_selected_isoforms_json =
         output_dir.join("raptor_component_selected_isoforms.json");
+    let component_isoform_candidates_json =
+        output_dir.join("raptor_component_isoform_candidates.json");
     let component_artifacts = write_component_artifacts(
         &assembly_fasta_string,
         &component_path,
@@ -121,6 +124,7 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
         &component_paths_fasta,
         &component_selected_isoforms_fasta,
         &component_selected_isoforms_json,
+        &component_isoform_candidates_json,
         60,
         &assembly_input1,
         assembly_input2.as_deref(),
@@ -157,6 +161,8 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
             .to_string(),
         component_selected_isoforms_json: path_to_str(&component_selected_isoforms_json)?
             .to_string(),
+        component_isoform_candidates_json: path_to_str(&component_isoform_candidates_json)?
+            .to_string(),
         component_clustering: component_artifacts.clustering,
         component_count: component_artifacts.components.len(),
         component_graph_count: component_artifacts.component_graphs.len(),
@@ -192,6 +198,26 @@ struct SelectedComponentIsoform {
     max_overlapping_read_kmer_path_support: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ComponentIsoformCandidate {
+    id: String,
+    component_id: usize,
+    candidate_rank: usize,
+    source_kind: &'static str,
+    source_contig_id: Option<usize>,
+    source_path_index: Option<usize>,
+    length: usize,
+    selected: bool,
+    selection_method: &'static str,
+    evidence_score: usize,
+    component_assigned_reads: usize,
+    component_assigned_pairs: usize,
+    direct_read_support: usize,
+    direct_pair_support: usize,
+    overlapping_read_kmer_path_count: usize,
+    max_overlapping_read_kmer_path_support: usize,
+}
+
 fn write_component_artifacts(
     assembly_fasta: &str,
     component_path: &Path,
@@ -199,6 +225,7 @@ fn write_component_artifacts(
     component_paths_fasta: &Path,
     component_selected_isoforms_fasta: &Path,
     component_selected_isoforms_json: &Path,
+    component_isoform_candidates_json: &Path,
     min_shared_bases: usize,
     reads1_path: &str,
     reads2_path: Option<&str>,
@@ -254,6 +281,13 @@ fn write_component_artifacts(
         component_selected_isoforms_json,
         &selected_isoforms,
         "selected component isoform report",
+    )?;
+    let isoform_candidates =
+        component_isoform_candidates(&contigs, &component_graphs, &reads1, reads2.as_deref());
+    write_json(
+        component_isoform_candidates_json,
+        &isoform_candidates,
+        "component isoform candidate report",
     )?;
     Ok(ComponentArtifacts {
         components,
@@ -397,6 +431,97 @@ fn select_component_isoforms(
         }
     }
     selected
+}
+
+fn component_isoform_candidates(
+    contigs: &[Contig],
+    component_graphs: &[RaptorComponentGraph],
+    reads1: &[String],
+    reads2: Option<&[String]>,
+) -> Vec<ComponentIsoformCandidate> {
+    let contigs_by_id: std::collections::BTreeMap<usize, &Contig> =
+        contigs.iter().map(|contig| (contig.id, contig)).collect();
+    let mut candidates = Vec::new();
+    for graph in component_graphs {
+        let mut component_candidates = Vec::new();
+        for node in &graph.nodes {
+            let Some(contig) = contigs_by_id.get(&node.contig_id) else {
+                continue;
+            };
+            let (direct_read_support, direct_pair_support) =
+                contig_read_pair_support(&contig.sequence, reads1, reads2);
+            let overlapping_paths: Vec<&crate::graph::partition::RaptorReadKmerPath> = graph
+                .read_kmer_paths
+                .iter()
+                .filter(|path| sequences_overlap(&contig.sequence, &path.sequence))
+                .collect();
+            let max_path_support = overlapping_paths
+                .iter()
+                .map(|path| path.min_support)
+                .max()
+                .unwrap_or(0);
+            component_candidates.push(ComponentIsoformCandidate {
+                id: String::new(),
+                component_id: graph.component_id,
+                candidate_rank: 0,
+                source_kind: "contig",
+                source_contig_id: Some(node.contig_id),
+                source_path_index: None,
+                length: contig.sequence.len(),
+                selected: direct_read_support > 0 && direct_pair_support > 0,
+                selection_method: "component_contig_evidence_score_v1",
+                evidence_score: selected_isoform_evidence_score(
+                    direct_read_support,
+                    direct_pair_support,
+                    overlapping_paths.len(),
+                    max_path_support,
+                ),
+                component_assigned_reads: graph.assigned_read_count,
+                component_assigned_pairs: graph.assigned_pair_count,
+                direct_read_support,
+                direct_pair_support,
+                overlapping_read_kmer_path_count: overlapping_paths.len(),
+                max_overlapping_read_kmer_path_support: max_path_support,
+            });
+        }
+        for (path_idx, read_path) in graph.read_kmer_paths.iter().enumerate() {
+            component_candidates.push(ComponentIsoformCandidate {
+                id: String::new(),
+                component_id: graph.component_id,
+                candidate_rank: 0,
+                source_kind: "read_kmer_path",
+                source_contig_id: None,
+                source_path_index: Some(path_idx),
+                length: read_path.sequence.len(),
+                selected: false,
+                selection_method: "component_contig_evidence_score_v1",
+                evidence_score: read_path.min_support * 2 + read_path.edge_count,
+                component_assigned_reads: graph.assigned_read_count,
+                component_assigned_pairs: graph.assigned_pair_count,
+                direct_read_support: 0,
+                direct_pair_support: 0,
+                overlapping_read_kmer_path_count: 1,
+                max_overlapping_read_kmer_path_support: read_path.min_support,
+            });
+        }
+        component_candidates.sort_by(|left, right| {
+            right
+                .evidence_score
+                .cmp(&left.evidence_score)
+                .then_with(|| right.direct_pair_support.cmp(&left.direct_pair_support))
+                .then_with(|| right.direct_read_support.cmp(&left.direct_read_support))
+                .then_with(|| right.length.cmp(&left.length))
+                .then_with(|| left.source_kind.cmp(right.source_kind))
+                .then_with(|| left.source_contig_id.cmp(&right.source_contig_id))
+                .then_with(|| left.source_path_index.cmp(&right.source_path_index))
+        });
+        for (idx, mut candidate) in component_candidates.into_iter().enumerate() {
+            candidate.candidate_rank = idx + 1;
+            candidate.id = format!("component_{}_candidate_{}", graph.component_id, idx);
+            candidates.push(candidate);
+        }
+    }
+    candidates
 }
 
 fn selected_isoform_evidence_score(
@@ -632,6 +757,7 @@ mod tests {
         assert!(std::path::Path::new(&report.component_paths_fasta).exists());
         assert!(std::path::Path::new(&report.component_selected_isoforms_fasta).exists());
         assert!(std::path::Path::new(&report.component_selected_isoforms_json).exists());
+        assert!(std::path::Path::new(&report.component_isoform_candidates_json).exists());
         let components: Vec<serde_json::Value> = serde_json::from_str(
             &fs::read_to_string(&report.components_json).expect("component json"),
         )
@@ -668,6 +794,14 @@ mod tests {
                 .expect("direct read support")
                 >= 1
         );
+        let isoform_candidates: Vec<serde_json::Value> = serde_json::from_str(
+            &fs::read_to_string(&report.component_isoform_candidates_json)
+                .expect("isoform candidate json"),
+        )
+        .expect("parse isoform candidates");
+        assert!(isoform_candidates.iter().any(|candidate| {
+            candidate["source_kind"] == "contig" && candidate["selected"] == true
+        }));
         assert!(output_dir.join("raptor_trinity_report.json").exists());
     }
 }

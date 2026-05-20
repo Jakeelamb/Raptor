@@ -233,6 +233,59 @@ def selected_isoform_evidence_metrics(path: Path) -> dict[str, object]:
     }
 
 
+def isoform_candidate_metrics(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {"component_isoform_candidates_json_exists": False}
+    records = json.loads(path.read_text(encoding="utf-8"))
+    selected = [record for record in records if record.get("selected") is True]
+    rejected = [record for record in records if record.get("selected") is not True]
+    path_candidates = [
+        record for record in records if record.get("source_kind") == "read_kmer_path"
+    ]
+    selected_contigs = [
+        record
+        for record in selected
+        if record.get("source_kind") == "contig"
+    ]
+    ranks_by_component: dict[int, list[int]] = {}
+    scores_by_component: dict[int, list[int]] = {}
+    for record in records:
+        component_id = int(record.get("component_id", -1))
+        ranks_by_component.setdefault(component_id, []).append(
+            int(record.get("candidate_rank", 0))
+        )
+        scores_by_component.setdefault(component_id, []).append(
+            int(record.get("evidence_score", 0))
+        )
+    return {
+        "component_isoform_candidates_json_exists": True,
+        "component_isoform_candidate_count": len(records),
+        "component_isoform_selected_candidate_count": len(selected),
+        "component_isoform_rejected_candidate_count": len(rejected),
+        "component_isoform_path_candidate_count": len(path_candidates),
+        "component_isoform_rejected_path_candidate_count": sum(
+            1 for record in path_candidates if record.get("selected") is not True
+        ),
+        "component_isoform_selected_contig_candidate_count": len(selected_contigs),
+        "component_isoform_candidate_ranks_are_dense": all(
+            sorted(ranks) == list(range(1, len(ranks) + 1))
+            for ranks in ranks_by_component.values()
+        ),
+        "component_isoform_candidate_scores_are_descending": all(
+            scores == sorted(scores, reverse=True)
+            for scores in scores_by_component.values()
+        ),
+        "component_isoform_candidate_max_score": max(
+            (int(record.get("evidence_score", 0)) for record in records),
+            default=0,
+        ),
+        "component_isoform_rejected_candidate_max_score": max(
+            (int(record.get("evidence_score", 0)) for record in rejected),
+            default=0,
+        ),
+    }
+
+
 def count_fastq_records(path: Path) -> int:
     opener = gzip.open if path.suffix == ".gz" else open
     lines = 0
@@ -652,6 +705,9 @@ def run_one_fixture(
             metrics["component_selected_isoforms_json"] = workflow_payload.get(
                 "component_selected_isoforms_json"
             )
+            metrics["component_isoform_candidates_json"] = workflow_payload.get(
+                "component_isoform_candidates_json"
+            )
             components_json = workflow_payload.get("components_json")
             if components_json:
                 metrics.update(component_evidence_metrics(Path(components_json)))
@@ -661,6 +717,9 @@ def run_one_fixture(
             selected_isoforms_json = workflow_payload.get("component_selected_isoforms_json")
             if selected_isoforms_json:
                 metrics.update(selected_isoform_evidence_metrics(Path(selected_isoforms_json)))
+            isoform_candidates_json = workflow_payload.get("component_isoform_candidates_json")
+            if isoform_candidates_json:
+                metrics.update(isoform_candidate_metrics(Path(isoform_candidates_json)))
             component_paths_fasta = workflow_payload.get("component_paths_fasta")
             if component_paths_fasta:
                 metrics.update(
@@ -862,6 +921,24 @@ def check_report_thresholds(
             failures.append("selected isoforms lack direct pair support")
         if workflow_metrics.get("component_selected_read_kmer_path_support", 0) < 1:
             failures.append("selected isoforms lack read k-mer path support")
+        if not workflow_metrics.get("component_isoform_candidates_json_exists"):
+            failures.append("raptor trinity workflow did not emit isoform candidate JSON")
+        if workflow_metrics.get("component_isoform_candidate_count", 0) <= workflow_metrics.get(
+            "component_selected_isoform_count", 0
+        ):
+            failures.append("isoform candidate set does not exceed selected isoform count")
+        if workflow_metrics.get("component_isoform_selected_candidate_count", 0) != workflow_metrics.get(
+            "component_selected_isoform_count", 0
+        ):
+            failures.append("selected isoform candidates do not match selected isoform count")
+        if workflow_metrics.get("component_isoform_path_candidate_count", 0) < 1:
+            failures.append("isoform candidate set lacks read k-mer path candidates")
+        if workflow_metrics.get("component_isoform_rejected_path_candidate_count", 0) < 1:
+            failures.append("isoform scoring did not reject read k-mer path candidates")
+        if not workflow_metrics.get("component_isoform_candidate_ranks_are_dense"):
+            failures.append("isoform candidate ranks are not dense")
+        if not workflow_metrics.get("component_isoform_candidate_scores_are_descending"):
+            failures.append("isoform candidates are not sorted by descending evidence score")
         if workflow_metrics.get("component_assigned_read_count", 0) < 1:
             failures.append("raptor trinity workflow did not assign reads to components")
         if workflow_metrics.get("component_assigned_pair_count", 0) < 1:
@@ -1005,6 +1082,36 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         ),
         "workflow_component_selected_isoforms_json": workflow_metrics.get(
             "component_selected_isoforms_json"
+        ),
+        "workflow_component_isoform_candidates_json": workflow_metrics.get(
+            "component_isoform_candidates_json"
+        ),
+        "workflow_component_isoform_candidate_count": workflow_metrics.get(
+            "component_isoform_candidate_count"
+        ),
+        "workflow_component_isoform_selected_candidate_count": workflow_metrics.get(
+            "component_isoform_selected_candidate_count"
+        ),
+        "workflow_component_isoform_rejected_candidate_count": workflow_metrics.get(
+            "component_isoform_rejected_candidate_count"
+        ),
+        "workflow_component_isoform_path_candidate_count": workflow_metrics.get(
+            "component_isoform_path_candidate_count"
+        ),
+        "workflow_component_isoform_rejected_path_candidate_count": workflow_metrics.get(
+            "component_isoform_rejected_path_candidate_count"
+        ),
+        "workflow_component_isoform_candidate_ranks_dense": workflow_metrics.get(
+            "component_isoform_candidate_ranks_are_dense"
+        ),
+        "workflow_component_isoform_candidate_scores_descending": workflow_metrics.get(
+            "component_isoform_candidate_scores_are_descending"
+        ),
+        "workflow_component_isoform_candidate_max_score": workflow_metrics.get(
+            "component_isoform_candidate_max_score"
+        ),
+        "workflow_component_isoform_rejected_candidate_max_score": workflow_metrics.get(
+            "component_isoform_rejected_candidate_max_score"
         ),
         "workflow_component_selected_isoform_count": workflow_metrics.get(
             "component_selected_isoform_count"
