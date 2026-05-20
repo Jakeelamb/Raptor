@@ -173,6 +173,32 @@ def component_graph_metrics(path: Path) -> dict[str, object]:
     }
 
 
+def selected_isoform_evidence_metrics(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {"component_selected_isoforms_json_exists": False}
+    records = json.loads(path.read_text(encoding="utf-8"))
+    return {
+        "component_selected_isoforms_json_exists": True,
+        "component_selected_isoform_record_count": len(records),
+        "component_selected_direct_read_support": sum(
+            int(record.get("direct_read_support", 0)) for record in records
+        ),
+        "component_selected_direct_pair_support": sum(
+            int(record.get("direct_pair_support", 0)) for record in records
+        ),
+        "component_selected_read_kmer_path_support": sum(
+            int(record.get("overlapping_read_kmer_path_count", 0)) for record in records
+        ),
+        "component_selected_max_read_kmer_path_support": max(
+            (
+                int(record.get("max_overlapping_read_kmer_path_support", 0))
+                for record in records
+            ),
+            default=0,
+        ),
+    }
+
+
 def count_fastq_records(path: Path) -> int:
     opener = gzip.open if path.suffix == ".gz" else open
     lines = 0
@@ -589,12 +615,18 @@ def run_one_fixture(
             metrics["component_selected_isoforms_fasta"] = workflow_payload.get(
                 "component_selected_isoforms_fasta"
             )
+            metrics["component_selected_isoforms_json"] = workflow_payload.get(
+                "component_selected_isoforms_json"
+            )
             components_json = workflow_payload.get("components_json")
             if components_json:
                 metrics.update(component_evidence_metrics(Path(components_json)))
             component_graphs_json = workflow_payload.get("component_graphs_json")
             if component_graphs_json:
                 metrics.update(component_graph_metrics(Path(component_graphs_json)))
+            selected_isoforms_json = workflow_payload.get("component_selected_isoforms_json")
+            if selected_isoforms_json:
+                metrics.update(selected_isoform_evidence_metrics(Path(selected_isoforms_json)))
             component_paths_fasta = workflow_payload.get("component_paths_fasta")
             if component_paths_fasta:
                 metrics.update(
@@ -774,6 +806,18 @@ def check_report_thresholds(
             failures.append("raptor trinity workflow did not emit selected isoform FASTA")
         if workflow_metrics.get("component_selected_isoform_count", 0) < 1:
             failures.append("raptor trinity workflow did not select component isoforms")
+        if not workflow_metrics.get("component_selected_isoforms_json_exists"):
+            failures.append("raptor trinity workflow did not emit selected isoform evidence JSON")
+        if workflow_metrics.get("component_selected_isoform_record_count", 0) != workflow_metrics.get(
+            "component_selected_isoform_count", 0
+        ):
+            failures.append("selected isoform evidence records do not match selected FASTA records")
+        if workflow_metrics.get("component_selected_direct_read_support", 0) < 1:
+            failures.append("selected isoforms lack direct read support")
+        if workflow_metrics.get("component_selected_direct_pair_support", 0) < 1:
+            failures.append("selected isoforms lack direct pair support")
+        if workflow_metrics.get("component_selected_read_kmer_path_support", 0) < 1:
+            failures.append("selected isoforms lack read k-mer path support")
         if workflow_metrics.get("component_assigned_read_count", 0) < 1:
             failures.append("raptor trinity workflow did not assign reads to components")
         if workflow_metrics.get("component_assigned_pair_count", 0) < 1:
@@ -915,11 +959,29 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         "workflow_component_selected_isoforms_fasta": workflow_metrics.get(
             "component_selected_isoforms_fasta"
         ),
+        "workflow_component_selected_isoforms_json": workflow_metrics.get(
+            "component_selected_isoforms_json"
+        ),
         "workflow_component_selected_isoform_count": workflow_metrics.get(
             "component_selected_isoform_count"
         ),
+        "workflow_component_selected_isoform_records": workflow_metrics.get(
+            "component_selected_isoform_record_count"
+        ),
         "workflow_component_selected_isoform_lengths": workflow_metrics.get(
             "component_selected_isoform_lengths"
+        ),
+        "workflow_component_selected_direct_read_support": workflow_metrics.get(
+            "component_selected_direct_read_support"
+        ),
+        "workflow_component_selected_direct_pair_support": workflow_metrics.get(
+            "component_selected_direct_pair_support"
+        ),
+        "workflow_component_selected_read_kmer_path_support": workflow_metrics.get(
+            "component_selected_read_kmer_path_support"
+        ),
+        "workflow_component_selected_max_read_kmer_path_support": workflow_metrics.get(
+            "component_selected_max_read_kmer_path_support"
         ),
         "workflow_component_path_truth_min_coverage": workflow_metrics.get(
             "component_candidate_truth_recovery", {}
