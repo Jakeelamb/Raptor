@@ -330,9 +330,11 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
     raptor_workflow = payload.get("raptor_workflow") or {}
     raptor_workflow_gpu = payload.get("raptor_workflow_gpu") or {}
     raptor_workflow_single = payload.get("raptor_workflow_single") or {}
+    malformed_fastq_check = payload.get("malformed_fastq_check") or {}
     workflow_metrics = raptor_workflow.get("metrics", {})
     gpu_workflow_metrics = raptor_workflow_gpu.get("metrics", {})
     single_workflow_metrics = raptor_workflow_single.get("metrics", {})
+    malformed_metrics = malformed_fastq_check.get("metrics", {})
     trinity = payload.get("trinity") or {}
     trinity_result = trinity.get("result", {})
     trinity_metrics = trinity_result.get("metrics", {})
@@ -398,6 +400,12 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
         ).get("f1"),
         "raptor_single_workflow_selected_isoform_lengths": single_workflow_metrics.get(
             "component_selected_isoform_lengths"
+        ),
+        "malformed_fastq_exit_code": malformed_fastq_check.get("exit_code"),
+        "malformed_fastq_failed": malformed_metrics.get("failed"),
+        "malformed_fastq_stderr_mentions_fastq": malformed_metrics.get("stderr_mentions_fastq"),
+        "malformed_fastq_stderr_mentions_quality": malformed_metrics.get(
+            "stderr_mentions_quality"
         ),
         "raptor_workflow_output_fasta_bytes": workflow_metrics.get("output_fasta_bytes"),
         "raptor_workflow_output_dir_bytes": workflow_metrics.get(
@@ -484,6 +492,12 @@ def run_fixture(
             defaults.get("run_raptor_workflow_single", False),
         )
     )
+    run_malformed_fastq_checks = bool(
+        fixture.get(
+            "run_malformed_fastq_checks",
+            defaults.get("run_malformed_fastq_checks", False),
+        )
+    )
     skip_raptor = bool(fixture.get("skip_raptor", defaults.get("skip_raptor", True)))
     command = [
         sys.executable,
@@ -509,6 +523,8 @@ def run_fixture(
         command.append("--run-raptor-workflow-gpu")
     if run_raptor_workflow_single:
         command.append("--run-raptor-workflow-single")
+    if run_malformed_fastq_checks:
+        command.append("--run-malformed-fastq-checks")
     if skip_raptor:
         command.append("--skip-raptor")
     if run_trinity:

@@ -160,6 +160,7 @@ fn main() {
                 }
                 Err(err) => {
                     eprintln!("Trinity workflow failed: {}", err);
+                    std::process::exit(1);
                 }
             }
         }

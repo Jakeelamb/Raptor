@@ -1046,6 +1046,46 @@ def add_cpu_gpu_workflow_comparison(report: dict[str, object]) -> None:
     )
 
 
+def run_malformed_fastq_check(out_dir: Path, fixture: dict[str, object]) -> dict[str, object]:
+    malformed_dir = out_dir / "malformed_fastq_check"
+    malformed_dir.mkdir(parents=True, exist_ok=True)
+    bad_r1 = malformed_dir / "bad_R1.fastq"
+    write_text(
+        bad_r1,
+        "@bad/1\nACGTACGTACGT\n+\nIIII\n",
+    )
+    workflow_dir = malformed_dir / "raptor_workflow"
+    workflow_fasta = workflow_dir / "raptor_trinity.fasta.gz"
+    command = [
+        "cargo",
+        "run",
+        "--quiet",
+        "--",
+        "trinity",
+        "--input1",
+        str(bad_r1),
+        "--input2",
+        fixture["paths"]["r2_fastq"],
+        "--output-dir",
+        str(workflow_dir),
+        "--output-fasta",
+        str(workflow_fasta),
+        "--min-len",
+        "25",
+    ]
+    result = run_command(command, ROOT)
+    stderr = result.get("stderr", "")
+    result["metrics"] = {
+        "bad_input": str(bad_r1),
+        "expected_failure": True,
+        "failed": result.get("exit_code") != 0,
+        "output_exists": workflow_fasta.exists(),
+        "stderr_mentions_fastq": "FASTQ record" in stderr,
+        "stderr_mentions_quality": "sequence and quality lengths differ" in stderr,
+    }
+    return result
+
+
 def run_one_fixture(
     out_dir: Path,
     fixture_name: str,
@@ -1056,6 +1096,7 @@ def run_one_fixture(
     run_raptor_workflow: bool,
     run_raptor_workflow_gpu: bool,
     run_raptor_workflow_single: bool,
+    run_malformed_fastq_checks: bool,
     run_trinity: bool,
     require_trinity: bool,
     freeze_trinity_oracle: bool,
@@ -1073,6 +1114,7 @@ def run_one_fixture(
         "raptor_workflow": None,
         "raptor_workflow_gpu": None,
         "raptor_workflow_single": None,
+        "malformed_fastq_check": None,
         "trinity": {
             "available": shutil.which("Trinity") is not None,
             "ran": False,
@@ -1209,6 +1251,9 @@ def run_one_fixture(
             out_dir, fixture, oracle_fasta, min_match_coverage, False, "single"
         )
 
+    if run_malformed_fastq_checks:
+        report["malformed_fastq_check"] = run_malformed_fastq_check(out_dir, fixture)
+
     add_cpu_gpu_workflow_comparison(report)
 
     if run_trinity:
@@ -1296,6 +1341,7 @@ def check_report_thresholds(
     raptor_workflow = report.get("raptor_workflow")
     raptor_workflow_gpu = report.get("raptor_workflow_gpu")
     raptor_workflow_single = report.get("raptor_workflow_single")
+    malformed_fastq_check = report.get("malformed_fastq_check")
     if raptor_normalize:
         if raptor_normalize.get("exit_code") != 0:
             failures.append("raptor normalize failed")
@@ -1515,6 +1561,17 @@ def check_report_thresholds(
                 f"single-end selected component isoform F1 below threshold: {selected_f1} < {min_selected_f1}"
             )
 
+    if malformed_fastq_check:
+        malformed_metrics = malformed_fastq_check.get("metrics", {})
+        if malformed_fastq_check.get("exit_code") == 0:
+            failures.append("malformed FASTQ workflow unexpectedly succeeded")
+        if malformed_metrics.get("output_exists"):
+            failures.append("malformed FASTQ workflow produced an assembly output")
+        if not malformed_metrics.get("stderr_mentions_fastq"):
+            failures.append("malformed FASTQ workflow error did not identify FASTQ record context")
+        if not malformed_metrics.get("stderr_mentions_quality"):
+            failures.append("malformed FASTQ workflow error did not identify quality length mismatch")
+
     if not raptor:
         return failures
 
@@ -1547,12 +1604,14 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
     raptor_workflow = report.get("raptor_workflow") or {}
     raptor_workflow_gpu = report.get("raptor_workflow_gpu") or {}
     raptor_workflow_single = report.get("raptor_workflow_single") or {}
+    malformed_fastq_check = report.get("malformed_fastq_check") or {}
     trinity = report.get("trinity") or {}
     metrics = raptor.get("metrics", {})
     normalize_metrics = raptor_normalize.get("metrics", {})
     workflow_metrics = raptor_workflow.get("metrics", {})
     gpu_workflow_metrics = raptor_workflow_gpu.get("metrics", {})
     single_workflow_metrics = raptor_workflow_single.get("metrics", {})
+    malformed_metrics = malformed_fastq_check.get("metrics", {})
     trinity_result = trinity.get("result", {})
     trinity_metrics = trinity_result.get("metrics", {})
     raptor_resources = raptor.get("resource_usage", {})
@@ -1660,6 +1719,13 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         ).get("f1"),
         "raptor_single_workflow_selected_isoform_lengths": single_workflow_metrics.get(
             "component_selected_isoform_lengths"
+        ),
+        "malformed_fastq_exit_code": malformed_fastq_check.get("exit_code"),
+        "malformed_fastq_failed": malformed_metrics.get("failed"),
+        "malformed_fastq_output_exists": malformed_metrics.get("output_exists"),
+        "malformed_fastq_stderr_mentions_fastq": malformed_metrics.get("stderr_mentions_fastq"),
+        "malformed_fastq_stderr_mentions_quality": malformed_metrics.get(
+            "stderr_mentions_quality"
         ),
         "raptor_workflow_output_fasta_bytes": workflow_metrics.get("output_fasta_bytes"),
         "raptor_workflow_output_dir_bytes": workflow_metrics.get(
@@ -1900,6 +1966,11 @@ def main() -> int:
         action="store_true",
         help="Run the raptor trinity end-to-end CLI on the generated single-end FASTQ",
     )
+    parser.add_argument(
+        "--run-malformed-fastq-checks",
+        action="store_true",
+        help="Run negative FASTQ validation checks against the raptor trinity workflow",
+    )
     parser.add_argument("--run-trinity", action="store_true")
     parser.add_argument("--oracle-fasta", type=Path, default=DEFAULT_ORACLE)
     parser.add_argument("--insert", type=int, default=160)
@@ -1969,6 +2040,7 @@ def main() -> int:
             args.run_raptor_workflow,
             args.run_raptor_workflow_gpu,
             args.run_raptor_workflow_single,
+            args.run_malformed_fastq_checks,
             run_trinity,
             require_trinity,
             args.freeze_trinity_oracle,
