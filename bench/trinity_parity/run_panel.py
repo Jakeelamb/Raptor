@@ -541,6 +541,8 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
         "trinity_available": trinity.get("available"),
         "trinity_ran": trinity.get("ran"),
         "trinity_exit_code": trinity_result.get("exit_code"),
+        "trinity_input_mode": trinity_metrics.get("input_mode"),
+        "trinity_ss_lib_type": trinity_metrics.get("ss_lib_type"),
         "trinity_elapsed_seconds": trinity_result.get("elapsed_seconds"),
         "trinity_max_rss_kb": trinity_resources.get("max_rss_kb"),
         "trinity_user_seconds": trinity_resources.get("user_seconds"),

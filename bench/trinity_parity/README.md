@@ -66,7 +66,7 @@ Current Trinity-backed candidate evidence with
 - `tiny_alt_isoform`: Raptor and Trinity both emit `[252,240]`, reciprocal selected F1 `1.0` across inserts `110,140,160,180`.
 - `ambiguous_paralog`: Raptor emits `[240,234,240]`; Trinity emits `[234,240]` with truth min coverage `0.3`; reciprocal selected F1 is `0.8`.
 - `compact_fusion`: Raptor emits `[216,216]`; Trinity emits `[336]`; reciprocal selected F1 is `0.0`.
-- `antisense_overlap` and `partial_antisense_overlap`: Trinity exits `2` under the current unstranded paired invocation, while Raptor's RF workflow still passes the truth gates.
+- `antisense_overlap` and `partial_antisense_overlap`: Trinity runs with `--SS_lib_type RF` on Trinity-safe renamed RF FASTQs and emits the expected `[264,264]` and `[288,288]` truth-covering transcript pairs.
 
 The panel also runs a GPU-requested Raptor workflow with
 `cargo run --features gpu -- trinity --gpu` for each case and compares its

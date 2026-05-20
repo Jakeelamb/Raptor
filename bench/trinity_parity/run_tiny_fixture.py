@@ -63,6 +63,45 @@ def write_fastq_gz(path: Path, records: list[tuple[str, str]]) -> None:
             handle.write(f"@{name}\n{seq}\n+\n{'I' * len(seq)}\n")
 
 
+def iter_fastq_gz(path: Path):
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        while True:
+            name = handle.readline()
+            if not name:
+                return
+            seq = handle.readline()
+            plus = handle.readline()
+            qual = handle.readline()
+            if not seq or not plus or not qual:
+                raise ValueError(f"truncated FASTQ record in {path}")
+            if not name.startswith("@") or not plus.startswith("+"):
+                raise ValueError(f"malformed FASTQ record in {path}")
+            yield name[1:].strip(), seq.strip(), qual.strip()
+
+
+def write_trinity_safe_fastq_pair(left: Path, right: Path, out_dir: Path) -> tuple[Path, Path]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe_left = out_dir / "trinity_safe_R1.fastq.gz"
+    safe_right = out_dir / "trinity_safe_R2.fastq.gz"
+    left_count = 0
+    right_count = 0
+    with gzip.open(safe_left, "wt", encoding="utf-8") as left_handle, gzip.open(
+        safe_right, "wt", encoding="utf-8"
+    ) as right_handle:
+        for idx, (_, seq, qual) in enumerate(iter_fastq_gz(left), start=1):
+            left_count = idx
+            left_handle.write(f"@read{idx:08d}/1\n{seq}\n+\n{qual}\n")
+        for idx, (_, seq, qual) in enumerate(iter_fastq_gz(right), start=1):
+            right_count = idx
+            right_handle.write(f"@read{idx:08d}/2\n{seq}\n+\n{qual}\n")
+    if left_count != right_count:
+        raise ValueError(
+            f"paired FASTQ count mismatch: {left} has {left_count}, "
+            f"{right} has {right_count}"
+        )
+    return safe_left, safe_right
+
+
 def tiled_starts(sequence_len: int, window_len: int, step: int) -> list[int]:
     if sequence_len < window_len:
         return []
@@ -867,6 +906,56 @@ def trinity_version(trinity_bin: str | None) -> dict[str, object]:
     }
 
 
+def trinity_fixture_command(
+    trinity_bin: str, fixture: dict[str, object], trinity_out: Path
+) -> tuple[list[str], dict[str, object]]:
+    fixture_name = str(fixture.get("fixture", ""))
+    is_rf_stranded = fixture_name in {
+        "antisense_overlap",
+        "partial_antisense_overlap",
+    }
+    source_left = Path(
+        fixture["paths"]["rf_r1_fastq"] if is_rf_stranded else fixture["paths"]["r1_fastq"]
+    )
+    source_right = Path(
+        fixture["paths"]["rf_r2_fastq"] if is_rf_stranded else fixture["paths"]["r2_fastq"]
+    )
+    left_path, right_path = write_trinity_safe_fastq_pair(
+        source_left, source_right, trinity_out / "trinity_input"
+    )
+    left = str(left_path)
+    right = str(right_path)
+    command = [
+        trinity_bin,
+        "--seqType",
+        "fq",
+    ]
+    if is_rf_stranded:
+        command.extend(["--SS_lib_type", "RF"])
+    command.extend(
+        [
+            "--left",
+            left,
+            "--right",
+            right,
+            "--CPU",
+            "1",
+            "--max_memory",
+            "2G",
+            "--output",
+            str(trinity_out),
+        ]
+    )
+    return command, {
+        "input_mode": "stranded_rf" if is_rf_stranded else "paired",
+        "ss_lib_type": "RF" if is_rf_stranded else None,
+        "left": left,
+        "right": right,
+        "source_left": str(source_left),
+        "source_right": str(source_right),
+    }
+
+
 def parse_insert_sweep(text: str) -> list[int]:
     inserts: list[int] = []
     for part in text.split(","):
@@ -1544,21 +1633,9 @@ def run_one_fixture(
             trinity_out = out_dir / "trinity"
             if trinity_out.exists():
                 shutil.rmtree(trinity_out)
-            command = [
-                resolved_trinity_bin,
-                "--seqType",
-                "fq",
-                "--left",
-                fixture["paths"]["r1_fastq"],
-                "--right",
-                fixture["paths"]["r2_fastq"],
-                "--CPU",
-                "1",
-                "--max_memory",
-                "2G",
-                "--output",
-                str(trinity_out),
-            ]
+            command, trinity_inputs = trinity_fixture_command(
+                resolved_trinity_bin, fixture, trinity_out
+            )
             report["trinity"]["ran"] = True
             result = run_command(command, ROOT)
             output_fasta_candidates = [
@@ -1573,6 +1650,12 @@ def run_one_fixture(
                 "output_exists": output_fasta.exists(),
                 "output_fasta": str(output_fasta),
                 "output_fasta_candidates": [str(path) for path in output_fasta_candidates],
+                "input_mode": trinity_inputs["input_mode"],
+                "ss_lib_type": trinity_inputs["ss_lib_type"],
+                "left": trinity_inputs["left"],
+                "right": trinity_inputs["right"],
+                "source_left": trinity_inputs["source_left"],
+                "source_right": trinity_inputs["source_right"],
                 "output_fasta_bytes": file_size_bytes(output_fasta),
                 "output_dir_footprint": directory_footprint(trinity_out),
             }
@@ -2416,6 +2499,8 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         "trinity_available": trinity.get("available"),
         "trinity_ran": trinity.get("ran"),
         "trinity_exit_code": trinity_result.get("exit_code"),
+        "trinity_input_mode": trinity_metrics.get("input_mode"),
+        "trinity_ss_lib_type": trinity_metrics.get("ss_lib_type"),
         "trinity_elapsed_seconds": trinity_result.get("elapsed_seconds"),
         "trinity_max_rss_kb": trinity_resources.get("max_rss_kb"),
         "trinity_user_seconds": trinity_resources.get("user_seconds"),
