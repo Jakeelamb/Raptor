@@ -482,6 +482,12 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
         "raptor_stranded_rf_workflow_selected_f1": stranded_workflow_metrics.get(
             "component_selected_truth_precision", {}
         ).get("f1"),
+        "raptor_stranded_rf_workflow_forward_precision": stranded_workflow_metrics.get(
+            "component_selected_forward_truth_precision", {}
+        ).get("precision"),
+        "raptor_stranded_rf_workflow_forward_f1": stranded_workflow_metrics.get(
+            "component_selected_forward_truth_precision", {}
+        ).get("f1"),
         "raptor_stranded_rf_workflow_selected_isoform_lengths": stranded_workflow_metrics.get(
             "component_selected_isoform_lengths"
         ),

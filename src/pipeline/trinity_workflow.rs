@@ -4,7 +4,7 @@ use crate::graph::partition::{
     cluster_contigs_by_sequence_or_read_kmers, RaptorComponent, RaptorComponentGraph,
 };
 use crate::io::fasta::try_open_fasta;
-use crate::io::fastq::{stream_fastq_records_checked, try_open_fastq, FastqWriter};
+use crate::io::fastq::{stream_fastq_records_checked, try_open_fastq, FastqRecord, FastqWriter};
 use crate::kmer::kmer::reverse_complement;
 use crate::pipeline::assemble::assemble_reads_with_gpu;
 use crate::pipeline::normalize::{
@@ -47,6 +47,8 @@ pub struct TrinityWorkflowReport {
     pub normalized: bool,
     pub normalized_input1: Option<String>,
     pub normalized_input2: Option<String>,
+    pub assembly_input1: String,
+    pub assembly_input2: Option<String>,
     pub normalization: Option<NormalizeSummary>,
     pub assembly_fasta: String,
     pub assembly_metrics_json: String,
@@ -82,7 +84,7 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
     let resolved_inputs = resolve_workflow_inputs(&config, &output_dir)?;
     let ss_lib_type = validate_ss_lib_type(config.ss_lib_type.as_deref())?;
 
-    let (assembly_input1, assembly_input2, normalization) = if config.normalize {
+    let (pre_oriented_input1, pre_oriented_input2, normalization) = if config.normalize {
         normalize_for_workflow(
             &resolved_inputs.input1,
             resolved_inputs.input2.as_deref(),
@@ -96,6 +98,12 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
             None,
         )
     };
+    let (assembly_input1, assembly_input2) = orient_inputs_for_strand_library(
+        &pre_oriented_input1,
+        pre_oriented_input2.as_deref(),
+        ss_lib_type.as_deref(),
+        &output_dir,
+    )?;
 
     assemble_reads_with_gpu(
         &assembly_input1,
@@ -166,15 +174,17 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
         output_dir: config.output_dir,
         normalized: config.normalize,
         normalized_input1: if config.normalize {
-            Some(assembly_input1)
+            Some(pre_oriented_input1)
         } else {
             None
         },
         normalized_input2: if config.normalize {
-            assembly_input2
+            pre_oriented_input2
         } else {
             None
         },
+        assembly_input1: assembly_input1.clone(),
+        assembly_input2: assembly_input2.clone(),
         normalization,
         assembly_metrics_json: sidecar_path(&assembly_fasta_string, "assembly_metrics.json"),
         assembly_metrics_tsv: sidecar_path(&assembly_fasta_string, "assembly_metrics.tsv"),
@@ -991,6 +1001,62 @@ fn copy_fastq_records(path: &str, writer: &mut FastqWriter) -> io::Result<()> {
     Ok(())
 }
 
+fn orient_inputs_for_strand_library(
+    input1: &str,
+    input2: Option<&str>,
+    ss_lib_type: Option<&str>,
+    output_dir: &Path,
+) -> io::Result<(String, Option<String>)> {
+    match (ss_lib_type, input2) {
+        (None, _) | (Some("F"), None) | (Some("FR"), Some(_)) => {
+            Ok((input1.to_string(), input2.map(str::to_string)))
+        }
+        (Some("R"), None) => {
+            let oriented_input1 = output_dir.join("strand_oriented_R1.fastq.gz");
+            let oriented_input1_str = path_to_str(&oriented_input1)?.to_string();
+            copy_reverse_complement_fastq(input1, &oriented_input1_str)?;
+            Ok((oriented_input1_str, None))
+        }
+        (Some("RF"), Some(input2)) => {
+            let oriented_input1 = output_dir.join("strand_oriented_R1.fastq.gz");
+            let oriented_input2 = output_dir.join("strand_oriented_R2.fastq.gz");
+            let oriented_input1_str = path_to_str(&oriented_input1)?.to_string();
+            let oriented_input2_str = path_to_str(&oriented_input2)?.to_string();
+            copy_reverse_complement_fastq(input1, &oriented_input1_str)?;
+            copy_reverse_complement_fastq(input2, &oriented_input2_str)?;
+            Ok((oriented_input1_str, Some(oriented_input2_str)))
+        }
+        (Some("F" | "R"), Some(_)) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--SS_lib_type F/R are single-end library types; use FR or RF for paired-end input",
+        )),
+        (Some("FR" | "RF"), None) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--SS_lib_type FR/RF require paired-end --input2 or paired samples-file rows",
+        )),
+        (Some(_), _) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "unsupported --SS_lib_type",
+        )),
+    }
+}
+
+fn copy_reverse_complement_fastq(input: &str, output: &str) -> io::Result<()> {
+    let reader = try_open_fastq(input)?;
+    let mut writer = FastqWriter::try_new(output)?;
+    for record in stream_fastq_records_checked(reader) {
+        let record = record?;
+        let oriented = FastqRecord {
+            header: record.header,
+            sequence: reverse_complement(&record.sequence),
+            plus: record.plus,
+            quality: record.quality.chars().rev().collect(),
+        };
+        writer.write_record(&oriented)?;
+    }
+    Ok(())
+}
+
 fn normalize_for_workflow(
     input1: &str,
     input2: Option<&str>,
@@ -1418,10 +1484,22 @@ mod tests {
         .expect("stranded workflow should run");
 
         assert_eq!(report.ss_lib_type.as_deref(), Some("RF"));
+        assert!(report
+            .assembly_input1
+            .ends_with("strand_oriented_R1.fastq.gz"));
+        assert!(report
+            .assembly_input2
+            .as_deref()
+            .expect("oriented R2")
+            .ends_with("strand_oriented_R2.fastq.gz"));
         let report_payload: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&report.report_json).expect("report json"))
                 .expect("parse workflow report");
         assert_eq!(report_payload["ss_lib_type"], "RF");
+        assert!(report_payload["assembly_input1"]
+            .as_str()
+            .expect("assembly input1")
+            .ends_with("strand_oriented_R1.fastq.gz"));
     }
 
     #[test]

@@ -497,6 +497,63 @@ def fasta_precision_recall_metrics(
     }
 
 
+def fasta_forward_precision_recall_metrics(
+    truth_fasta: Path,
+    assembly_fasta: Path,
+    min_match_coverage: float,
+) -> dict[str, object]:
+    truth = read_fasta_records(truth_fasta)
+    assembled = read_fasta_records(assembly_fasta)
+    candidates: list[tuple[float, str, str, int]] = []
+    for truth_name, truth_seq in truth.items():
+        for assembled_name, assembled_seq in assembled.items():
+            matching_bases = longest_common_substring_len(truth_seq, assembled_seq)
+            truth_coverage = matching_bases / len(truth_seq) if truth_seq else 0.0
+            assembled_coverage = matching_bases / len(assembled_seq) if assembled_seq else 0.0
+            score = min(truth_coverage, assembled_coverage)
+            if score >= min_match_coverage:
+                candidates.append((score, truth_name, assembled_name, matching_bases))
+
+    candidates.sort(key=lambda item: (-item[0], item[1], item[2]))
+    matched_truth: set[str] = set()
+    matched_assembled: set[str] = set()
+    matches: list[dict[str, object]] = []
+    for score, truth_name, assembled_name, matching_bases in candidates:
+        if truth_name in matched_truth or assembled_name in matched_assembled:
+            continue
+        matched_truth.add(truth_name)
+        matched_assembled.add(assembled_name)
+        matches.append(
+            {
+                "truth": truth_name,
+                "assembled": assembled_name,
+                "matching_bases": matching_bases,
+                "match_coverage": round(score, 6),
+            }
+        )
+
+    true_positive = len(matches)
+    precision = true_positive / len(assembled) if assembled else 0.0
+    recall = true_positive / len(truth) if truth else 0.0
+    f1 = (
+        2 * precision * recall / (precision + recall)
+        if precision + recall > 0.0
+        else 0.0
+    )
+    return {
+        "match_min_coverage": min_match_coverage,
+        "truth_transcript_count": len(truth),
+        "assembled_record_count": len(assembled),
+        "true_positive": true_positive,
+        "false_positive": len(assembled) - true_positive,
+        "false_negative": len(truth) - true_positive,
+        "precision": round(precision, 6),
+        "recall": round(recall, 6),
+        "f1": round(f1, 6),
+        "matches": matches,
+    }
+
+
 def truth_recovery_metrics(truth_fasta: Path, assembly_fasta: Path) -> dict[str, object]:
     metrics = fasta_recovery_metrics(truth_fasta, assembly_fasta)
     metrics["truth_transcript_count"] = metrics.pop("reference_transcript_count")
@@ -811,6 +868,8 @@ def write_fixture_files(
     single_records: list[tuple[str, str]] = []
     r1_records: list[tuple[str, str]] = []
     r2_records: list[tuple[str, str]] = []
+    rf_r1_records: list[tuple[str, str]] = []
+    rf_r2_records: list[tuple[str, str]] = []
     read_len = 75
     step = 24
 
@@ -824,13 +883,21 @@ def write_fixture_files(
                 frag = seq[start : start + insert]
                 r1_records.append((f"{tx_name}_pe_{round_idx}_{start}/1", frag[:read_len]))
                 r2_records.append((f"{tx_name}_pe_{round_idx}_{start}/2", revcomp(frag[-read_len:])))
+                rf_r1_records.append(
+                    (f"{tx_name}_rf_{round_idx}_{start}/1", revcomp(frag[:read_len]))
+                )
+                rf_r2_records.append((f"{tx_name}_rf_{round_idx}_{start}/2", frag[-read_len:]))
 
     single_fastq = out_dir / "reads" / "single.fastq.gz"
     r1_fastq = out_dir / "reads" / "R1.fastq.gz"
     r2_fastq = out_dir / "reads" / "R2.fastq.gz"
+    rf_r1_fastq = out_dir / "reads" / "RF_R1.fastq.gz"
+    rf_r2_fastq = out_dir / "reads" / "RF_R2.fastq.gz"
     write_fastq_gz(single_fastq, single_records)
     write_fastq_gz(r1_fastq, r1_records)
     write_fastq_gz(r2_fastq, r2_records)
+    write_fastq_gz(rf_r1_fastq, rf_r1_records)
+    write_fastq_gz(rf_r2_fastq, rf_r2_records)
 
     metadata = {
         "fixture": fixture_name,
@@ -844,6 +911,8 @@ def write_fixture_files(
             "single_fastq": str(single_fastq),
             "r1_fastq": str(r1_fastq),
             "r2_fastq": str(r2_fastq),
+            "rf_r1_fastq": str(rf_r1_fastq),
+            "rf_r2_fastq": str(rf_r2_fastq),
         },
     }
     write_text(out_dir / "truth" / "metadata.json", json.dumps(metadata, indent=2) + "\n")
@@ -978,6 +1047,9 @@ def run_raptor_workflow_case(
         command.extend(
             [
                 "--input1",
+                fixture["paths"]["rf_r1_fastq"]
+                if input_mode == "stranded_rf"
+                else
                 f"{fixture['paths']['r1_fastq']},{fixture['paths']['r1_fastq']}"
                 if input_mode == "comma_lists"
                 else
@@ -990,6 +1062,9 @@ def run_raptor_workflow_case(
         command.extend(
             [
                 "--input2",
+                fixture["paths"]["rf_r2_fastq"]
+                if input_mode == "stranded_rf"
+                else
                 fixture["paths"]["r2_fastq"],
             ]
         )
@@ -1030,6 +1105,8 @@ def run_raptor_workflow_case(
         metrics["sample_count"] = workflow_payload.get("sample_count")
         metrics["samples_file"] = workflow_payload.get("samples_file")
         metrics["ss_lib_type"] = workflow_payload.get("ss_lib_type")
+        metrics["assembly_input1"] = workflow_payload.get("assembly_input1")
+        metrics["assembly_input2"] = workflow_payload.get("assembly_input2")
         metrics["components_json"] = workflow_payload.get("components_json")
         metrics["component_clustering"] = workflow_payload.get("component_clustering")
         metrics["component_graph_count"] = workflow_payload.get("component_graph_count")
@@ -1069,6 +1146,16 @@ def run_raptor_workflow_case(
                     min_match_coverage,
                 )
             )
+            if input_mode == "stranded_rf" and workflow_payload.get(
+                "component_selected_isoforms_fasta"
+            ):
+                metrics["component_selected_forward_truth_precision"] = (
+                    fasta_forward_precision_recall_metrics(
+                        Path(fixture["paths"]["truth_fasta"]),
+                        Path(workflow_payload["component_selected_isoforms_fasta"]),
+                        min_match_coverage,
+                    )
+                )
     if workflow_fasta.exists():
         lengths = read_fasta_lengths(workflow_fasta)
         metrics.update(
@@ -1746,8 +1833,13 @@ def check_report_thresholds(
         if stranded_metrics.get("ss_lib_type") != "RF":
             failures.append("raptor trinity stranded RF workflow did not report SS_lib_type RF")
         selected_truth_precision = stranded_metrics.get("component_selected_truth_precision", {})
+        selected_forward_precision = stranded_metrics.get(
+            "component_selected_forward_truth_precision", {}
+        )
         selected_precision = selected_truth_precision.get("precision", 0.0)
         selected_f1 = selected_truth_precision.get("f1", 0.0)
+        selected_forward = selected_forward_precision.get("precision", 0.0)
+        selected_forward_f1 = selected_forward_precision.get("f1", 0.0)
         if selected_precision < min_selected_precision:
             failures.append(
                 f"stranded RF selected component isoform precision below threshold: {selected_precision} < {min_selected_precision}"
@@ -1755,6 +1847,14 @@ def check_report_thresholds(
         if selected_f1 < min_selected_f1:
             failures.append(
                 f"stranded RF selected component isoform F1 below threshold: {selected_f1} < {min_selected_f1}"
+            )
+        if selected_forward < min_selected_precision:
+            failures.append(
+                f"stranded RF forward-strand selected precision below threshold: {selected_forward} < {min_selected_precision}"
+            )
+        if selected_forward_f1 < min_selected_f1:
+            failures.append(
+                f"stranded RF forward-strand selected F1 below threshold: {selected_forward_f1} < {min_selected_f1}"
             )
 
     if malformed_fastq_check:
@@ -1996,6 +2096,12 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         ).get("precision"),
         "raptor_stranded_rf_workflow_selected_f1": stranded_workflow_metrics.get(
             "component_selected_truth_precision", {}
+        ).get("f1"),
+        "raptor_stranded_rf_workflow_forward_precision": stranded_workflow_metrics.get(
+            "component_selected_forward_truth_precision", {}
+        ).get("precision"),
+        "raptor_stranded_rf_workflow_forward_f1": stranded_workflow_metrics.get(
+            "component_selected_forward_truth_precision", {}
         ).get("f1"),
         "raptor_stranded_rf_workflow_selected_isoform_lengths": stranded_workflow_metrics.get(
             "component_selected_isoform_lengths"
