@@ -45,6 +45,18 @@ python3 bench/trinity_parity/run_panel.py --run-trinity --trinity-bin /path/to/T
 TRINITY_BIN=/path/to/Trinity python3 bench/trinity_parity/run_panel.py --run-trinity
 ```
 
+This repo also includes a Docker wrapper for the upstream Trinity image:
+
+```bash
+docker pull trinityrnaseq/trinityrnaseq:2.15.2
+python3 bench/trinity_parity/run_panel.py --run-trinity --trinity-bin scripts/trinity_docker.sh
+```
+
+Override the image with `TRINITY_DOCKER_IMAGE` if a different Trinity tag is
+needed. The wrapper mounts the current working directory at the same path inside
+the container, which matches the harness because it writes all inputs and
+outputs under this repo.
+
 Use `--require-trinity` when Trinity output is mandatory for the gate.
 
 The panel also runs a GPU-requested Raptor workflow with
@@ -183,6 +195,7 @@ python3 bench/trinity_parity/run_tiny_fixture.py --run-trinity --require-trinity
 
 Use `--trinity-bin /path/to/Trinity` or `TRINITY_BIN=/path/to/Trinity` when the
 executable is not on `PATH`.
+`scripts/trinity_docker.sh` can be used here after pulling the Docker image.
 
 To replace the tiny frozen oracle with a freshly captured Trinity output:
 
