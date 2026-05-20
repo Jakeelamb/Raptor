@@ -11,7 +11,7 @@ Start by building the parity map and benchmark harness before changing core algo
 ## Phases
 
 - [x] Create Trinity parity map.
-- [ ] Freeze benchmark panel. Current deterministic candidate panel exists in `bench/trinity_parity/panel.json`; final public dataset list and thresholds still need approval.
+- [ ] Freeze benchmark panel. Current deterministic candidate panel exists in `bench/trinity_parity/panel.json`; proposed public panel contract now exists in `bench/trinity_parity/public_panel.json` and is schema-gated by `bench/trinity_parity/validate_public_panel.py`; data download/execution and final approval are still pending.
 - [ ] Build Trinity-vs-Raptor benchmark harness. Initial fixture scaffold and candidate-panel runner exist and can capture paired-end Trinity output when Trinity is installed; frozen public panel still missing.
 - [ ] Close normalization parity.
 - [ ] Close Inchworm-equivalent contig construction parity.
@@ -24,8 +24,8 @@ Start by building the parity map and benchmark harness before changing core algo
 
 ## Open Decisions
 
-- Exact public RNA-seq benchmark datasets need to be selected and frozen.
-- Metric thresholds and tolerance for "comparable biological outputs" need to be encoded after the first benchmark harness draft.
+- The proposed public RNA-seq benchmark panel needs final approval before its status is promoted from `proposed_frozen_v0` to frozen.
+- Public-panel download/execution tooling still needs to materialize the declared inputs and run Raptor/Trinity under the encoded thresholds.
 - CUDA backend work is deferred until CPU/OpenCL correctness baselines are stable and comparable.
 
 ## Current Findings
@@ -52,3 +52,4 @@ Start by building the parity map and benchmark harness before changing core algo
 - Normalization reports now also compare retained original-pair identity. On the high-depth fixture, count parity is close but identity is not: 570 overlapping retained pairs and Jaccard 0.201413.
 - The high-depth normalization fixture now assembles from Raptor-normalized reads and compares directly to Trinity FASTA output. Current normalized biological output is one 900 bp transcript for both tools with assembly F1 1.0, despite weak retained-pair identity.
 - A high-depth alternative-isoform normalized-output fixture now gates two-isoform recovery after read reduction. Raptor keeps 1006/2200 pairs, Trinity keeps 861/2200 pairs, retained-pair Jaccard is 0.270068, and both tools recover [336,324] with assembly F1 1.0.
+- `bench/trinity_parity/public_panel.json` now declares a proposed public Trinity-parity panel with three real/public cases: Trinity workshop fission-yeast RF data, Trinity source `test_Trinity_Assembly`, and Griffith Lab `mini_humanX`. The manifest encodes required metrics, resource-ratio thresholds, per-dataset inputs, Trinity arguments, and stage coverage; `validate_public_panel.py` fails if the panel has fewer than three datasets or lacks normalization/Inchworm/Chrysalis/Butterfly/reporting coverage.

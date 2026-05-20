@@ -2,7 +2,31 @@
 
 This directory is the reproducible comparison harness for Raptor versus Trinity.
 
-Current status: scaffold only. It intentionally starts with a tiny truth-known fixture so failures are cheap and visible. This is not the frozen public benchmark panel yet.
+Current status: active synthetic candidate gate plus proposed public-panel
+contract. The tiny truth-known fixtures keep failures cheap and visible; the
+public manifest defines the next real-data gate but does not claim final parity
+until the data are materialized and both tools pass the encoded thresholds.
+
+## Proposed Public Panel
+
+`public_panel.json` is the proposed v0 public Trinity-parity panel. It currently
+declares three real/public cases:
+
+- Trinity workshop `Schizosaccharomyces pombe` RF paired-end panel.
+- Trinity source-distribution `sample_data/test_Trinity_Assembly` paired-end smoke panel.
+- Griffith Lab `mini_humanX` paired-end tutorial subset with reference genome/GTF.
+
+The manifest records provenance, expected input files, library orientation,
+Trinity arguments, required Trinity-equivalent stages, biological metrics, and
+runtime/RSS thresholds. Validate the manifest contract with:
+
+```bash
+python3 bench/trinity_parity/validate_public_panel.py
+```
+
+This check only validates the manifest. Download/materialization and full
+Raptor-vs-Trinity execution still need to be implemented before the public panel
+can support a parity claim.
 
 ## Candidate Panel
 

@@ -1,0 +1,157 @@
+{
+  "name": "raptor_trinity_public_panel",
+  "status": "proposed_frozen_v0",
+  "freeze_rules": [
+    "Changing dataset identifiers, input files, library type, or thresholds requires a new panel version.",
+    "Each case must keep Trinity and Raptor on the same input FASTQs and resource limits.",
+    "Each completed run must archive raw command lines, tool versions, elapsed time, peak RSS, output FASTA, and metric JSON."
+  ],
+  "defaults": {
+    "seq_type": "fq",
+    "threads": 8,
+    "max_memory": "32G",
+    "min_raptor_vs_trinity_selected_f1": 0.9,
+    "min_reference_full_length_recovery": 0.8,
+    "min_read_representation": 0.8,
+    "max_wall_time_ratio_vs_trinity": 1.25,
+    "max_peak_rss_ratio_vs_trinity": 1.25
+  },
+  "metrics": [
+    "selected_transcript_reciprocal_f1",
+    "reference_full_length_recovery",
+    "read_representation",
+    "transcript_count",
+    "n50",
+    "total_assembled_bases",
+    "wall_time_seconds",
+    "peak_rss_kb",
+    "output_file_count",
+    "output_bytes"
+  ],
+  "datasets": [
+    {
+      "id": "trinity_workshop_spombe_rf",
+      "organism": "Schizosaccharomyces pombe",
+      "source": {
+        "name": "trinityrnaseq/RNASeq_Trinity_Tuxedo_Workshop",
+        "url": "https://github.com/trinityrnaseq/RNASeq_Trinity_Tuxedo_Workshop",
+        "documentation_url": "https://github-wiki-see.page/m/trinityrnaseq/RNASeq_Trinity_Tuxedo_Workshop/wiki/Trinity-De-novo-Transcriptome-Assembly-Workshop"
+      },
+      "description": "Small genuine fission-yeast strand-specific paired-end 76 bp tutorial panel with four expression conditions.",
+      "library": {
+        "layout": "paired",
+        "ss_lib_type": "RF",
+        "read_length": 76
+      },
+      "inputs": {
+        "left": [
+          "RNASEQ_data/Sp_log.left.fq.gz",
+          "RNASEQ_data/Sp_hs.left.fq.gz",
+          "RNASEQ_data/Sp_ds.left.fq.gz",
+          "RNASEQ_data/Sp_plat.left.fq.gz"
+        ],
+        "right": [
+          "RNASEQ_data/Sp_log.right.fq.gz",
+          "RNASEQ_data/Sp_hs.right.fq.gz",
+          "RNASEQ_data/Sp_ds.right.fq.gz",
+          "RNASEQ_data/Sp_plat.right.fq.gz"
+        ],
+        "reference_genome": "GENOME_data/genome.fa",
+        "reference_annotation": "GENOME_data/genes.gff3"
+      },
+      "trinity_args": [
+        "--seqType",
+        "fq",
+        "--SS_lib_type",
+        "RF",
+        "--CPU",
+        "8",
+        "--max_memory",
+        "32G"
+      ],
+      "required_stages": [
+        "input_fastq",
+        "normalization",
+        "inchworm",
+        "chrysalis",
+        "butterfly",
+        "strand_specific",
+        "reporting"
+      ]
+    },
+    {
+      "id": "trinity_source_test_assembly",
+      "organism": "Trinity source distribution sample",
+      "source": {
+        "name": "trinityrnaseq/trinityrnaseq sample_data/test_Trinity_Assembly",
+        "url": "https://github.com/trinityrnaseq/trinityrnaseq",
+        "documentation_url": "https://github.com/trinityrnaseq/trinityrnaseq/wiki/Running-Trinity"
+      },
+      "description": "Upstream Trinity smoke dataset distributed with Trinity and used by external Trinity examples.",
+      "library": {
+        "layout": "paired",
+        "ss_lib_type": null,
+        "read_length": null
+      },
+      "inputs": {
+        "left": ["sample_data/test_Trinity_Assembly/reads.left.fq.gz"],
+        "right": ["sample_data/test_Trinity_Assembly/reads.right.fq.gz"]
+      },
+      "trinity_args": [
+        "--seqType",
+        "fq",
+        "--CPU",
+        "8",
+        "--max_memory",
+        "32G"
+      ],
+      "required_stages": [
+        "input_fastq",
+        "normalization",
+        "inchworm",
+        "chrysalis",
+        "butterfly",
+        "paired_end",
+        "reporting"
+      ]
+    },
+    {
+      "id": "mini_human_x_genome_guided_reference",
+      "organism": "Homo sapiens mini X chromosome subset",
+      "source": {
+        "name": "Griffith Lab RNA Bio Trinity tutorial mini_humanX",
+        "url": "https://rnabio.org/module-06-trinity/0006/02/01/Trinity_Assembly_And_Analysis/",
+        "documentation_url": "https://rnabio.org/module-06-trinity/0006/02/01/Trinity_Assembly_And_Analysis/"
+      },
+      "description": "Small paired-end human X-chromosome tutorial subset with matching minigenome and GTF for reference-recovery checks.",
+      "library": {
+        "layout": "paired",
+        "ss_lib_type": null,
+        "read_length": null
+      },
+      "inputs": {
+        "left": ["reads_1.fq.gz"],
+        "right": ["reads_2.fq.gz"],
+        "reference_genome": "minigenome.fa",
+        "reference_annotation": "minigenome.gtf"
+      },
+      "trinity_args": [
+        "--seqType",
+        "fq",
+        "--CPU",
+        "8",
+        "--max_memory",
+        "32G"
+      ],
+      "required_stages": [
+        "input_fastq",
+        "normalization",
+        "inchworm",
+        "chrysalis",
+        "butterfly",
+        "paired_end",
+        "reporting"
+      ]
+    }
+  ]
+}
