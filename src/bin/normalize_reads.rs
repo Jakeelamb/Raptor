@@ -1,14 +1,7 @@
-use raptor::io::fastq::{stream_fastq_records_checked, try_open_fastq, FastqWriter};
-use raptor::kmer::cms::CountMinSketch;
-use raptor::kmer::normalize::should_keep_read_with_scratch;
-use raptor::kmer::nthash::NtHashIterator;
+use raptor::pipeline::normalize::{
+    normalize_single_with_config, NormalizeConfig, NormalizeSummary,
+};
 use std::io;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct NormalizeSummary {
-    total_reads: usize,
-    kept_reads: usize,
-}
 
 fn run(
     input_path: &str,
@@ -17,45 +10,17 @@ fn run(
     target: u16,
     min_abund: u16,
 ) -> io::Result<NormalizeSummary> {
-    let mut cms = CountMinSketch::new(4, 1 << 20);
-    let mut total_reads = 0usize;
-
-    // First pass: count k-mers without retaining all records in memory.
-    let reader = try_open_fastq(input_path)?;
-    for record in stream_fastq_records_checked(reader) {
-        let record = record?;
-        total_reads += 1;
-        for (_, hash) in NtHashIterator::new(record.sequence.as_bytes(), k) {
-            cms.insert_hash(hash);
-        }
-    }
-
-    // Second pass: filter and stream output.
-    let output_path = format!("{}_norm.fastq.gz", output_prefix);
-    let reader = try_open_fastq(input_path)?;
-    let mut writer = FastqWriter::try_new(&output_path)?;
-    let mut kept_reads = 0usize;
-    let mut abundance_scratch = Vec::new();
-
-    for record in stream_fastq_records_checked(reader) {
-        let record = record?;
-        if should_keep_read_with_scratch(
-            &record,
-            &cms,
+    normalize_single_with_config(
+        input_path,
+        &format!("{}_norm", output_prefix),
+        NormalizeConfig {
             k,
-            target,
-            min_abund,
-            &mut abundance_scratch,
-        ) {
-            writer.write_record(&record)?;
-            kept_reads += 1;
-        }
-    }
-
-    Ok(NormalizeSummary {
-        total_reads,
-        kept_reads,
-    })
+            target_coverage: target,
+            min_abundance: min_abund,
+            ..NormalizeConfig::default()
+        },
+        true,
+    )
 }
 
 #[inline]
@@ -80,19 +45,23 @@ fn main() {
     let input_path = &args[1];
     let output_prefix = &args[2];
     let k = if args.len() > 3 {
-        args[3].parse().unwrap_or(15)
+        args[3].parse().unwrap_or(NormalizeConfig::default().k)
     } else {
-        15
+        NormalizeConfig::default().k
     };
     let target = if args.len() > 4 {
-        args[4].parse().unwrap_or(5)
+        args[4]
+            .parse()
+            .unwrap_or(NormalizeConfig::default().target_coverage)
     } else {
-        5
+        NormalizeConfig::default().target_coverage
     };
     let min_abund = if args.len() > 5 {
-        args[5].parse().unwrap_or(1)
+        args[5]
+            .parse()
+            .unwrap_or(NormalizeConfig::default().min_abundance)
     } else {
-        1
+        NormalizeConfig::default().min_abundance
     };
 
     println!(

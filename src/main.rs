@@ -63,20 +63,36 @@ fn main() {
             gpu,
             threads: _,
             streaming,
-            coverage_target: _,
-            max_reads: _,
+            coverage_target,
+            max_reads,
         } => {
             // Run the normalization pipeline
             println!("Running normalization pipeline");
             let start = std::time::Instant::now();
+            let target_coverage = match u16::try_from(coverage_target) {
+                Ok(value) => value,
+                Err(_) => {
+                    eprintln!(
+                        "Normalization failed: coverage-target must be <= {}",
+                        u16::MAX
+                    );
+                    return;
+                }
+            };
+            let config = pipeline::normalize::NormalizeConfig {
+                target_coverage,
+                max_reads: Some(max_reads),
+                use_gpu: gpu,
+                ..pipeline::normalize::NormalizeConfig::default()
+            };
 
             if let Some(input2_path) = input2 {
                 // For paired-end reads
-                if let Err(err) = pipeline::normalize::normalize_paired(
+                if let Err(err) = pipeline::normalize::normalize_paired_with_config(
                     &input1,
                     &input2_path,
                     &output,
-                    gpu,
+                    config,
                     streaming,
                 ) {
                     eprintln!("Normalization failed: {}", err);
@@ -84,9 +100,9 @@ fn main() {
                 }
             } else {
                 // For single-end reads
-                if let Err(err) =
-                    pipeline::normalize::normalize_single(&input1, &output, gpu, streaming)
-                {
+                if let Err(err) = pipeline::normalize::normalize_single_with_config(
+                    &input1, &output, config, streaming,
+                ) {
                     eprintln!("Normalization failed: {}", err);
                     return;
                 }

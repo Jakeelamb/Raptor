@@ -37,7 +37,7 @@ The current overall readiness is the minimum stage score: **0**. That is not a v
 | Trinity responsibility | Raptor evidence | Current status | Readiness | Next required proof |
 | --- | --- | --- | --- | --- |
 | Input FASTQ handling | `src/io/fastq.rs`, checked streaming readers, gzip-capable callers | Real infrastructure exists; needs transcriptome benchmark fixtures and CLI compatibility review | 1 | Add parity fixtures covering single-end, paired-end, gzip, malformed FASTQ, and Trinity-style input combinations |
-| In silico normalization | `src/pipeline/normalize.rs`, `src/kmer/normalize.rs`, `src/bin/normalize_reads.rs`, `src/bin/normalize_paired_reads.rs`, `normalize` CLI | Two-pass CMS/ntHash normalization exists for single and paired reads. CLI exposes knobs, but `pipeline::normalize` currently hardcodes k=25, target=50, min_abundance=2 and ignores `_use_gpu`; standalone binaries use different defaults. | 1 | Collapse to one production normalization path, wire CLI parameters into the implementation, then compare kept-read behavior to Trinity normalization on fixtures |
+| In silico normalization | `src/pipeline/normalize.rs`, `src/kmer/normalize.rs`, `src/bin/normalize_reads.rs`, `src/bin/normalize_paired_reads.rs`, `normalize` CLI | Two-pass CMS/ntHash normalization exists for single and paired reads. `NormalizeConfig` now centralizes k, target coverage, min abundance, max read/pair limit, and GPU request state for the CLI and standalone binaries. GPU is still a logged CPU fallback, and no Trinity kept-read comparison exists yet. | 1 | Compare kept-read behavior to Trinity normalization on fixtures, then add CPU/GPU output-equivalence if GPU normalization becomes real |
 | GPU/OpenCL k-mer acceleration | `src/gpu/kmer_gpu.rs`, `src/bin/count_gpu.rs`, `bench/gpu_kmer_baseline.sh`, `docs/rescue-baseline.md` | OpenCL k-mer smoke and CPU/OpenCL baseline exist. This is useful acceleration infrastructure, not Trinity parity. | 2 | Add CPU-vs-GPU output-equivalence checks on normalization/assembly inputs before using acceleration in any parity claim |
 | Inchworm-equivalent k-mer contig construction | `src/graph/assembler.rs`, `src/kmer/*`, `src/pipeline/assemble.rs`, `src/pipeline/large_genome_assembler.rs`, `tests/greedy.rs`, `benches/greedy_assembly.rs` | Greedy/adaptive k-mer assembly and a larger de Bruijn-style genome path exist. They are not yet mapped to Inchworm's transcript behavior: dominant isoform recovery plus unique alternative segments. | 1 | Build controlled transcript fixtures with shared exons/alternative exons and compare contig outputs to Trinity Inchworm-stage outputs or a frozen Trinity oracle |
 | Chrysalis-equivalent clustering and graph partitioning | `src/graph/partition.rs`, `src/dist/partition.rs`, `src/graph/builder.rs`, `src/pipeline/large_genome_assembler.rs` weighted graph functions | Generic graph and partitioning pieces exist, plus large-genome unitig graph logic. No evidence yet that Inchworm-like contigs are clustered into locus-level transcript graph components or that reads are partitioned among those disjoint components. | 0 | Define `RaptorComponent` semantics, emit component graph artifacts, and prove component membership/read assignment against Trinity on small fixtures |
@@ -104,8 +104,8 @@ Interpretation: current `raptor assemble --input R1 --input2 R2` now recovers th
 ## Misleading Or Risky Areas
 
 - The README currently presents Raptor as a graph-based RNA-seq assembler with "Butterfly-like traversal." That is acceptable as aspiration only if docs do not imply Trinity replacement status.
-- `normalize` CLI exposes `coverage_target`, `max_reads`, and `gpu`, but the current `pipeline::normalize` implementation does not honor those knobs. That is a correctness and operator-trust issue.
-- There are separate normalization binaries and pipeline functions with different defaults. This violates the single-codepath requirement for a Trinity replacement.
+- `normalize` CLI and standalone binaries now route through `NormalizeConfig`, but GPU normalization is still an explicit CPU fallback rather than accelerated normalization.
+- Normalization parity remains unproven until Raptor kept-read behavior is compared to Trinity on transcriptome fixtures.
 - Much of the strongest graph work is in `large_genome_assembler`; it may be reusable, but it is not automatically transcriptome/Trinity-equivalent.
 - Current GTF output is too simplified for strong biological claims.
 
@@ -113,6 +113,6 @@ Interpretation: current `raptor assemble --input R1 --input2 R2` now recovers th
 
 1. Capture a real Trinity tiny oracle on a machine with Trinity installed, or install Trinity locally.
 2. Feed paired evidence into component graph/path selection with insert-size and paralog/isoform disambiguation tests.
-3. Fix normalization single-codepath drift: one implementation should own k, target coverage, min abundance, paired/single behavior, and GPU/no-GPU semantics.
+3. Compare Raptor normalization kept-read behavior to Trinity normalization on a small transcriptome fixture.
 4. Replace stale `bench/README.md` claims about missing scripts with the new harness contract.
 5. Only after the fast fixture is stable, decide the frozen public benchmark panel and require approval before changing it.
