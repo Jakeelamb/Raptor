@@ -206,6 +206,56 @@ def read_fasta_records(path: Path) -> dict[str, str]:
     return records
 
 
+def write_fasta_records(path: Path, records: dict[str, str]) -> None:
+    chunks: list[str] = []
+    for name, seq in records.items():
+        chunks.append(f">{name}\n")
+        for start in range(0, len(seq), 80):
+            chunks.append(seq[start : start + 80] + "\n")
+    write_text(path, "".join(chunks))
+
+
+def component_candidate_metrics(
+    path: Path,
+    truth_fasta: Path,
+    oracle_fasta: Path,
+) -> dict[str, object]:
+    if not path.exists():
+        return {"component_paths_fasta_exists": False}
+    records = read_fasta_records(path)
+    selected = {
+        name: seq
+        for name, seq in records.items()
+        if name.startswith("component_") and "_contig_" in name
+    }
+    selected_path = path.with_name("raptor_component_selected_isoforms.fasta")
+    write_fasta_records(selected_path, selected)
+    metrics: dict[str, object] = {
+        "component_paths_fasta_exists": True,
+        "component_path_transcript_count": len(records),
+        "component_path_total_bases": sum(len(seq) for seq in records.values()),
+        "component_path_n50": n50([len(seq) for seq in records.values()]),
+        "component_path_lengths": [len(seq) for seq in records.values()],
+        "component_selected_isoforms_fasta": str(selected_path),
+        "component_selected_isoform_count": len(selected),
+        "component_selected_isoform_lengths": [len(seq) for seq in selected.values()],
+    }
+    metrics["component_candidate_truth_recovery"] = truth_recovery_metrics(truth_fasta, path)
+    if oracle_fasta.exists():
+        metrics["component_candidate_oracle_recovery"] = fasta_recovery_metrics(
+            oracle_fasta, path
+        )
+    if selected:
+        metrics["component_selected_truth_recovery"] = truth_recovery_metrics(
+            truth_fasta, selected_path
+        )
+        if oracle_fasta.exists():
+            metrics["component_selected_oracle_recovery"] = fasta_recovery_metrics(
+                oracle_fasta, selected_path
+            )
+    return metrics
+
+
 def longest_common_substring_len(a: str, b: str) -> int:
     if not a or not b:
         return 0
@@ -556,25 +606,13 @@ def run_one_fixture(
                 metrics.update(component_graph_metrics(Path(component_graphs_json)))
             component_paths_fasta = workflow_payload.get("component_paths_fasta")
             if component_paths_fasta:
-                component_paths_fasta = Path(component_paths_fasta)
-                metrics["component_paths_fasta_exists"] = component_paths_fasta.exists()
-                if component_paths_fasta.exists():
-                    path_lengths = read_fasta_lengths(component_paths_fasta)
-                    metrics.update(
-                        {
-                            "component_path_transcript_count": len(path_lengths),
-                            "component_path_total_bases": sum(path_lengths),
-                            "component_path_n50": n50(path_lengths),
-                            "component_path_lengths": path_lengths,
-                        }
+                metrics.update(
+                    component_candidate_metrics(
+                        Path(component_paths_fasta),
+                        Path(fixture["paths"]["truth_fasta"]),
+                        oracle_fasta,
                     )
-                    metrics["component_candidate_truth_recovery"] = truth_recovery_metrics(
-                        Path(fixture["paths"]["truth_fasta"]), component_paths_fasta
-                    )
-                    if oracle_fasta.exists():
-                        metrics["component_candidate_oracle_recovery"] = fasta_recovery_metrics(
-                            oracle_fasta, component_paths_fasta
-                        )
+                )
         if workflow_fasta.exists():
             lengths = read_fasta_lengths(workflow_fasta)
             metrics.update(
@@ -738,6 +776,8 @@ def check_report_thresholds(
             failures.append("raptor trinity workflow did not emit component path transcript FASTA")
         if workflow_metrics.get("component_path_transcript_count", 0) < 1:
             failures.append("raptor trinity workflow component path FASTA is empty")
+        if workflow_metrics.get("component_selected_isoform_count", 0) < 1:
+            failures.append("raptor trinity workflow did not select component isoforms")
         if workflow_metrics.get("component_assigned_read_count", 0) < 1:
             failures.append("raptor trinity workflow did not assign reads to components")
         if workflow_metrics.get("component_assigned_pair_count", 0) < 1:
@@ -754,6 +794,12 @@ def check_report_thresholds(
             failures.append(
                 f"component path truth recovery below threshold: {path_min_coverage} < {min_truth_coverage}"
             )
+        selected_truth_recovery = workflow_metrics.get("component_selected_truth_recovery", {})
+        selected_min_coverage = selected_truth_recovery.get("min_best_coverage", 0.0)
+        if selected_min_coverage < min_truth_coverage:
+            failures.append(
+                f"selected component isoform truth recovery below threshold: {selected_min_coverage} < {min_truth_coverage}"
+            )
         oracle_recovery = workflow_metrics.get("oracle_recovery")
         if oracle_recovery:
             min_oracle = oracle_recovery.get("min_best_coverage", 0.0)
@@ -767,6 +813,13 @@ def check_report_thresholds(
             if path_min_oracle < min_oracle_coverage:
                 failures.append(
                     f"component path oracle recovery below threshold: {path_min_oracle} < {min_oracle_coverage}"
+                )
+        selected_oracle_recovery = workflow_metrics.get("component_selected_oracle_recovery")
+        if selected_oracle_recovery:
+            selected_min_oracle = selected_oracle_recovery.get("min_best_coverage", 0.0)
+            if selected_min_oracle < min_oracle_coverage:
+                failures.append(
+                    f"selected component isoform oracle recovery below threshold: {selected_min_oracle} < {min_oracle_coverage}"
                 )
 
     if not raptor:
@@ -863,11 +916,26 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
             "component_path_transcript_count"
         ),
         "workflow_component_path_lengths": workflow_metrics.get("component_path_lengths"),
+        "workflow_component_selected_isoforms_fasta": workflow_metrics.get(
+            "component_selected_isoforms_fasta"
+        ),
+        "workflow_component_selected_isoform_count": workflow_metrics.get(
+            "component_selected_isoform_count"
+        ),
+        "workflow_component_selected_isoform_lengths": workflow_metrics.get(
+            "component_selected_isoform_lengths"
+        ),
         "workflow_component_path_truth_min_coverage": workflow_metrics.get(
             "component_candidate_truth_recovery", {}
         ).get("min_best_coverage"),
         "workflow_component_path_oracle_min_coverage": workflow_metrics.get(
             "component_candidate_oracle_recovery", {}
+        ).get("min_best_coverage"),
+        "workflow_component_selected_truth_min_coverage": workflow_metrics.get(
+            "component_selected_truth_recovery", {}
+        ).get("min_best_coverage"),
+        "workflow_component_selected_oracle_min_coverage": workflow_metrics.get(
+            "component_selected_oracle_recovery", {}
         ).get("min_best_coverage"),
         "workflow_component_assigned_reads": workflow_metrics.get(
             "component_assigned_read_count"
