@@ -1,6 +1,7 @@
 use crate::graph::assembler::Contig;
+use crate::kmer::kmer::reverse_complement;
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RaptorComponent {
@@ -8,6 +9,8 @@ pub struct RaptorComponent {
     pub contig_ids: Vec<usize>,
     pub contig_count: usize,
     pub total_bases: usize,
+    pub assigned_read_count: usize,
+    pub assigned_pair_count: usize,
 }
 
 pub fn merge_clusters(
@@ -66,9 +69,81 @@ pub fn cluster_contigs_by_shared_sequence(
                 contig_count: contig_ids.len(),
                 contig_ids,
                 total_bases,
+                assigned_read_count: 0,
+                assigned_pair_count: 0,
             }
         })
         .collect()
+}
+
+pub fn assign_read_evidence_to_components(
+    contigs: &[Contig],
+    components: &mut [RaptorComponent],
+    reads1: &[String],
+    reads2: Option<&[String]>,
+) {
+    let contig_to_component = contig_component_index(components);
+    for read in reads1 {
+        for component_idx in matching_components(contigs, &contig_to_component, read) {
+            components[component_idx].assigned_read_count += 1;
+        }
+    }
+
+    let Some(reads2) = reads2 else {
+        return;
+    };
+
+    for (read1, read2) in reads1.iter().zip(reads2.iter()) {
+        let mut pair_components = matching_components(contigs, &contig_to_component, read1);
+        for component_idx in matching_components(contigs, &contig_to_component, read2) {
+            pair_components.insert(component_idx);
+            components[component_idx].assigned_read_count += 1;
+        }
+        for component_idx in pair_components {
+            components[component_idx].assigned_pair_count += 1;
+        }
+    }
+}
+
+fn contig_component_index(components: &[RaptorComponent]) -> BTreeMap<usize, usize> {
+    let mut index = BTreeMap::new();
+    for (component_idx, component) in components.iter().enumerate() {
+        for &contig_id in &component.contig_ids {
+            index.insert(contig_id, component_idx);
+        }
+    }
+    index
+}
+
+fn matching_components(
+    contigs: &[Contig],
+    contig_to_component: &BTreeMap<usize, usize>,
+    read: &str,
+) -> BTreeSet<usize> {
+    let read_rc = reverse_complement(read);
+    let mut matches = BTreeSet::new();
+    for contig in contigs {
+        if sequence_contains(&contig.sequence, read)
+            || (!read_rc.eq_ignore_ascii_case(read)
+                && sequence_contains(&contig.sequence, &read_rc))
+        {
+            if let Some(&component_idx) = contig_to_component.get(&contig.id) {
+                matches.insert(component_idx);
+            }
+        }
+    }
+    matches
+}
+
+fn sequence_contains(haystack: &str, needle: &str) -> bool {
+    let haystack = haystack.as_bytes();
+    let needle = needle.as_bytes();
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return false;
+    }
+    haystack
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
 }
 
 fn find(parent: &mut [usize], idx: usize) -> usize {
@@ -114,7 +189,7 @@ fn longest_common_substring_len(left: &[u8], right: &[u8]) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::cluster_contigs_by_shared_sequence;
+    use super::{assign_read_evidence_to_components, cluster_contigs_by_shared_sequence};
     use crate::graph::assembler::Contig;
 
     fn contig(id: usize, sequence: &str) -> Contig {
@@ -149,5 +224,26 @@ mod tests {
             .map(|component| component.contig_ids.clone())
             .collect();
         assert_eq!(ids, vec![vec![2], vec![0], vec![1]]);
+    }
+
+    #[test]
+    fn read_evidence_counts_component_support_once_per_pair() {
+        let contigs = vec![
+            contig(0, "AAAACCCCGGGGTTTT"),
+            contig(1, "CCCCGGGGAAAATTTT"),
+            contig(2, "TATATATATATA"),
+        ];
+        let mut components = cluster_contigs_by_shared_sequence(&contigs, 8);
+
+        let reads1 = vec!["AAAACCCC".to_string(), "TATATATA".to_string()];
+        let reads2 = vec!["AAAACCCC".to_string(), "TATATATA".to_string()];
+        assign_read_evidence_to_components(&contigs, &mut components, &reads1, Some(&reads2));
+
+        assert_eq!(components[0].contig_ids, vec![0, 1]);
+        assert_eq!(components[0].assigned_read_count, 2);
+        assert_eq!(components[0].assigned_pair_count, 1);
+        assert_eq!(components[1].contig_ids, vec![2]);
+        assert_eq!(components[1].assigned_read_count, 2);
+        assert_eq!(components[1].assigned_pair_count, 1);
     }
 }

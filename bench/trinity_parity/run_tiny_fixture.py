@@ -90,6 +90,21 @@ def read_fasta_lengths(path: Path) -> list[int]:
     return lengths
 
 
+def component_evidence_metrics(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {"component_evidence_exists": False}
+    components = json.loads(path.read_text(encoding="utf-8"))
+    return {
+        "component_evidence_exists": True,
+        "component_assigned_read_count": sum(
+            int(component.get("assigned_read_count", 0)) for component in components
+        ),
+        "component_assigned_pair_count": sum(
+            int(component.get("assigned_pair_count", 0)) for component in components
+        ),
+    }
+
+
 def count_fastq_records(path: Path) -> int:
     opener = gzip.open if path.suffix == ".gz" else open
     lines = 0
@@ -461,6 +476,9 @@ def run_one_fixture(
             workflow_payload = json.loads(workflow_report.read_text(encoding="utf-8"))
             metrics["component_count"] = workflow_payload.get("component_count")
             metrics["components_json"] = workflow_payload.get("components_json")
+            components_json = workflow_payload.get("components_json")
+            if components_json:
+                metrics.update(component_evidence_metrics(Path(components_json)))
         if workflow_fasta.exists():
             lengths = read_fasta_lengths(workflow_fasta)
             metrics.update(
@@ -576,6 +594,10 @@ def check_report_thresholds(
             failures.append("raptor trinity workflow did not produce assembly output")
         if workflow_metrics.get("component_count", 0) < 1:
             failures.append("raptor trinity workflow did not emit transcript components")
+        if workflow_metrics.get("component_assigned_read_count", 0) < 1:
+            failures.append("raptor trinity workflow did not assign reads to components")
+        if workflow_metrics.get("component_assigned_pair_count", 0) < 1:
+            failures.append("raptor trinity workflow did not assign pairs to components")
         truth_recovery = workflow_metrics.get("truth_recovery", {})
         min_coverage = truth_recovery.get("min_best_coverage", 0.0)
         if min_coverage < min_truth_coverage:
@@ -639,6 +661,12 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         "workflow_lengths": workflow_metrics.get("lengths"),
         "workflow_n50": workflow_metrics.get("n50"),
         "workflow_component_count": workflow_metrics.get("component_count"),
+        "workflow_component_assigned_reads": workflow_metrics.get(
+            "component_assigned_read_count"
+        ),
+        "workflow_component_assigned_pairs": workflow_metrics.get(
+            "component_assigned_pair_count"
+        ),
         "workflow_truth_min_coverage": workflow_metrics.get("truth_recovery", {}).get(
             "min_best_coverage"
         ),

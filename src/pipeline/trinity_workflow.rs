@@ -1,6 +1,9 @@
 use crate::graph::assembler::Contig;
-use crate::graph::partition::{cluster_contigs_by_shared_sequence, RaptorComponent};
+use crate::graph::partition::{
+    assign_read_evidence_to_components, cluster_contigs_by_shared_sequence, RaptorComponent,
+};
 use crate::io::fasta::try_open_fasta;
+use crate::io::fastq::{stream_fastq_records_checked, try_open_fastq};
 use crate::pipeline::assemble::assemble_reads_with_gpu;
 use crate::pipeline::normalize::{
     normalize_paired_with_config, normalize_single_with_config, NormalizeConfig, NormalizeSummary,
@@ -97,7 +100,13 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
 
     let assembly_fasta_string = path_to_str(&assembly_fasta)?.to_string();
     let component_path = output_dir.join("raptor_components.json");
-    let components = write_component_report(&assembly_fasta_string, &component_path, 60)?;
+    let components = write_component_report(
+        &assembly_fasta_string,
+        &component_path,
+        60,
+        &assembly_input1,
+        assembly_input2.as_deref(),
+    )?;
     let report_path = config
         .report_json
         .as_ref()
@@ -138,9 +147,26 @@ fn write_component_report(
     assembly_fasta: &str,
     component_path: &Path,
     min_shared_bases: usize,
+    reads1_path: &str,
+    reads2_path: Option<&str>,
 ) -> io::Result<Vec<RaptorComponent>> {
     let contigs = read_contigs_from_fasta(assembly_fasta)?;
-    let components = cluster_contigs_by_shared_sequence(&contigs, min_shared_bases);
+    let mut components = cluster_contigs_by_shared_sequence(&contigs, min_shared_bases);
+    let reads1 = read_fastq_sequences(reads1_path)?;
+    let reads2 = reads2_path.map(read_fastq_sequences).transpose()?;
+    if let Some(reads2) = &reads2 {
+        if reads1.len() != reads2.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "paired FASTQ inputs have different record counts after normalization: {} != {}",
+                    reads1.len(),
+                    reads2.len()
+                ),
+            ));
+        }
+    }
+    assign_read_evidence_to_components(&contigs, &mut components, &reads1, reads2.as_deref());
     if let Some(parent) = component_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -152,6 +178,13 @@ fn write_component_report(
         )
     })?;
     Ok(components)
+}
+
+fn read_fastq_sequences(path: &str) -> io::Result<Vec<String>> {
+    let reader = try_open_fastq(path)?;
+    stream_fastq_records_checked(reader)
+        .map(|record| record.map(|record| record.sequence))
+        .collect()
 }
 
 fn read_contigs_from_fasta(path: &str) -> io::Result<Vec<Contig>> {
@@ -305,6 +338,12 @@ mod tests {
         assert_eq!(report.component_count, 1);
         assert!(std::path::Path::new(&report.assembly_fasta).exists());
         assert!(std::path::Path::new(&report.components_json).exists());
+        let components: Vec<serde_json::Value> = serde_json::from_str(
+            &fs::read_to_string(&report.components_json).expect("component json"),
+        )
+        .expect("parse components");
+        assert_eq!(components[0]["assigned_read_count"], 2);
+        assert_eq!(components[0]["assigned_pair_count"], 1);
         assert!(output_dir.join("raptor_trinity_report.json").exists());
     }
 }
