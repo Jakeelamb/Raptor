@@ -219,7 +219,15 @@ def raptor_fasta_path(dataset_id: str, out_root: Path) -> Path:
 
 
 def trinity_fasta_path(dataset_id: str, out_root: Path) -> Path:
-    return out_root / dataset_id / "trinity" / "Trinity.fasta"
+    dataset_root = out_root / dataset_id
+    candidates = [
+        dataset_root / "trinity" / "Trinity.fasta",
+        dataset_root / "trinity.Trinity.fasta",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
 
 
 def selected_dataset_plans(
@@ -247,6 +255,7 @@ def run_dataset(
     min_match_coverage: float,
     dry_run: bool,
     timeout_seconds: int | None,
+    min_fasta_f1: float | None,
 ) -> dict[str, object]:
     dataset_id = str(dataset["id"])
     dataset_out = out_root / dataset_id
@@ -289,6 +298,7 @@ def run_dataset(
             trinity_fasta,
             min_match_coverage,
         )
+        metrics["min_raptor_vs_trinity_selected_f1"] = min_fasta_f1
     result["metrics"] = metrics
     return result
 
@@ -346,6 +356,9 @@ def main() -> int:
             min_match_coverage=args.min_match_coverage,
             dry_run=args.dry_run,
             timeout_seconds=args.timeout_seconds,
+            min_fasta_f1=plan.get("defaults", {}).get(
+                "min_raptor_vs_trinity_selected_f1"
+            ),
         )
         for dataset in datasets
     ]
@@ -361,6 +374,16 @@ def main() -> int:
                     failures.append(f"{result['id']}: {command_key} command timed out")
                 else:
                     failures.append(f"{result['id']}: {command_key} command failed")
+        metrics = result.get("metrics", {})
+        if isinstance(metrics, dict):
+            fasta_match = metrics.get("raptor_trinity_fasta_match")
+            min_f1 = metrics.get("min_raptor_vs_trinity_selected_f1")
+            if isinstance(fasta_match, dict) and isinstance(min_f1, (int, float)):
+                f1 = float(fasta_match.get("f1", 0.0))
+                if f1 < float(min_f1):
+                    failures.append(
+                        f"{result['id']}: Raptor-vs-Trinity FASTA F1 {f1} < {float(min_f1)}"
+                    )
     report = {
         "manifest": plan["manifest"],
         "status": plan["status"],

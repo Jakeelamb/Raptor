@@ -64,6 +64,12 @@ Use `--dataset <id>` to run one case, `--run-trinity` to also run Trinity, and
 resource usage when available, FASTA stats, and reciprocal Raptor-vs-Trinity
 FASTA matching when both outputs exist.
 
+Current public result for `trinity_source_test_assembly`: Trinity runs through
+`scripts/trinity_docker.sh` and emits 75 transcripts with N50 3,915. Raptor's
+existing output emits 12,569 short transcripts with N50 233. The manifest F1
+gate is now enforced, and this case currently fails at reciprocal FASTA F1
+`0.0 < 0.9`.
+
 ## Candidate Panel
 
 `panel.json` defines the current deterministic candidate panel. It is not the
