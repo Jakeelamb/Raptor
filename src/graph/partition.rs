@@ -23,6 +23,8 @@ pub struct RaptorComponentGraph {
     pub read_kmer_k: usize,
     pub read_kmer_node_count: usize,
     pub read_kmer_edge_count: usize,
+    pub read_kmer_nodes: Vec<String>,
+    pub read_kmer_edges: Vec<RaptorReadKmerEdge>,
     pub read_kmer_edges_sample: Vec<RaptorReadKmerEdge>,
     pub assigned_read_count: usize,
     pub assigned_pair_count: usize,
@@ -229,15 +231,15 @@ pub fn build_component_graphs(
                 component_read_kmer_nodes(contigs, component, reads1, reads2, read_kmer_k);
             let read_kmer_edges =
                 component_read_kmer_edges(contigs, component, reads1, reads2, read_kmer_k);
-            let read_kmer_edges_sample = read_kmer_edges
+            let read_kmer_edges: Vec<RaptorReadKmerEdge> = read_kmer_edges
                 .iter()
-                .take(32)
                 .map(|((from, to), support)| RaptorReadKmerEdge {
                     from: from.clone(),
                     to: to.clone(),
                     support: *support,
                 })
                 .collect();
+            let read_kmer_edges_sample = read_kmer_edges.iter().take(32).cloned().collect();
             RaptorComponentGraph {
                 component_id: component.id,
                 node_count: nodes.len(),
@@ -245,6 +247,8 @@ pub fn build_component_graphs(
                 read_kmer_k,
                 read_kmer_node_count: read_kmer_nodes.len(),
                 read_kmer_edge_count: read_kmer_edges.len(),
+                read_kmer_nodes: read_kmer_nodes.into_iter().collect(),
+                read_kmer_edges,
                 read_kmer_edges_sample,
                 nodes,
                 edges,
@@ -625,6 +629,8 @@ mod tests {
         assert_eq!(graphs[0].read_kmer_k, 8);
         assert_eq!(graphs[0].read_kmer_node_count, 1);
         assert_eq!(graphs[0].read_kmer_edge_count, 0);
+        assert_eq!(graphs[0].read_kmer_nodes, vec!["CCCCGGGG".to_string()]);
+        assert!(graphs[0].read_kmer_edges.is_empty());
         assert!(graphs[0].read_kmer_edges_sample.is_empty());
         assert_eq!(graphs[0].edges[0].left_contig_id, 10);
         assert_eq!(graphs[0].edges[0].right_contig_id, 20);
@@ -647,10 +653,27 @@ mod tests {
         assert_eq!(graphs[0].read_kmer_k, 9);
         assert!(graphs[0].read_kmer_node_count >= 2);
         assert!(graphs[0].read_kmer_edge_count >= 1);
+        assert_eq!(
+            graphs[0].read_kmer_nodes.len(),
+            graphs[0].read_kmer_node_count
+        );
+        assert_eq!(
+            graphs[0].read_kmer_edges.len(),
+            graphs[0].read_kmer_edge_count
+        );
         assert!(!graphs[0].read_kmer_edges_sample.is_empty());
         assert!(graphs[0]
             .read_kmer_edges_sample
             .iter()
             .all(|edge| edge.support >= 1));
+        assert_eq!(
+            graphs[0].read_kmer_edges_sample,
+            graphs[0]
+                .read_kmer_edges
+                .iter()
+                .take(graphs[0].read_kmer_edges_sample.len())
+                .cloned()
+                .collect::<Vec<_>>()
+        );
     }
 }

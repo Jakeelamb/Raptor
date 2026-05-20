@@ -121,6 +121,20 @@ def component_graph_metrics(path: Path) -> dict[str, object]:
         for edge in graph.get("read_kmer_edges_sample", [])
         if isinstance(edge, dict)
     ]
+    read_kmer_nodes = [
+        node
+        for graph in graphs
+        for node in graph.get("read_kmer_nodes", [])
+        if isinstance(node, str)
+    ]
+    read_kmer_edges = [
+        edge
+        for graph in graphs
+        for edge in graph.get("read_kmer_edges", [])
+        if isinstance(edge, dict)
+    ]
+    read_kmer_node_count = sum(int(graph.get("read_kmer_node_count", 0)) for graph in graphs)
+    read_kmer_edge_count = sum(int(graph.get("read_kmer_edge_count", 0)) for graph in graphs)
     return {
         "component_graphs_exist": True,
         "component_graph_count": len(graphs),
@@ -135,12 +149,10 @@ def component_graph_metrics(path: Path) -> dict[str, object]:
         "component_graph_edge_observed_kmers": sum(
             int(edge.get("shared_observed_kmer_count", 0)) for edge in edges
         ),
-        "component_graph_read_kmer_node_count": sum(
-            int(graph.get("read_kmer_node_count", 0)) for graph in graphs
-        ),
-        "component_graph_read_kmer_edge_count": sum(
-            int(graph.get("read_kmer_edge_count", 0)) for graph in graphs
-        ),
+        "component_graph_read_kmer_node_count": read_kmer_node_count,
+        "component_graph_read_kmer_edge_count": read_kmer_edge_count,
+        "component_graph_read_kmer_node_record_count": len(read_kmer_nodes),
+        "component_graph_read_kmer_edge_record_count": len(read_kmer_edges),
         "component_graph_read_kmer_edge_sample_count": len(read_kmer_edge_samples),
     }
 
@@ -658,6 +670,18 @@ def check_report_thresholds(
             failures.append("raptor trinity workflow component graphs lack read k-mer nodes")
         if workflow_metrics.get("component_graph_read_kmer_edge_count", 0) < 1:
             failures.append("raptor trinity workflow component graphs lack read k-mer edges")
+        if workflow_metrics.get(
+            "component_graph_read_kmer_node_record_count", 0
+        ) != workflow_metrics.get("component_graph_read_kmer_node_count", 0):
+            failures.append(
+                "raptor trinity workflow component graph read k-mer node records are incomplete"
+            )
+        if workflow_metrics.get(
+            "component_graph_read_kmer_edge_record_count", 0
+        ) != workflow_metrics.get("component_graph_read_kmer_edge_count", 0):
+            failures.append(
+                "raptor trinity workflow component graph read k-mer edge records are incomplete"
+            )
         if workflow_metrics.get("component_graph_read_kmer_edge_sample_count", 0) < 1:
             failures.append("raptor trinity workflow component graphs lack read k-mer edge samples")
         if workflow_metrics.get("component_assigned_read_count", 0) < 1:
@@ -745,6 +769,12 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         ),
         "workflow_component_graph_read_kmer_edges": workflow_metrics.get(
             "component_graph_read_kmer_edge_count"
+        ),
+        "workflow_component_graph_read_kmer_node_records": workflow_metrics.get(
+            "component_graph_read_kmer_node_record_count"
+        ),
+        "workflow_component_graph_read_kmer_edge_records": workflow_metrics.get(
+            "component_graph_read_kmer_edge_record_count"
         ),
         "workflow_component_graph_read_kmer_edge_samples": workflow_metrics.get(
             "component_graph_read_kmer_edge_sample_count"
