@@ -55,20 +55,42 @@ pub fn cluster_contigs_by_shared_sequence(
     contigs: &[Contig],
     min_shared_bases: usize,
 ) -> Vec<RaptorComponent> {
+    cluster_contigs(contigs, |left, right| {
+        longest_common_substring_len(left.sequence.as_bytes(), right.sequence.as_bytes())
+            >= min_shared_bases.max(1)
+    })
+}
+
+pub fn cluster_contigs_by_sequence_or_read_kmers(
+    contigs: &[Contig],
+    min_shared_bases: usize,
+    reads1: &[String],
+    reads2: Option<&[String]>,
+    read_k: usize,
+    min_shared_observed_kmers: usize,
+) -> Vec<RaptorComponent> {
+    let threshold = min_shared_bases.max(1);
+    let kmer_threshold = min_shared_observed_kmers.max(1);
+    cluster_contigs(contigs, |left, right| {
+        longest_common_substring_len(left.sequence.as_bytes(), right.sequence.as_bytes())
+            >= threshold
+            || shared_observed_kmer_count(left, right, reads1, reads2, read_k) >= kmer_threshold
+    })
+}
+
+fn cluster_contigs<F>(contigs: &[Contig], mut should_link: F) -> Vec<RaptorComponent>
+where
+    F: FnMut(&Contig, &Contig) -> bool,
+{
     if contigs.is_empty() {
         return Vec::new();
     }
 
-    let threshold = min_shared_bases.max(1);
     let mut parent: Vec<usize> = (0..contigs.len()).collect();
 
     for left_idx in 0..contigs.len() {
         for right_idx in left_idx + 1..contigs.len() {
-            if longest_common_substring_len(
-                contigs[left_idx].sequence.as_bytes(),
-                contigs[right_idx].sequence.as_bytes(),
-            ) >= threshold
-            {
+            if should_link(&contigs[left_idx], &contigs[right_idx]) {
                 union(&mut parent, left_idx, right_idx);
             }
         }
@@ -495,7 +517,7 @@ fn longest_common_substring_len(left: &[u8], right: &[u8]) -> usize {
 mod tests {
     use super::{
         assign_read_evidence_to_components, build_component_graphs,
-        cluster_contigs_by_shared_sequence,
+        cluster_contigs_by_sequence_or_read_kmers, cluster_contigs_by_shared_sequence,
     };
     use crate::graph::assembler::Contig;
 
@@ -531,6 +553,25 @@ mod tests {
             .map(|component| component.contig_ids.clone())
             .collect();
         assert_eq!(ids, vec![vec![2], vec![0], vec![1]]);
+    }
+
+    #[test]
+    fn read_kmer_connectivity_can_define_component_boundary() {
+        let contigs = vec![
+            contig(10, "AAAACCCCGGGG"),
+            contig(20, "CCCCAAAATTTT"),
+            contig(30, "TATATATATATA"),
+        ];
+        let reads1 = vec!["CCCC".to_string()];
+
+        let sequence_only = cluster_contigs_by_shared_sequence(&contigs, 8);
+        assert_eq!(sequence_only.len(), 3);
+
+        let read_linked =
+            cluster_contigs_by_sequence_or_read_kmers(&contigs, 8, &reads1, None, 4, 1);
+        assert_eq!(read_linked.len(), 2);
+        assert_eq!(read_linked[0].contig_ids, vec![10, 20]);
+        assert_eq!(read_linked[1].contig_ids, vec![30]);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use crate::graph::assembler::Contig;
 use crate::graph::partition::{
-    assign_read_evidence_to_components, build_component_graphs, cluster_contigs_by_shared_sequence,
-    RaptorComponent, RaptorComponentGraph,
+    assign_read_evidence_to_components, build_component_graphs,
+    cluster_contigs_by_sequence_or_read_kmers, RaptorComponent, RaptorComponentGraph,
 };
 use crate::io::fasta::try_open_fasta;
 use crate::io::fastq::{stream_fastq_records_checked, try_open_fastq};
@@ -43,6 +43,7 @@ pub struct TrinityWorkflowReport {
     pub assembly_metrics_tsv: String,
     pub components_json: String,
     pub component_graphs_json: String,
+    pub component_clustering: &'static str,
     pub component_count: usize,
     pub component_graph_count: usize,
     pub report_json: String,
@@ -139,6 +140,7 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
         assembly_metrics_tsv: sidecar_path(&assembly_fasta_string, "assembly_metrics.tsv"),
         components_json: path_to_str(&component_path)?.to_string(),
         component_graphs_json: path_to_str(&component_graphs_path)?.to_string(),
+        component_clustering: component_artifacts.clustering,
         component_count: component_artifacts.components.len(),
         component_graph_count: component_artifacts.component_graphs.len(),
         assembly_fasta: assembly_fasta_string,
@@ -153,6 +155,7 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
 struct ComponentArtifacts {
     components: Vec<RaptorComponent>,
     component_graphs: Vec<RaptorComponentGraph>,
+    clustering: &'static str,
 }
 
 fn write_component_artifacts(
@@ -164,7 +167,6 @@ fn write_component_artifacts(
     reads2_path: Option<&str>,
 ) -> io::Result<ComponentArtifacts> {
     let contigs = read_contigs_from_fasta(assembly_fasta)?;
-    let mut components = cluster_contigs_by_shared_sequence(&contigs, min_shared_bases);
     let reads1 = read_fastq_sequences(reads1_path)?;
     let reads2 = reads2_path.map(read_fastq_sequences).transpose()?;
     if let Some(reads2) = &reads2 {
@@ -179,6 +181,14 @@ fn write_component_artifacts(
             ));
         }
     }
+    let mut components = cluster_contigs_by_sequence_or_read_kmers(
+        &contigs,
+        min_shared_bases,
+        &reads1,
+        reads2.as_deref(),
+        25,
+        1,
+    );
     assign_read_evidence_to_components(&contigs, &mut components, &reads1, reads2.as_deref());
     let component_graphs = build_component_graphs(
         &contigs,
@@ -196,6 +206,7 @@ fn write_component_artifacts(
     Ok(ComponentArtifacts {
         components,
         component_graphs,
+        clustering: "sequence_or_read_kmer",
     })
 }
 
@@ -368,6 +379,7 @@ mod tests {
             1
         );
         assert_eq!(report.component_count, 1);
+        assert_eq!(report.component_clustering, "sequence_or_read_kmer");
         assert!(std::path::Path::new(&report.assembly_fasta).exists());
         assert!(std::path::Path::new(&report.components_json).exists());
         assert!(std::path::Path::new(&report.component_graphs_json).exists());

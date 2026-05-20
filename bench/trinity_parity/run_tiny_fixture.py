@@ -509,6 +509,7 @@ def run_one_fixture(
             workflow_payload = json.loads(workflow_report.read_text(encoding="utf-8"))
             metrics["component_count"] = workflow_payload.get("component_count")
             metrics["components_json"] = workflow_payload.get("components_json")
+            metrics["component_clustering"] = workflow_payload.get("component_clustering")
             metrics["component_graph_count"] = workflow_payload.get("component_graph_count")
             metrics["component_graphs_json"] = workflow_payload.get("component_graphs_json")
             components_json = workflow_payload.get("components_json")
@@ -632,6 +633,8 @@ def check_report_thresholds(
             failures.append("raptor trinity workflow did not produce assembly output")
         if workflow_metrics.get("component_count", 0) < 1:
             failures.append("raptor trinity workflow did not emit transcript components")
+        if workflow_metrics.get("component_clustering") != "sequence_or_read_kmer":
+            failures.append("raptor trinity workflow did not use read-kmer-aware clustering")
         if workflow_metrics.get("component_graph_count", 0) < 1:
             failures.append("raptor trinity workflow did not emit component graphs")
         if workflow_metrics.get("component_graph_node_count", 0) < 1:
@@ -715,6 +718,7 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         "workflow_lengths": workflow_metrics.get("lengths"),
         "workflow_n50": workflow_metrics.get("n50"),
         "workflow_component_count": workflow_metrics.get("component_count"),
+        "workflow_component_clustering": workflow_metrics.get("component_clustering"),
         "workflow_component_graph_count": workflow_metrics.get("component_graph_count"),
         "workflow_component_graph_nodes": workflow_metrics.get("component_graph_node_count"),
         "workflow_component_graph_edges": workflow_metrics.get("component_graph_edge_count"),

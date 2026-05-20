@@ -63,7 +63,7 @@ The script records:
 - transcript length/count metrics
 - truth and oracle recovery metrics
 - Raptor normalization command and kept-pair metrics when requested
-- Raptor `trinity` workflow command, report path, component JSON path/count, component graph JSON path/count, graph node/edge counts, edge read/pair/k-mer support, read k-mer node/edge counts, component assigned read/pair counts, and recovery metrics when requested
+- Raptor `trinity` workflow command, report path, component clustering mode, component JSON path/count, component graph JSON path/count, graph node/edge counts, edge read/pair/k-mer support, read k-mer node/edge counts, component assigned read/pair counts, and recovery metrics when requested
 - Trinity paired-end command, exit status, output metrics, and truth recovery when requested
 - whether Trinity was available on `PATH`
 - the current Raptor limitation that paired-end evidence is only used as reverse-complemented mate sequence evidence, not yet full Butterfly-style pair path constraints
