@@ -14,6 +14,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -501,9 +502,23 @@ def n50(lengths: list[int]) -> int:
 
 
 def run_command(command: list[str], cwd: Path) -> dict[str, object]:
+    time_bin = Path("/usr/bin/time")
+    if not time_bin.exists():
+        return run_command_with_procfs_resource_poll(command, cwd)
+
+    with tempfile.NamedTemporaryFile(prefix="raptor-time-", delete=False) as handle:
+        time_output_path = Path(handle.name)
+    measured_command = [
+        str(time_bin),
+        "-v",
+        "-o",
+        str(time_output_path),
+        *command,
+    ]
+
     start = time.monotonic()
     completed = subprocess.run(
-        command,
+        measured_command,
         cwd=cwd,
         text=True,
         stdout=subprocess.PIPE,
@@ -511,13 +526,118 @@ def run_command(command: list[str], cwd: Path) -> dict[str, object]:
         check=False,
     )
     elapsed = time.monotonic() - start
-    return {
+    result = {
         "command": command,
         "exit_code": completed.returncode,
         "elapsed_seconds": round(elapsed, 6),
         "stdout": completed.stdout,
         "stderr": completed.stderr,
+        "resource_usage": command_resource_usage(time_output_path),
     }
+    time_output_path.unlink(missing_ok=True)
+    return result
+
+
+def run_command_with_procfs_resource_poll(
+    command: list[str], cwd: Path
+) -> dict[str, object]:
+    with tempfile.NamedTemporaryFile(prefix="raptor-stdout-", delete=False) as stdout_handle:
+        stdout_path = Path(stdout_handle.name)
+    with tempfile.NamedTemporaryFile(prefix="raptor-stderr-", delete=False) as stderr_handle:
+        stderr_path = Path(stderr_handle.name)
+
+    start = time.monotonic()
+    max_rss_kb = 0
+    with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
+        "w", encoding="utf-8"
+    ) as stderr_file:
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            text=True,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            start_new_session=True,
+        )
+        while process.poll() is None:
+            max_rss_kb = max(max_rss_kb, process_group_rss_kb(process.pid))
+            time.sleep(0.01)
+        max_rss_kb = max(max_rss_kb, process_group_rss_kb(process.pid))
+
+    elapsed = time.monotonic() - start
+    stdout = stdout_path.read_text(encoding="utf-8", errors="replace")
+    stderr = stderr_path.read_text(encoding="utf-8", errors="replace")
+    stdout_path.unlink(missing_ok=True)
+    stderr_path.unlink(missing_ok=True)
+    return {
+        "command": command,
+        "exit_code": process.returncode,
+        "elapsed_seconds": round(elapsed, 6),
+        "stdout": stdout,
+        "stderr": stderr,
+        "resource_usage": {
+            "available": max_rss_kb > 0,
+            "source": "procfs_process_group_poll",
+            "max_rss_kb": max_rss_kb if max_rss_kb > 0 else None,
+            "user_seconds": None,
+            "system_seconds": None,
+        },
+    }
+
+
+def process_group_rss_kb(process_group_id: int) -> int:
+    total = 0
+    proc_root = Path("/proc")
+    for status_path in proc_root.glob("[0-9]*/status"):
+        try:
+            status = status_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        current_group = None
+        current_rss = 0
+        for line in status.splitlines():
+            if line.startswith("NSpgid:"):
+                fields = line.split()
+                if fields:
+                    current_group = int(fields[-1])
+            elif line.startswith("VmRSS:"):
+                fields = line.split()
+                if len(fields) >= 2:
+                    current_rss = int(fields[1])
+        if current_group == process_group_id:
+            total += current_rss
+    return total
+
+
+def command_resource_usage(path: Path | None) -> dict[str, object]:
+    if path is None or not path.exists():
+        return {
+            "available": False,
+            "source": None,
+            "max_rss_kb": None,
+            "user_seconds": None,
+            "system_seconds": None,
+        }
+
+    values: dict[str, object] = {
+        "available": True,
+        "source": "gnu_time",
+        "max_rss_kb": None,
+        "user_seconds": None,
+        "system_seconds": None,
+    }
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if ":" not in line:
+            continue
+        key, raw_value = line.split(":", 1)
+        value = raw_value.strip()
+        if key == "Maximum resident set size (kbytes)":
+            values["max_rss_kb"] = int(value)
+        elif key == "User time (seconds)":
+            values["user_seconds"] = float(value)
+        elif key == "System time (seconds)":
+            values["system_seconds"] = float(value)
+    return values
 
 
 def parse_insert_sweep(text: str) -> list[int]:
@@ -1151,16 +1271,32 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
     workflow_metrics = raptor_workflow.get("metrics", {})
     trinity_result = trinity.get("result", {})
     trinity_metrics = trinity_result.get("metrics", {})
+    raptor_resources = raptor.get("resource_usage", {})
+    normalize_resources = raptor_normalize.get("resource_usage", {})
+    workflow_resources = raptor_workflow.get("resource_usage", {})
+    trinity_resources = trinity_result.get("resource_usage", {})
     return {
         "insert": report["fixture"]["insert"],
         "paired_end_pairs": report["fixture"]["paired_end_pairs"],
         "report_path": report.get("report_path"),
         "raptor_exit_code": raptor.get("exit_code"),
+        "raptor_elapsed_seconds": raptor.get("elapsed_seconds"),
+        "raptor_max_rss_kb": raptor_resources.get("max_rss_kb"),
+        "raptor_user_seconds": raptor_resources.get("user_seconds"),
+        "raptor_system_seconds": raptor_resources.get("system_seconds"),
         "raptor_normalize_exit_code": raptor_normalize.get("exit_code"),
+        "raptor_normalize_elapsed_seconds": raptor_normalize.get("elapsed_seconds"),
+        "raptor_normalize_max_rss_kb": normalize_resources.get("max_rss_kb"),
+        "raptor_normalize_user_seconds": normalize_resources.get("user_seconds"),
+        "raptor_normalize_system_seconds": normalize_resources.get("system_seconds"),
         "normalized_kept_pairs": normalize_metrics.get("kept_pairs"),
         "normalized_kept_pair_fraction": normalize_metrics.get("kept_pair_fraction"),
         "assembled_from_normalized_reads": metrics.get("assembled_from_normalized_reads"),
         "raptor_workflow_exit_code": raptor_workflow.get("exit_code"),
+        "raptor_workflow_elapsed_seconds": raptor_workflow.get("elapsed_seconds"),
+        "raptor_workflow_max_rss_kb": workflow_resources.get("max_rss_kb"),
+        "raptor_workflow_user_seconds": workflow_resources.get("user_seconds"),
+        "raptor_workflow_system_seconds": workflow_resources.get("system_seconds"),
         "workflow_lengths": workflow_metrics.get("lengths"),
         "workflow_n50": workflow_metrics.get("n50"),
         "workflow_component_count": workflow_metrics.get("component_count"),
@@ -1330,6 +1466,10 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         "trinity_available": trinity.get("available"),
         "trinity_ran": trinity.get("ran"),
         "trinity_exit_code": trinity_result.get("exit_code"),
+        "trinity_elapsed_seconds": trinity_result.get("elapsed_seconds"),
+        "trinity_max_rss_kb": trinity_resources.get("max_rss_kb"),
+        "trinity_user_seconds": trinity_resources.get("user_seconds"),
+        "trinity_system_seconds": trinity_resources.get("system_seconds"),
         "trinity_lengths": trinity_metrics.get("lengths"),
         "trinity_n50": trinity_metrics.get("n50"),
         "trinity_truth_min_coverage": trinity_metrics.get("truth_recovery", {}).get(
