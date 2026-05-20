@@ -51,6 +51,21 @@
       "run_raptor_workflow_single": false,
       "min_trinity_selected_f1": 0.95,
       "description": "Transcript pair with only the middle segment in antisense orientation, stressing strand-aware overlap partitioning."
+    },
+    {
+      "name": "high_depth_normalization",
+      "inserts": [160],
+      "run_raptor_workflow": false,
+      "run_raptor_workflow_gpu": false,
+      "run_raptor_workflow_single": false,
+      "run_raptor_workflow_samples_file": false,
+      "run_raptor_workflow_samples_file_multi": false,
+      "run_raptor_workflow_comma_lists": false,
+      "run_raptor_workflow_stranded_rf": false,
+      "run_malformed_fastq_checks": false,
+      "normalize_coverage_target": 200,
+      "max_normalization_kept_pair_delta": 0.12,
+      "description": "High-depth single-transcript fixture for forcing normalization to reduce paired reads."
     }
   ]
 }

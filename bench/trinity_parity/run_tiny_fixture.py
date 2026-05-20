@@ -1145,6 +1145,13 @@ def partial_antisense_overlap_transcripts() -> tuple[dict[str, str], dict[str, i
     return transcripts, coverage
 
 
+def high_depth_normalization_transcripts() -> tuple[dict[str, str], dict[str, int]]:
+    transcript = "".join(
+        deterministic_dna(f"high_depth_norm_segment_{idx}", 90) for idx in range(10)
+    )
+    return {"tx_high_depth": transcript}, {"tx_high_depth": 300}
+
+
 def generate_fixture(out_dir: Path, fixture_name: str, insert: int) -> dict[str, object]:
     if fixture_name == "tiny_alt_isoform":
         transcripts, coverage = tiny_alt_isoform_transcripts()
@@ -1156,6 +1163,8 @@ def generate_fixture(out_dir: Path, fixture_name: str, insert: int) -> dict[str,
         transcripts, coverage = antisense_overlap_transcripts()
     elif fixture_name == "partial_antisense_overlap":
         transcripts, coverage = partial_antisense_overlap_transcripts()
+    elif fixture_name == "high_depth_normalization":
+        transcripts, coverage = high_depth_normalization_transcripts()
     else:
         raise ValueError(f"unknown fixture: {fixture_name}")
     return write_fixture_files(out_dir, fixture_name, transcripts, insert, coverage)
@@ -1456,6 +1465,7 @@ def run_one_fixture(
     oracle_fasta: Path,
     normalize_raptor: bool,
     assemble_normalized: bool,
+    normalize_coverage_target: int,
     run_raptor_workflow: bool,
     run_raptor_workflow_gpu: bool,
     run_raptor_workflow_single: bool,
@@ -1528,7 +1538,7 @@ def run_one_fixture(
             "--output",
             str(normalized_prefix),
             "--coverage-target",
-            "500",
+            str(normalize_coverage_target),
             "--max-reads",
             "5000000",
         ]
@@ -2623,6 +2633,7 @@ def main() -> int:
             "compact_fusion",
             "antisense_overlap",
             "partial_antisense_overlap",
+            "high_depth_normalization",
         ],
         default=DEFAULT_FIXTURE,
     )
@@ -2636,6 +2647,12 @@ def main() -> int:
         "--assemble-normalized",
         action="store_true",
         help="Assemble Raptor output from --normalize-raptor instead of raw fixture reads",
+    )
+    parser.add_argument(
+        "--normalize-coverage-target",
+        type=int,
+        default=500,
+        help="Coverage target forwarded to raptor normalize",
     )
     parser.add_argument(
         "--run-raptor-workflow",
@@ -2760,6 +2777,7 @@ def main() -> int:
             oracle_fasta,
             args.normalize_raptor,
             args.assemble_normalized,
+            args.normalize_coverage_target,
             args.run_raptor_workflow,
             args.run_raptor_workflow_gpu,
             args.run_raptor_workflow_single,

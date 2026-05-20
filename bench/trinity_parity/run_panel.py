@@ -659,6 +659,12 @@ def run_fixture(
     assemble_normalized = bool(
         fixture.get("assemble_normalized", defaults.get("assemble_normalized", False))
     )
+    normalize_coverage_target = int(
+        fixture.get(
+            "normalize_coverage_target",
+            defaults.get("normalize_coverage_target", 500),
+        )
+    )
     command = [
         sys.executable,
         str(FIXTURE_RUNNER),
@@ -701,6 +707,7 @@ def run_fixture(
         command.append("--run-raptor-workflow")
     if normalize_raptor:
         command.append("--normalize-raptor")
+        command.extend(["--normalize-coverage-target", str(normalize_coverage_target)])
     if assemble_normalized:
         command.append("--assemble-normalized")
     if run_raptor_workflow_gpu:
