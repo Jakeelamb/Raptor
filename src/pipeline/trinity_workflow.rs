@@ -43,6 +43,7 @@ pub struct TrinityWorkflowReport {
     pub assembly_metrics_tsv: String,
     pub components_json: String,
     pub component_graphs_json: String,
+    pub component_paths_fasta: String,
     pub component_clustering: &'static str,
     pub component_count: usize,
     pub component_graph_count: usize,
@@ -105,10 +106,12 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
     let assembly_fasta_string = path_to_str(&assembly_fasta)?.to_string();
     let component_path = output_dir.join("raptor_components.json");
     let component_graphs_path = output_dir.join("raptor_component_graphs.json");
+    let component_paths_fasta = output_dir.join("raptor_component_paths.fasta");
     let component_artifacts = write_component_artifacts(
         &assembly_fasta_string,
         &component_path,
         &component_graphs_path,
+        &component_paths_fasta,
         60,
         &assembly_input1,
         assembly_input2.as_deref(),
@@ -140,6 +143,7 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
         assembly_metrics_tsv: sidecar_path(&assembly_fasta_string, "assembly_metrics.tsv"),
         components_json: path_to_str(&component_path)?.to_string(),
         component_graphs_json: path_to_str(&component_graphs_path)?.to_string(),
+        component_paths_fasta: path_to_str(&component_paths_fasta)?.to_string(),
         component_clustering: component_artifacts.clustering,
         component_count: component_artifacts.components.len(),
         component_graph_count: component_artifacts.component_graphs.len(),
@@ -162,6 +166,7 @@ fn write_component_artifacts(
     assembly_fasta: &str,
     component_path: &Path,
     component_graphs_path: &Path,
+    component_paths_fasta: &Path,
     min_shared_bases: usize,
     reads1_path: &str,
     reads2_path: Option<&str>,
@@ -203,11 +208,53 @@ fn write_component_artifacts(
         &component_graphs,
         "component graph report",
     )?;
+    write_component_paths_fasta(component_paths_fasta, &contigs, &component_graphs)?;
     Ok(ComponentArtifacts {
         components,
         component_graphs,
         clustering: "sequence_or_read_kmer",
     })
+}
+
+fn write_component_paths_fasta(
+    path: &Path,
+    contigs: &[Contig],
+    component_graphs: &[RaptorComponentGraph],
+) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let contigs_by_id: std::collections::BTreeMap<usize, &Contig> =
+        contigs.iter().map(|contig| (contig.id, contig)).collect();
+    let mut output = String::new();
+    for graph in component_graphs {
+        for node in &graph.nodes {
+            if let Some(contig) = contigs_by_id.get(&node.contig_id) {
+                output.push_str(&format!(
+                    ">component_{}_contig_{} length={}\n",
+                    graph.component_id,
+                    node.contig_id,
+                    contig.sequence.len()
+                ));
+                write_wrapped_fasta_sequence(&mut output, &contig.sequence);
+            }
+        }
+        for (path_idx, read_path) in graph.read_kmer_paths.iter().enumerate() {
+            output.push_str(&format!(
+                ">component_{}_path_{} edges={} min_support={}\n",
+                graph.component_id, path_idx, read_path.edge_count, read_path.min_support
+            ));
+            write_wrapped_fasta_sequence(&mut output, &read_path.sequence);
+        }
+    }
+    fs::write(path, output)
+}
+
+fn write_wrapped_fasta_sequence(output: &mut String, sequence: &str) {
+    for chunk in sequence.as_bytes().chunks(80) {
+        output.push_str(&String::from_utf8_lossy(chunk));
+        output.push('\n');
+    }
 }
 
 fn write_json<T: Serialize>(path: &Path, value: &T, label: &str) -> io::Result<()> {
@@ -383,6 +430,7 @@ mod tests {
         assert!(std::path::Path::new(&report.assembly_fasta).exists());
         assert!(std::path::Path::new(&report.components_json).exists());
         assert!(std::path::Path::new(&report.component_graphs_json).exists());
+        assert!(std::path::Path::new(&report.component_paths_fasta).exists());
         let components: Vec<serde_json::Value> = serde_json::from_str(
             &fs::read_to_string(&report.components_json).expect("component json"),
         )
