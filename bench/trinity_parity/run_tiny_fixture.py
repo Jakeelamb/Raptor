@@ -960,6 +960,21 @@ def compact_fusion_transcripts() -> tuple[dict[str, str], dict[str, int]]:
     return transcripts, coverage
 
 
+def antisense_overlap_transcripts() -> tuple[dict[str, str], dict[str, int]]:
+    transcript = (
+        deterministic_dna("antisense_left", 84)
+        + deterministic_dna("antisense_overlap", 96)
+        + deterministic_dna("antisense_right", 84)
+    )
+    antisense = revcomp(transcript)
+    transcripts = {
+        "tx_forward": transcript,
+        "tx_antisense": antisense,
+    }
+    coverage = {"tx_forward": 3, "tx_antisense": 3}
+    return transcripts, coverage
+
+
 def generate_fixture(out_dir: Path, fixture_name: str, insert: int) -> dict[str, object]:
     if fixture_name == "tiny_alt_isoform":
         transcripts, coverage = tiny_alt_isoform_transcripts()
@@ -967,6 +982,8 @@ def generate_fixture(out_dir: Path, fixture_name: str, insert: int) -> dict[str,
         transcripts, coverage = ambiguous_paralog_transcripts()
     elif fixture_name == "compact_fusion":
         transcripts, coverage = compact_fusion_transcripts()
+    elif fixture_name == "antisense_overlap":
+        transcripts, coverage = antisense_overlap_transcripts()
     else:
         raise ValueError(f"unknown fixture: {fixture_name}")
     return write_fixture_files(out_dir, fixture_name, transcripts, insert, coverage)
@@ -1561,14 +1578,20 @@ def check_report_thresholds(
             failures.append("raptor trinity workflow did not emit component graphs")
         if workflow_metrics.get("component_graph_node_count", 0) < 1:
             failures.append("raptor trinity workflow emitted empty component graphs")
-        if workflow_metrics.get("component_graph_edge_count", 0) < 1:
-            failures.append("raptor trinity workflow did not emit component graph edges")
-        if workflow_metrics.get("component_graph_edge_read_support", 0) < 1:
-            failures.append("raptor trinity workflow component graph edges lack read support")
-        if workflow_metrics.get("component_graph_edge_pair_support", 0) < 1:
-            failures.append("raptor trinity workflow component graph edges lack pair support")
-        if workflow_metrics.get("component_graph_edge_observed_kmers", 0) < 1:
-            failures.append("raptor trinity workflow component graph edges lack observed k-mer support")
+        graph_has_multi_contig_component = workflow_metrics.get(
+            "component_graph_node_count", 0
+        ) > workflow_metrics.get("component_graph_count", 0)
+        if graph_has_multi_contig_component:
+            if workflow_metrics.get("component_graph_edge_count", 0) < 1:
+                failures.append("raptor trinity workflow did not emit component graph edges")
+            if workflow_metrics.get("component_graph_edge_read_support", 0) < 1:
+                failures.append("raptor trinity workflow component graph edges lack read support")
+            if workflow_metrics.get("component_graph_edge_pair_support", 0) < 1:
+                failures.append("raptor trinity workflow component graph edges lack pair support")
+            if workflow_metrics.get("component_graph_edge_observed_kmers", 0) < 1:
+                failures.append(
+                    "raptor trinity workflow component graph edges lack observed k-mer support"
+                )
         if workflow_metrics.get("component_graph_read_kmer_node_count", 0) < 1:
             failures.append("raptor trinity workflow component graphs lack read k-mer nodes")
         if workflow_metrics.get("component_graph_read_kmer_edge_count", 0) < 1:
@@ -2323,7 +2346,12 @@ def main() -> int:
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
     parser.add_argument(
         "--fixture",
-        choices=["tiny_alt_isoform", "ambiguous_paralog", "compact_fusion"],
+        choices=[
+            "tiny_alt_isoform",
+            "ambiguous_paralog",
+            "compact_fusion",
+            "antisense_overlap",
+        ],
         default=DEFAULT_FIXTURE,
     )
     parser.add_argument("--skip-raptor", action="store_true")

@@ -13,6 +13,7 @@ gate across the current truth-known stress cases:
 - `tiny_alt_isoform` across insert sizes `110,140,160,180`
 - `ambiguous_paralog` at insert size `160`
 - `compact_fusion` at insert size `160`
+- `antisense_overlap` at insert size `160`
 
 Run the full candidate panel:
 
@@ -62,9 +63,10 @@ FASTQs, and applies the same selected-isoform thresholds as direct paired input.
 The panel also gates the current strand-specific workflow path with
 `--SS_lib_type RF`. The fixture uses RF-oriented read pairs, verifies the
 workflow materializes strand-oriented FASTQs before assembly, and requires
-forward-strand selected-isoform precision/F1. This is not yet proof of full
-strand-specific parity; antisense-overlap disambiguation still needs a harder
-fixture and Trinity comparison.
+forward-strand selected-isoform precision/F1. The current panel includes an
+`antisense_overlap` fixture with a reverse-complement transcript pair. This is
+still not final strand-specific parity because it needs Trinity comparison and
+more realistic antisense partial-overlap cases.
 
 The panel also runs a malformed FASTQ negative check. `raptor trinity` must fail
 with a nonzero exit code, avoid writing an assembly FASTA, and report FASTQ
