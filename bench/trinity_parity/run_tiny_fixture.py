@@ -230,7 +230,7 @@ def generate_fixture(out_dir: Path) -> dict[str, object]:
     r1_records: list[tuple[str, str]] = []
     r2_records: list[tuple[str, str]] = []
     read_len = 75
-    insert = 160
+    insert = 110
     step = 24
 
     for tx_name, seq in transcripts.items():
@@ -298,7 +298,7 @@ def main() -> int:
             "note": "Checked-in tiny oracle is a frozen stand-in until Trinity is installed or a Trinity oracle is captured.",
         },
         "known_limitations": [
-            "Current raptor assemble CLI accepts one input FASTQ, so this scaffold runs single-end reads only.",
+            "Tiny fixture now exercises raptor assemble paired-end input, but downstream path scoring still needs stronger read-pair constraints.",
             "No Trinity parity claim is made from this tiny fixture.",
         ],
     }
@@ -313,7 +313,9 @@ def main() -> int:
             "--",
             "assemble",
             "--input",
-            fixture["paths"]["single_fastq"],
+            fixture["paths"]["r1_fastq"],
+            "--input2",
+            fixture["paths"]["r2_fastq"],
             "--output",
             str(output_fasta),
             "--min-len",

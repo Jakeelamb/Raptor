@@ -100,6 +100,7 @@ fn main() {
 
         Commands::Assemble {
             input,
+            input2,
             output,
             min_len,
             threads: _,
@@ -141,6 +142,7 @@ fn main() {
 
             if let Err(err) = pipeline::assemble::assemble_reads_with_gpu(
                 &input,
+                input2.as_deref(),
                 &output,
                 min_len,
                 gfa,

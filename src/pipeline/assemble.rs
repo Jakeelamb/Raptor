@@ -4,7 +4,9 @@ use crate::graph::assembler::{greedy_assembly_u64, Contig};
 use crate::graph::overlap::find_overlaps;
 use crate::graph::stitch::OverlapGraphBuilder;
 use crate::io::fasta::FastaWriter;
-use crate::io::fastq::{stream_fastq_records_checked, try_open_fastq, FastqRecord};
+use crate::io::fastq::{
+    stream_fastq_records_checked, stream_paired_fastq_records_checked, try_open_fastq, FastqRecord,
+};
 use crate::io::gfa::GfaWriter;
 use crate::io::gfa2::Gfa2Writer;
 use crate::kmer::variable_k::{kmer_coverage_histogram, optimal_k, select_best_k};
@@ -238,6 +240,31 @@ fn complement_iupac_base(base: u8) -> u8 {
         b'N' => b'N',
         _ => base,
     }
+}
+
+fn reverse_complement_dna(sequence: &str) -> String {
+    let mut reverse = String::with_capacity(sequence.len());
+    for base in sequence.bytes().rev() {
+        reverse.push(match base {
+            b'A' | b'a' => 'T',
+            b'C' | b'c' => 'G',
+            b'G' | b'g' => 'C',
+            b'T' | b't' | b'U' | b'u' => 'A',
+            b'R' | b'r' => 'Y',
+            b'Y' | b'y' => 'R',
+            b'S' | b's' => 'S',
+            b'W' | b'w' => 'W',
+            b'K' | b'k' => 'M',
+            b'M' | b'm' => 'K',
+            b'B' | b'b' => 'V',
+            b'V' | b'v' => 'B',
+            b'D' | b'd' => 'H',
+            b'H' | b'h' => 'D',
+            b'N' | b'n' => 'N',
+            _ => 'N',
+        });
+    }
+    reverse
 }
 
 #[inline]
@@ -922,6 +949,7 @@ fn estimate_sequence_capacity(file_size_bytes: Option<u64>) -> usize {
 
 pub fn assemble_reads(
     input_path: &str,
+    input2_path: Option<&str>,
     output_path: &str,
     min_len: usize,
     _output_gfa: bool,
@@ -951,6 +979,7 @@ pub fn assemble_reads(
     // Default to CPU backend for backwards compatibility
     assemble_reads_with_gpu(
         input_path,
+        input2_path,
         output_path,
         min_len,
         _output_gfa,
@@ -983,6 +1012,7 @@ pub fn assemble_reads(
 /// Assemble reads with optional GPU acceleration
 pub fn assemble_reads_with_gpu(
     input_path: &str,
+    input2_path: Option<&str>,
     output_path: &str,
     min_len: usize,
     _output_gfa: bool,
@@ -1011,6 +1041,9 @@ pub fn assemble_reads_with_gpu(
     use_gpu: bool,
 ) -> io::Result<()> {
     info!("Starting assembly from: {}", input_path);
+    if let Some(input2_path) = input2_path {
+        info!("Using paired-end mate input: {}", input2_path);
+    }
 
     // Determine k-mer size - either adaptive or fixed optimal
     let max_k = 41;
@@ -1032,9 +1065,18 @@ pub fn assemble_reads_with_gpu(
         estimate_sequence_capacity(std::fs::metadata(input_path).ok().map(|m| m.len()));
 
     let mut sequences: Vec<String> = Vec::with_capacity(estimated_count);
-    // First pass: collect sequences for k optimization (sample if large)
-    for record in stream_fastq_records_checked(reader) {
-        sequences.push(record?.sequence);
+    if let Some(input2_path) = input2_path {
+        let reader2 = try_open_fastq(input2_path)?;
+        for pair in stream_paired_fastq_records_checked(reader, reader2) {
+            let (r1, r2) = pair?;
+            sequences.push(r1.sequence);
+            sequences.push(reverse_complement_dna(&r2.sequence));
+        }
+    } else {
+        // First pass: collect sequences for k optimization (sample if large)
+        for record in stream_fastq_records_checked(reader) {
+            sequences.push(record?.sequence);
+        }
     }
 
     let num_sequences = sequences.len();
@@ -2543,6 +2585,7 @@ mod tests {
         let output = NamedTempFile::new().expect("create output path");
         let err = assemble_reads_with_gpu(
             input.path().to_str().expect("utf8 input path"),
+            None,
             output.path().to_str().expect("utf8 output path"),
             1,     // min_len
             false, // output_gfa
@@ -2575,6 +2618,61 @@ mod tests {
     }
 
     #[test]
+    fn assemble_reads_with_gpu_rejects_mismatched_paired_fastq_inputs() {
+        let mut r1 = NamedTempFile::new().expect("create r1 fastq");
+        writeln!(r1, "@read_1/1").expect("write header");
+        writeln!(r1, "ACGTACGT").expect("write sequence");
+        writeln!(r1, "+").expect("write plus line");
+        writeln!(r1, "IIIIIIII").expect("write quality");
+        writeln!(r1, "@read_2/1").expect("write header");
+        writeln!(r1, "TGCATGCA").expect("write sequence");
+        writeln!(r1, "+").expect("write plus line");
+        writeln!(r1, "IIIIIIII").expect("write quality");
+        r1.flush().expect("flush r1");
+
+        let mut r2 = NamedTempFile::new().expect("create r2 fastq");
+        writeln!(r2, "@read_1/2").expect("write header");
+        writeln!(r2, "ACGTACGT").expect("write sequence");
+        writeln!(r2, "+").expect("write plus line");
+        writeln!(r2, "IIIIIIII").expect("write quality");
+        r2.flush().expect("flush r2");
+
+        let output = NamedTempFile::new().expect("create output path");
+        let err = assemble_reads_with_gpu(
+            r1.path().to_str().expect("utf8 r1 path"),
+            Some(r2.path().to_str().expect("utf8 r2 path")),
+            output.path().to_str().expect("utf8 output path"),
+            1,     // min_len
+            false, // output_gfa
+            false, // output_gfa2
+            false, // adaptive_k
+            false, // use_rle
+            false, // collapse_repeats
+            0,     // min_repeat_len
+            false, // polish
+            21,    // polish_window
+            false, // streaming
+            false, // export_metadata
+            None,  // json_metadata
+            None,  // tsv_metadata
+            false, // isoforms
+            None,  // gtf_path
+            None,  // gff3_path
+            100,   // max_path_depth
+            0.0,   // min_confidence
+            false, // compute_tpm
+            false, // polish_isoforms
+            None,  // samples_path
+            0.0,   // min_tpm
+            None,  // long_reads
+            false, // counts_matrix
+            false, // use_gpu
+        )
+        .expect_err("mismatched paired FASTQ inputs must return an error");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
     fn assemble_reads_with_gpu_rejects_directory_output_path() {
         let mut input = NamedTempFile::new().expect("create input fastq");
         writeln!(input, "@read_1").expect("write header");
@@ -2589,6 +2687,7 @@ mod tests {
 
         let err = assemble_reads_with_gpu(
             input.path().to_str().expect("utf8 input path"),
+            None,
             output_dir.to_str().expect("utf8 output path"),
             1,     // min_len
             false, // output_gfa

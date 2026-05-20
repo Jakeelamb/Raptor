@@ -629,6 +629,10 @@ pub enum Commands {
         #[arg(short, long)]
         input: String,
 
+        /// Optional second FASTQ(.gz) file for paired-end reads
+        #[arg(short = 'I', long)]
+        input2: Option<String>,
+
         /// Output FASTA(.gz) file
         #[arg(short, long)]
         output: String,
