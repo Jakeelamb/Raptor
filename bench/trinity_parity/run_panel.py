@@ -566,6 +566,7 @@ def run_fixture(
     out_dir: Path,
     run_trinity: bool,
     require_trinity: bool,
+    trinity_bin: str | None,
 ) -> dict[str, object]:
     name = str(fixture["name"])
     inserts = [int(insert) for insert in fixture["inserts"]]
@@ -653,6 +654,8 @@ def run_fixture(
         command.append("--run-trinity")
     if require_trinity:
         command.append("--require-trinity")
+    if trinity_bin:
+        command.extend(["--trinity-bin", trinity_bin])
 
     result = run_command(command, ROOT)
     report_path = fixture_report_path(fixture_out, inserts)
@@ -686,6 +689,11 @@ def main() -> int:
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--run-trinity", action="store_true")
     parser.add_argument("--require-trinity", action="store_true")
+    parser.add_argument(
+        "--trinity-bin",
+        default=None,
+        help="Path or command name for Trinity. Forwarded to each fixture runner.",
+    )
     args = parser.parse_args()
 
     panel = load_json(args.panel)
@@ -700,6 +708,7 @@ def main() -> int:
             out_dir,
             args.run_trinity or args.require_trinity,
             args.require_trinity,
+            args.trinity_bin,
         )
         for fixture in panel.get("fixtures", [])
     ]
@@ -714,6 +723,7 @@ def main() -> int:
         "out_dir": str(out_dir),
         "run_trinity": args.run_trinity or args.require_trinity,
         "require_trinity": args.require_trinity,
+        "trinity_bin": args.trinity_bin,
         "passed": not failures,
         "failures": failures,
         "fixtures": fixture_results,

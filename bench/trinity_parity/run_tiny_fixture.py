@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -836,6 +837,36 @@ def first_gpu_metric(gpu_usage: dict[str, object], key: str) -> object:
     return first.get(key)
 
 
+def resolve_trinity_bin(trinity_bin: str | None) -> str | None:
+    candidate = trinity_bin or os.environ.get("TRINITY_BIN")
+    if candidate:
+        path = Path(candidate).expanduser()
+        if path.exists():
+            return str(path.resolve())
+        resolved = shutil.which(candidate)
+        return resolved
+    return shutil.which("Trinity")
+
+
+def trinity_version(trinity_bin: str | None) -> dict[str, object]:
+    if not trinity_bin:
+        return {"available": False}
+    completed = subprocess.run(
+        [trinity_bin, "--version"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    return {
+        "available": completed.returncode == 0,
+        "command": [trinity_bin, "--version"],
+        "exit_code": completed.returncode,
+        "stdout": completed.stdout.strip(),
+        "stderr": completed.stderr.strip(),
+    }
+
+
 def parse_insert_sweep(text: str) -> list[int]:
     inserts: list[int] = []
     for part in text.split(","):
@@ -1293,11 +1324,13 @@ def run_one_fixture(
     run_trinity: bool,
     require_trinity: bool,
     freeze_trinity_oracle: bool,
+    trinity_bin: str | None,
     skip_raptor: bool,
     min_match_coverage: float,
 ) -> dict[str, object]:
     out_dir.mkdir(parents=True, exist_ok=True)
     fixture = generate_fixture(out_dir, fixture_name, insert)
+    resolved_trinity_bin = resolve_trinity_bin(trinity_bin)
 
     report: dict[str, object] = {
         "fixture": fixture,
@@ -1313,7 +1346,11 @@ def run_one_fixture(
         "raptor_workflow_stranded_rf": None,
         "malformed_fastq_check": None,
         "trinity": {
-            "available": shutil.which("Trinity") is not None,
+            "available": resolved_trinity_bin is not None,
+            "executable": resolved_trinity_bin,
+            "requested_executable": trinity_bin,
+            "env_executable": os.environ.get("TRINITY_BIN"),
+            "version": trinity_version(resolved_trinity_bin),
             "ran": False,
             "required": require_trinity,
             "freeze_oracle_requested": freeze_trinity_oracle,
@@ -1474,16 +1511,17 @@ def run_one_fixture(
     add_cpu_gpu_workflow_comparison(report)
 
     if run_trinity:
-        trinity_bin = shutil.which("Trinity")
-        if not trinity_bin:
+        if not resolved_trinity_bin:
             report["trinity"]["ran"] = False
-            report["trinity"]["error"] = "Trinity executable not found on PATH"
+            report["trinity"][
+                "error"
+            ] = "Trinity executable not found; set --trinity-bin or TRINITY_BIN"
         else:
             trinity_out = out_dir / "trinity"
             if trinity_out.exists():
                 shutil.rmtree(trinity_out)
             command = [
-                trinity_bin,
+                resolved_trinity_bin,
                 "--seqType",
                 "fq",
                 "--left",
@@ -1543,7 +1581,7 @@ def check_report_thresholds(
     failures: list[str] = []
     trinity = report.get("trinity", {})
     if trinity.get("required") and not trinity.get("available"):
-        failures.append("Trinity required but executable was not found on PATH")
+        failures.append("Trinity required but executable was not found; set --trinity-bin or TRINITY_BIN")
     if trinity.get("required") and trinity.get("available") and not trinity.get("ran"):
         failures.append("Trinity required but run was not requested")
     if trinity.get("required") and trinity.get("ran"):
@@ -2429,6 +2467,11 @@ def main() -> int:
         help="Run negative FASTQ validation checks against the raptor trinity workflow",
     )
     parser.add_argument("--run-trinity", action="store_true")
+    parser.add_argument(
+        "--trinity-bin",
+        default=None,
+        help="Path or command name for Trinity. Defaults to TRINITY_BIN or PATH lookup.",
+    )
     parser.add_argument("--oracle-fasta", type=Path, default=DEFAULT_ORACLE)
     parser.add_argument("--insert", type=int, default=160)
     parser.add_argument(
@@ -2505,6 +2548,7 @@ def main() -> int:
             run_trinity,
             require_trinity,
             args.freeze_trinity_oracle,
+            args.trinity_bin,
             args.skip_raptor,
             args.min_selected_match_coverage,
         )

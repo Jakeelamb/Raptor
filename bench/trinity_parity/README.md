@@ -37,6 +37,14 @@ If Trinity is installed on `PATH`, the same panel can also run Trinity:
 python3 bench/trinity_parity/run_panel.py --run-trinity
 ```
 
+If Trinity is installed somewhere else, pass an explicit binary or set
+`TRINITY_BIN`:
+
+```bash
+python3 bench/trinity_parity/run_panel.py --run-trinity --trinity-bin /path/to/Trinity
+TRINITY_BIN=/path/to/Trinity python3 bench/trinity_parity/run_panel.py --run-trinity
+```
+
 Use `--require-trinity` when Trinity output is mandatory for the gate.
 
 The panel also runs a GPU-requested Raptor workflow with
@@ -173,6 +181,9 @@ paired-end reads:
 python3 bench/trinity_parity/run_tiny_fixture.py --run-trinity --require-trinity
 ```
 
+Use `--trinity-bin /path/to/Trinity` or `TRINITY_BIN=/path/to/Trinity` when the
+executable is not on `PATH`.
+
 To replace the tiny frozen oracle with a freshly captured Trinity output:
 
 ```bash
@@ -201,7 +212,7 @@ The script records:
 - Trinity-style `SS_lib_type` value and actual assembly input paths when requested
 - malformed FASTQ rejection command, exit status, output absence, and stderr context
 - Trinity paired-end command, exit status, output metrics, and truth recovery when requested
-- whether Trinity was available on `PATH`
+- whether Trinity was available, which executable was resolved, and `Trinity --version` output
 - the current Raptor limitation that paired-end evidence is only used as reverse-complemented mate sequence evidence, not yet full Butterfly-style pair path constraints
 
 ## Rules
