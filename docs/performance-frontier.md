@@ -102,15 +102,23 @@ across Chrysalis/Butterfly-style stages, not raw contig length alone.
   contigs and raised total bases to 51,804, but final FASTA F1 regressed to 0.0,
   best final coverage dropped to 0.634298, and two one-base `N`s appeared in the
   output. Do not revive that path without a stronger graph/evidence gate.
+- Unique-only oriented boundary extension is also a trap. It preserved the same
+  strict final FASTA F1 (`0.019231`) and the same 0.90 sweep F1 (`0.038462`),
+  but cut output from 96,750 bases and N50 5,379 down to 51,951 bases and N50
+  3,580. The current best-count unused-neighbor boundary extension is the better
+  frontier until path selection has a stronger evidence model.
 - Full component graph artifact generation is not yet public-scale. Current
   caps are honest bounded-reporting guards, not a Chrysalis parity solution.
 
 ## Boundary Diagnostics
 
-`run_public_panel.py` now records `best_matches_top20` for each FASTA comparison
-direction. Each record includes query/reference IDs, orientation, lengths,
-whether the query contains the reference, containment offsets, and missing-end
-sizes.
+`run_public_panel.py` now records `best_matches_top20` and a
+`containment_summary` for each FASTA comparison direction. Each match record
+includes query/reference IDs, orientation, lengths, whether the query contains
+the reference, containment offsets, and missing-end sizes. The summary counts
+how many queries have any exact containment, how many are contained in the
+reference, how many contain the reference, how many are near-full-length at
+`>=0.95`, and the mean missing-end sizes.
 
 Current oriented-boundary frontier diagnostics:
 
@@ -124,6 +132,23 @@ Current oriented-boundary frontier diagnostics:
 - Against Trinity Inchworm, the 3,507 bp near-match maps to `a301;19` with the
   same coverage and missing-end sizes, so this is still an Inchworm/path-boundary
   problem before final transcript selection.
+
+Containment summary from
+`target/trinity_parity/public_panel_oriented_boundary_probe/containment_summary_report.json`:
+
+| Comparison | Direction | Any containment | Query contained in reference | Query contains reference | Near full length | Mean left missing | Mean right missing |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Trinity final | Raptor -> Trinity | 6 | 6 | 0 | 1 | 270.00 | 139.00 |
+| Trinity final | Trinity -> Raptor | 7 | 0 | 7 | 1 | 475.57 | 216.43 |
+| Trinity Inchworm | Raptor -> Inchworm | 16 | 5 | 11 | 1 | 578.81 | 1501.88 |
+| Trinity Inchworm | Inchworm -> Raptor | 18 | 13 | 5 | 1 | 181.28 | 2163.78 |
+
+Interpretation: the final Trinity comparison says most Raptor long contigs have
+no exact containment in final Trinity transcripts, while the few hits are
+mostly under-extended relative to Trinity. The Inchworm comparison shows both
+under-contained and over-contained relationships, which points to graph path
+selection and isoform boundary decisions rather than a simple "extend all ends"
+fix.
 
 ## Next Serious Moves
 

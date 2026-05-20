@@ -141,14 +141,44 @@ def fasta_match_metrics(
     matched = 0
     coverages: list[float] = []
     matches: list[dict[str, object]] = []
+    containment_summary = {
+        "with_any_exact_containment": 0,
+        "query_contained_in_reference": 0,
+        "query_contains_reference": 0,
+        "exact_full_length_or_near_full_length": 0,
+        "mean_left_missing": 0.0,
+        "mean_right_missing": 0.0,
+    }
+    left_missing_values: list[int] = []
+    right_missing_values: list[int] = []
     for name, sequence in query.items():
         match = best_containment_match(name, sequence, reference)
         coverage = float(match["coverage"])
         coverages.append(round(coverage, 6))
         matches.append(match)
+        if coverage > 0.0:
+            containment_summary["with_any_exact_containment"] += 1
+            if bool(match["query_contains_reference"]):
+                containment_summary["query_contains_reference"] += 1
+            else:
+                containment_summary["query_contained_in_reference"] += 1
+            if coverage >= 0.95:
+                containment_summary["exact_full_length_or_near_full_length"] += 1
+            if isinstance(match["left_missing"], int):
+                left_missing_values.append(match["left_missing"])
+            if isinstance(match["right_missing"], int):
+                right_missing_values.append(match["right_missing"])
         if coverage >= min_coverage:
             matched += 1
     precision = matched / len(query) if query else 0.0
+    if left_missing_values:
+        containment_summary["mean_left_missing"] = round(
+            sum(left_missing_values) / len(left_missing_values), 2
+        )
+    if right_missing_values:
+        containment_summary["mean_right_missing"] = round(
+            sum(right_missing_values) / len(right_missing_values), 2
+        )
     matches.sort(
         key=lambda match: (
             float(match["coverage"]),
@@ -164,6 +194,7 @@ def fasta_match_metrics(
         "precision": round(precision, 6),
         "min_match_coverage": min_coverage,
         "best_coverages_top20": sorted(coverages, reverse=True)[:20],
+        "containment_summary": containment_summary,
         "best_matches_top20": matches[:20],
     }
 
