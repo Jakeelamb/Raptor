@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -39,6 +40,7 @@ def run_command(command: list[str], cwd: Path) -> dict[str, object]:
     ]
 
     start = time.monotonic()
+    gpu_samples = [sample_gpu_usage()]
     completed = subprocess.run(
         measured_command,
         cwd=cwd,
@@ -47,6 +49,7 @@ def run_command(command: list[str], cwd: Path) -> dict[str, object]:
         stderr=subprocess.PIPE,
         check=False,
     )
+    gpu_samples.append(sample_gpu_usage())
     result = {
         "command": command,
         "exit_code": completed.returncode,
@@ -54,6 +57,7 @@ def run_command(command: list[str], cwd: Path) -> dict[str, object]:
         "stdout": completed.stdout,
         "stderr": completed.stderr,
         "resource_usage": command_resource_usage(time_output_path),
+        "gpu_usage": summarize_gpu_samples(gpu_samples),
     }
     time_output_path.unlink(missing_ok=True)
     return result
@@ -69,6 +73,7 @@ def run_command_with_procfs_resource_poll(
 
     start = time.monotonic()
     max_rss_kb = 0
+    gpu_samples = [sample_gpu_usage()]
     with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
         "w", encoding="utf-8"
     ) as stderr_file:
@@ -80,10 +85,16 @@ def run_command_with_procfs_resource_poll(
             stderr=stderr_file,
             start_new_session=True,
         )
+        next_gpu_sample = time.monotonic() + 0.2
         while process.poll() is None:
             max_rss_kb = max(max_rss_kb, process_group_rss_kb(process.pid))
+            now = time.monotonic()
+            if now >= next_gpu_sample:
+                gpu_samples.append(sample_gpu_usage())
+                next_gpu_sample = now + 0.2
             time.sleep(0.01)
         max_rss_kb = max(max_rss_kb, process_group_rss_kb(process.pid))
+        gpu_samples.append(sample_gpu_usage())
 
     elapsed = time.monotonic() - start
     stdout = stdout_path.read_text(encoding="utf-8", errors="replace")
@@ -103,6 +114,7 @@ def run_command_with_procfs_resource_poll(
             "user_seconds": None,
             "system_seconds": None,
         },
+        "gpu_usage": summarize_gpu_samples(gpu_samples),
     }
 
 
@@ -161,6 +173,116 @@ def command_resource_usage(path: Path | None) -> dict[str, object]:
     return values
 
 
+def sample_gpu_usage() -> dict[str, object]:
+    nvidia_smi = shutil.which("nvidia-smi")
+    if not nvidia_smi:
+        return {"available": False, "source": None, "gpus": []}
+    command = [
+        nvidia_smi,
+        "--query-gpu=index,name,memory.used,utilization.gpu,power.draw",
+        "--format=csv,noheader,nounits",
+    ]
+    completed = subprocess.run(
+        command,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return {
+            "available": False,
+            "source": "nvidia-smi",
+            "error": completed.stderr.strip(),
+            "gpus": [],
+        }
+
+    gpus: list[dict[str, object]] = []
+    for line in completed.stdout.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 5:
+            continue
+        gpus.append(
+            {
+                "index": int(parts[0]),
+                "name": parts[1],
+                "memory_used_mib": parse_optional_int(parts[2]),
+                "utilization_gpu_percent": parse_optional_int(parts[3]),
+                "power_draw_watts": parse_optional_float(parts[4]),
+            }
+        )
+    return {"available": bool(gpus), "source": "nvidia-smi", "gpus": gpus}
+
+
+def summarize_gpu_samples(samples: list[dict[str, object]]) -> dict[str, object]:
+    available_samples = [sample for sample in samples if sample.get("available")]
+    if not available_samples:
+        return {"available": False, "source": None, "sample_count": len(samples), "gpus": []}
+
+    by_index: dict[int, dict[str, object]] = {}
+    for sample in available_samples:
+        for gpu in sample.get("gpus", []):
+            if not isinstance(gpu, dict):
+                continue
+            index = int(gpu["index"])
+            summary = by_index.setdefault(
+                index,
+                {
+                    "index": index,
+                    "name": gpu.get("name"),
+                    "max_memory_used_mib": 0,
+                    "max_utilization_gpu_percent": 0,
+                    "max_power_draw_watts": 0.0,
+                },
+            )
+            memory = gpu.get("memory_used_mib")
+            utilization = gpu.get("utilization_gpu_percent")
+            power = gpu.get("power_draw_watts")
+            if isinstance(memory, int):
+                summary["max_memory_used_mib"] = max(
+                    int(summary["max_memory_used_mib"]), memory
+                )
+            if isinstance(utilization, int):
+                summary["max_utilization_gpu_percent"] = max(
+                    int(summary["max_utilization_gpu_percent"]), utilization
+                )
+            if isinstance(power, float):
+                summary["max_power_draw_watts"] = max(
+                    float(summary["max_power_draw_watts"]), power
+                )
+
+    return {
+        "available": True,
+        "source": "nvidia-smi",
+        "sample_count": len(samples),
+        "gpus": [by_index[index] for index in sorted(by_index)],
+    }
+
+
+def parse_optional_int(value: str) -> int | None:
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def parse_optional_float(value: str) -> float | None:
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def first_gpu_metric(gpu_usage: dict[str, object], key: str) -> object:
+    gpus = gpu_usage.get("gpus", [])
+    if not isinstance(gpus, list) or not gpus:
+        return None
+    first = gpus[0]
+    if not isinstance(first, dict):
+        return None
+    return first.get(key)
+
+
 def load_json(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -212,6 +334,8 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
     trinity_metrics = trinity_result.get("metrics", {})
     workflow_resources = raptor_workflow.get("resource_usage", {})
     trinity_resources = trinity_result.get("resource_usage", {})
+    workflow_gpu = raptor_workflow.get("gpu_usage", {})
+    trinity_gpu = trinity_result.get("gpu_usage", {})
     return {
         "insert": payload["fixture"]["insert"],
         "paired_end_pairs": payload["fixture"]["paired_end_pairs"],
@@ -221,6 +345,16 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
         "raptor_workflow_max_rss_kb": workflow_resources.get("max_rss_kb"),
         "raptor_workflow_user_seconds": workflow_resources.get("user_seconds"),
         "raptor_workflow_system_seconds": workflow_resources.get("system_seconds"),
+        "raptor_workflow_gpu_available": workflow_gpu.get("available"),
+        "raptor_workflow_gpu_max_memory_used_mib": first_gpu_metric(
+            workflow_gpu, "max_memory_used_mib"
+        ),
+        "raptor_workflow_gpu_max_utilization_percent": first_gpu_metric(
+            workflow_gpu, "max_utilization_gpu_percent"
+        ),
+        "raptor_workflow_gpu_max_power_draw_watts": first_gpu_metric(
+            workflow_gpu, "max_power_draw_watts"
+        ),
         "raptor_workflow_output_fasta_bytes": workflow_metrics.get("output_fasta_bytes"),
         "raptor_workflow_output_dir_bytes": workflow_metrics.get(
             "output_dir_footprint", {}
@@ -260,6 +394,16 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
         "trinity_max_rss_kb": trinity_resources.get("max_rss_kb"),
         "trinity_user_seconds": trinity_resources.get("user_seconds"),
         "trinity_system_seconds": trinity_resources.get("system_seconds"),
+        "trinity_gpu_available": trinity_gpu.get("available"),
+        "trinity_gpu_max_memory_used_mib": first_gpu_metric(
+            trinity_gpu, "max_memory_used_mib"
+        ),
+        "trinity_gpu_max_utilization_percent": first_gpu_metric(
+            trinity_gpu, "max_utilization_gpu_percent"
+        ),
+        "trinity_gpu_max_power_draw_watts": first_gpu_metric(
+            trinity_gpu, "max_power_draw_watts"
+        ),
         "trinity_output_fasta_bytes": trinity_metrics.get("output_fasta_bytes"),
         "trinity_output_dir_bytes": trinity_metrics.get("output_dir_footprint", {}).get(
             "total_bytes"
@@ -326,6 +470,7 @@ def run_fixture(
         "exit_code": result["exit_code"],
         "elapsed_seconds": result["elapsed_seconds"],
         "resource_usage": result["resource_usage"],
+        "gpu_usage": result["gpu_usage"],
         "output_footprint": output_footprint,
         "report_path": str(report_path),
         "stdout": result["stdout"],

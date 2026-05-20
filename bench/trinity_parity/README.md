@@ -23,10 +23,11 @@ python3 bench/trinity_parity/run_panel.py
 The runner writes `target/trinity_parity/candidate_panel/panel_report.json`
 with per-fixture commands, pass/fail state, selected-isoform precision/recall/F1,
 component counts, graph counts, lengths, elapsed time, resource usage, output
-file counts, output byte counts, and Trinity metrics when requested. Resource
-usage is captured with GNU
+file counts, output byte counts, GPU telemetry, and Trinity metrics when
+requested. Resource usage is captured with GNU
 `/usr/bin/time -v` when available; otherwise the harness records peak observed
-process-group RSS by polling `/proc`.
+process-group RSS by polling `/proc`. GPU telemetry is captured with
+`nvidia-smi` when available.
 
 If Trinity is installed on `PATH`, the same panel can also run Trinity:
 
