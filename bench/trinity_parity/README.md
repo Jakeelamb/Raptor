@@ -50,7 +50,9 @@ overlap.
 
 The panel also gates Trinity-style samples-file input. The current fixture uses
 the tab-delimited `condition replicate left right` form and verifies the selected
-isoforms match the same biological thresholds as direct paired input.
+isoforms match the same biological thresholds as direct paired input. It gates
+both one-row files and multi-row files that are merged into workflow-owned
+left/right FASTQs before normalization.
 
 The panel also runs a malformed FASTQ negative check. `raptor trinity` must fail
 with a nonzero exit code, avoid writing an assembly FASTA, and report FASTQ
@@ -99,6 +101,12 @@ To exercise Trinity-style samples-file input:
 
 ```bash
 python3 bench/trinity_parity/run_tiny_fixture.py --run-raptor-workflow-samples-file --skip-raptor
+```
+
+To exercise multi-row samples-file merging:
+
+```bash
+python3 bench/trinity_parity/run_tiny_fixture.py --run-raptor-workflow-samples-file-multi --skip-raptor
 ```
 
 To exercise malformed FASTQ rejection:

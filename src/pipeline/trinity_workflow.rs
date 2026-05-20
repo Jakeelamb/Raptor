@@ -1153,4 +1153,58 @@ mod tests {
         );
         assert!(std::path::Path::new(&report.assembly_fasta).exists());
     }
+
+    #[test]
+    fn trinity_workflow_merges_multi_row_samples_file() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let r1 = temp_dir.path().join("rep_R1.fastq");
+        let r2 = temp_dir.path().join("rep_R2.fastq");
+        let samples_file = temp_dir.path().join("samples.tsv");
+        let seq = "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT";
+        fs::write(&r1, format!("@r1/1\n{seq}\n+\n{}\n", "I".repeat(seq.len()))).expect("write r1");
+        fs::write(&r2, format!("@r1/2\n{seq}\n+\n{}\n", "I".repeat(seq.len()))).expect("write r2");
+        fs::write(
+            &samples_file,
+            format!(
+                "condition\treplicate\tleft\tright\ncondA\trep1\t{}\t{}\ncondA\trep2\t{}\t{}\n",
+                r1.display(),
+                r2.display(),
+                r1.display(),
+                r2.display()
+            ),
+        )
+        .expect("write samples file");
+
+        let output_dir = temp_dir.path().join("workflow_samples_multi");
+        let report = run_trinity_workflow(TrinityWorkflowConfig {
+            input1: None,
+            input2: None,
+            samples_file: Some(samples_file.to_string_lossy().into_owned()),
+            output_dir: output_dir.to_string_lossy().into_owned(),
+            output_fasta: None,
+            report_json: None,
+            normalize: true,
+            normalize_config: NormalizeConfig {
+                k: 5,
+                target_coverage: u16::MAX,
+                min_abundance: 1,
+                max_reads: None,
+                use_gpu: false,
+            },
+            min_len: 10,
+            use_gpu: false,
+        })
+        .expect("multi-row samples-file workflow should run");
+
+        assert_eq!(report.sample_count, 2);
+        assert!(report.input1.ends_with("samples_file_left.fastq.gz"));
+        assert!(report
+            .input2
+            .as_deref()
+            .expect("merged right FASTQ")
+            .ends_with("samples_file_right.fastq.gz"));
+        assert!(std::path::Path::new(&report.input1).exists());
+        assert!(std::path::Path::new(report.input2.as_ref().unwrap()).exists());
+        assert!(std::path::Path::new(&report.assembly_fasta).exists());
+    }
 }

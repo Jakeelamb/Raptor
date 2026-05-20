@@ -911,12 +911,14 @@ def run_raptor_workflow_case(
     use_gpu: bool,
     input_mode: str = "paired",
 ) -> dict[str, object]:
-    if input_mode not in {"paired", "single", "samples_file"}:
+    if input_mode not in {"paired", "single", "samples_file", "samples_file_multi"}:
         raise ValueError(f"unknown workflow input mode: {input_mode}")
     if input_mode == "single":
         workflow_dir = out_dir / "raptor_workflow_single"
     elif input_mode == "samples_file":
         workflow_dir = out_dir / "raptor_workflow_samples_file"
+    elif input_mode == "samples_file_multi":
+        workflow_dir = out_dir / "raptor_workflow_samples_file_multi"
     else:
         workflow_dir = out_dir / ("raptor_workflow_gpu" if use_gpu else "raptor_workflow")
     workflow_fasta = workflow_dir / "raptor_trinity.fasta.gz"
@@ -928,8 +930,25 @@ def run_raptor_workflow_case(
     if use_gpu:
         command.extend(["--features", "gpu"])
     command.extend(["--", "trinity"])
-    if input_mode == "samples_file":
+    if input_mode in {"samples_file", "samples_file_multi"}:
         samples_file = workflow_dir / "samples.tsv"
+        sample_rows = [
+            [
+                "synthetic",
+                f"{fixture['fixture']}_{fixture['insert']}_rep1",
+                fixture["paths"]["r1_fastq"],
+                fixture["paths"]["r2_fastq"],
+            ]
+        ]
+        if input_mode == "samples_file_multi":
+            sample_rows.append(
+                [
+                    "synthetic",
+                    f"{fixture['fixture']}_{fixture['insert']}_rep2",
+                    fixture["paths"]["r1_fastq"],
+                    fixture["paths"]["r2_fastq"],
+                ]
+            )
         write_text(
             samples_file,
             "\t".join(
@@ -941,15 +960,7 @@ def run_raptor_workflow_case(
                 ]
             )
             + "\n"
-            + "\t".join(
-                [
-                    "synthetic",
-                    f"{fixture['fixture']}_{fixture['insert']}",
-                    fixture["paths"]["r1_fastq"],
-                    fixture["paths"]["r2_fastq"],
-                ]
-            )
-            + "\n",
+            + "".join("\t".join(row) + "\n" for row in sample_rows),
         )
         command.extend(["--samples-file", str(samples_file)])
     else:
@@ -1125,6 +1136,7 @@ def run_one_fixture(
     run_raptor_workflow_gpu: bool,
     run_raptor_workflow_single: bool,
     run_raptor_workflow_samples_file: bool,
+    run_raptor_workflow_samples_file_multi: bool,
     run_malformed_fastq_checks: bool,
     run_trinity: bool,
     require_trinity: bool,
@@ -1144,6 +1156,7 @@ def run_one_fixture(
         "raptor_workflow_gpu": None,
         "raptor_workflow_single": None,
         "raptor_workflow_samples_file": None,
+        "raptor_workflow_samples_file_multi": None,
         "malformed_fastq_check": None,
         "trinity": {
             "available": shutil.which("Trinity") is not None,
@@ -1286,6 +1299,11 @@ def run_one_fixture(
             out_dir, fixture, oracle_fasta, min_match_coverage, False, "samples_file"
         )
 
+    if run_raptor_workflow_samples_file_multi:
+        report["raptor_workflow_samples_file_multi"] = run_raptor_workflow_case(
+            out_dir, fixture, oracle_fasta, min_match_coverage, False, "samples_file_multi"
+        )
+
     if run_malformed_fastq_checks:
         report["malformed_fastq_check"] = run_malformed_fastq_check(out_dir, fixture)
 
@@ -1377,6 +1395,7 @@ def check_report_thresholds(
     raptor_workflow_gpu = report.get("raptor_workflow_gpu")
     raptor_workflow_single = report.get("raptor_workflow_single")
     raptor_workflow_samples_file = report.get("raptor_workflow_samples_file")
+    raptor_workflow_samples_file_multi = report.get("raptor_workflow_samples_file_multi")
     malformed_fastq_check = report.get("malformed_fastq_check")
     if raptor_normalize:
         if raptor_normalize.get("exit_code") != 0:
@@ -1619,6 +1638,30 @@ def check_report_thresholds(
                 f"samples-file selected component isoform F1 below threshold: {selected_f1} < {min_selected_f1}"
             )
 
+    if raptor_workflow_samples_file_multi:
+        if raptor_workflow_samples_file_multi.get("exit_code") != 0:
+            failures.append("raptor trinity multi-row samples-file workflow failed")
+        samples_metrics = raptor_workflow_samples_file_multi.get("metrics", {})
+        if not samples_metrics.get("output_exists"):
+            failures.append("raptor trinity multi-row samples-file workflow did not produce assembly output")
+        if samples_metrics.get("input_mode") != "samples_file_multi":
+            failures.append(
+                "raptor trinity multi-row samples-file workflow did not record samples-file input mode"
+            )
+        if samples_metrics.get("sample_count") != 2:
+            failures.append("raptor trinity multi-row samples-file workflow did not report two samples")
+        selected_truth_precision = samples_metrics.get("component_selected_truth_precision", {})
+        selected_precision = selected_truth_precision.get("precision", 0.0)
+        selected_f1 = selected_truth_precision.get("f1", 0.0)
+        if selected_precision < min_selected_precision:
+            failures.append(
+                f"multi-row samples-file selected component isoform precision below threshold: {selected_precision} < {min_selected_precision}"
+            )
+        if selected_f1 < min_selected_f1:
+            failures.append(
+                f"multi-row samples-file selected component isoform F1 below threshold: {selected_f1} < {min_selected_f1}"
+            )
+
     if malformed_fastq_check:
         malformed_metrics = malformed_fastq_check.get("metrics", {})
         if malformed_fastq_check.get("exit_code") == 0:
@@ -1663,6 +1706,7 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
     raptor_workflow_gpu = report.get("raptor_workflow_gpu") or {}
     raptor_workflow_single = report.get("raptor_workflow_single") or {}
     raptor_workflow_samples_file = report.get("raptor_workflow_samples_file") or {}
+    raptor_workflow_samples_file_multi = report.get("raptor_workflow_samples_file_multi") or {}
     malformed_fastq_check = report.get("malformed_fastq_check") or {}
     trinity = report.get("trinity") or {}
     metrics = raptor.get("metrics", {})
@@ -1671,6 +1715,7 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
     gpu_workflow_metrics = raptor_workflow_gpu.get("metrics", {})
     single_workflow_metrics = raptor_workflow_single.get("metrics", {})
     samples_workflow_metrics = raptor_workflow_samples_file.get("metrics", {})
+    samples_multi_workflow_metrics = raptor_workflow_samples_file_multi.get("metrics", {})
     malformed_metrics = malformed_fastq_check.get("metrics", {})
     trinity_result = trinity.get("result", {})
     trinity_metrics = trinity_result.get("metrics", {})
@@ -1680,6 +1725,7 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
     gpu_workflow_resources = raptor_workflow_gpu.get("resource_usage", {})
     single_workflow_resources = raptor_workflow_single.get("resource_usage", {})
     samples_workflow_resources = raptor_workflow_samples_file.get("resource_usage", {})
+    samples_multi_workflow_resources = raptor_workflow_samples_file_multi.get("resource_usage", {})
     trinity_resources = trinity_result.get("resource_usage", {})
     raptor_gpu = raptor.get("gpu_usage", {})
     normalize_gpu = raptor_normalize.get("gpu_usage", {})
@@ -1795,6 +1841,30 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
             "component_selected_truth_precision", {}
         ).get("f1"),
         "raptor_samples_file_workflow_selected_isoform_lengths": samples_workflow_metrics.get(
+            "component_selected_isoform_lengths"
+        ),
+        "raptor_samples_file_multi_workflow_exit_code": raptor_workflow_samples_file_multi.get(
+            "exit_code"
+        ),
+        "raptor_samples_file_multi_workflow_elapsed_seconds": raptor_workflow_samples_file_multi.get(
+            "elapsed_seconds"
+        ),
+        "raptor_samples_file_multi_workflow_max_rss_kb": samples_multi_workflow_resources.get(
+            "max_rss_kb"
+        ),
+        "raptor_samples_file_multi_workflow_input_mode": samples_multi_workflow_metrics.get(
+            "input_mode"
+        ),
+        "raptor_samples_file_multi_workflow_sample_count": samples_multi_workflow_metrics.get(
+            "sample_count"
+        ),
+        "raptor_samples_file_multi_workflow_selected_precision": samples_multi_workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("precision"),
+        "raptor_samples_file_multi_workflow_selected_f1": samples_multi_workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("f1"),
+        "raptor_samples_file_multi_workflow_selected_isoform_lengths": samples_multi_workflow_metrics.get(
             "component_selected_isoform_lengths"
         ),
         "malformed_fastq_exit_code": malformed_fastq_check.get("exit_code"),
@@ -2049,6 +2119,11 @@ def main() -> int:
         help="Run the raptor trinity end-to-end CLI through a Trinity-style samples file",
     )
     parser.add_argument(
+        "--run-raptor-workflow-samples-file-multi",
+        action="store_true",
+        help="Run the raptor trinity end-to-end CLI through a multi-row Trinity-style samples file",
+    )
+    parser.add_argument(
         "--run-malformed-fastq-checks",
         action="store_true",
         help="Run negative FASTQ validation checks against the raptor trinity workflow",
@@ -2123,6 +2198,7 @@ def main() -> int:
             args.run_raptor_workflow_gpu,
             args.run_raptor_workflow_single,
             args.run_raptor_workflow_samples_file,
+            args.run_raptor_workflow_samples_file_multi,
             args.run_malformed_fastq_checks,
             run_trinity,
             require_trinity,

@@ -331,11 +331,13 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
     raptor_workflow_gpu = payload.get("raptor_workflow_gpu") or {}
     raptor_workflow_single = payload.get("raptor_workflow_single") or {}
     raptor_workflow_samples_file = payload.get("raptor_workflow_samples_file") or {}
+    raptor_workflow_samples_file_multi = payload.get("raptor_workflow_samples_file_multi") or {}
     malformed_fastq_check = payload.get("malformed_fastq_check") or {}
     workflow_metrics = raptor_workflow.get("metrics", {})
     gpu_workflow_metrics = raptor_workflow_gpu.get("metrics", {})
     single_workflow_metrics = raptor_workflow_single.get("metrics", {})
     samples_workflow_metrics = raptor_workflow_samples_file.get("metrics", {})
+    samples_multi_workflow_metrics = raptor_workflow_samples_file_multi.get("metrics", {})
     malformed_metrics = malformed_fastq_check.get("metrics", {})
     trinity = payload.get("trinity") or {}
     trinity_result = trinity.get("result", {})
@@ -344,6 +346,7 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
     gpu_workflow_resources = raptor_workflow_gpu.get("resource_usage", {})
     single_workflow_resources = raptor_workflow_single.get("resource_usage", {})
     samples_workflow_resources = raptor_workflow_samples_file.get("resource_usage", {})
+    samples_multi_workflow_resources = raptor_workflow_samples_file_multi.get("resource_usage", {})
     trinity_resources = trinity_result.get("resource_usage", {})
     workflow_gpu = raptor_workflow.get("gpu_usage", {})
     gpu_workflow_gpu = raptor_workflow_gpu.get("gpu_usage", {})
@@ -418,6 +421,30 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
             "component_selected_truth_precision", {}
         ).get("f1"),
         "raptor_samples_file_workflow_selected_isoform_lengths": samples_workflow_metrics.get(
+            "component_selected_isoform_lengths"
+        ),
+        "raptor_samples_file_multi_workflow_exit_code": raptor_workflow_samples_file_multi.get(
+            "exit_code"
+        ),
+        "raptor_samples_file_multi_workflow_elapsed_seconds": raptor_workflow_samples_file_multi.get(
+            "elapsed_seconds"
+        ),
+        "raptor_samples_file_multi_workflow_max_rss_kb": samples_multi_workflow_resources.get(
+            "max_rss_kb"
+        ),
+        "raptor_samples_file_multi_workflow_input_mode": samples_multi_workflow_metrics.get(
+            "input_mode"
+        ),
+        "raptor_samples_file_multi_workflow_sample_count": samples_multi_workflow_metrics.get(
+            "sample_count"
+        ),
+        "raptor_samples_file_multi_workflow_selected_precision": samples_multi_workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("precision"),
+        "raptor_samples_file_multi_workflow_selected_f1": samples_multi_workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("f1"),
+        "raptor_samples_file_multi_workflow_selected_isoform_lengths": samples_multi_workflow_metrics.get(
             "component_selected_isoform_lengths"
         ),
         "malformed_fastq_exit_code": malformed_fastq_check.get("exit_code"),
@@ -523,6 +550,12 @@ def run_fixture(
             defaults.get("run_raptor_workflow_samples_file", False),
         )
     )
+    run_raptor_workflow_samples_file_multi = bool(
+        fixture.get(
+            "run_raptor_workflow_samples_file_multi",
+            defaults.get("run_raptor_workflow_samples_file_multi", False),
+        )
+    )
     skip_raptor = bool(fixture.get("skip_raptor", defaults.get("skip_raptor", True)))
     command = [
         sys.executable,
@@ -550,6 +583,8 @@ def run_fixture(
         command.append("--run-raptor-workflow-single")
     if run_raptor_workflow_samples_file:
         command.append("--run-raptor-workflow-samples-file")
+    if run_raptor_workflow_samples_file_multi:
+        command.append("--run-raptor-workflow-samples-file-multi")
     if run_malformed_fastq_checks:
         command.append("--run-malformed-fastq-checks")
     if skip_raptor:
