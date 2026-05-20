@@ -47,7 +47,9 @@ small fixtures require exact normalized kept-pair retention. The
 normalization target of `200`; current measured retention is Raptor `1703/5100`
 pairs and Trinity `1697/5100` pairs, so the candidate gate allows kept-pair
 fraction delta up to `0.02`. This is a retention-count gate, not finished normalization
-parity.
+parity. The harness also records retained original-pair overlap; current
+high-depth overlap is `570` pairs with Jaccard `0.201413`, so retained-read
+identity remains an explicit gap.
 
 If Trinity is installed on `PATH`, the same panel can also run Trinity:
 
@@ -250,7 +252,7 @@ The script records:
 - comma-separated direct input mode and reported input-group count when requested
 - Trinity-style `SS_lib_type` value and actual assembly input paths when requested
 - malformed FASTQ rejection command, exit status, output absence, and stderr context
-- Raptor and Trinity normalized kept-pair counts/fractions when requested
+- Raptor and Trinity normalized kept-pair counts/fractions and retained-pair overlap when requested
 - Trinity paired-end command, exit status, output metrics, and truth recovery when requested
 - whether Trinity was available, which executable was resolved, and `Trinity --version` output
 - the current Raptor limitation that paired-end evidence is only used as reverse-complemented mate sequence evidence, not yet full Butterfly-style pair path constraints

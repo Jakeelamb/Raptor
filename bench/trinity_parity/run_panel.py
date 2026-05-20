@@ -583,6 +583,18 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
         if normalize_metrics.get("kept_pair_fraction") is not None
         and trinity_metrics.get("normalized_kept_pair_fraction") is not None
         else None,
+        "normalization_retained_pair_overlap": trinity_metrics.get(
+            "retained_pair_overlap"
+        ),
+        "normalization_retained_pair_jaccard": trinity_metrics.get(
+            "retained_pair_jaccard"
+        ),
+        "normalization_retained_pair_precision": trinity_metrics.get(
+            "retained_pair_precision"
+        ),
+        "normalization_retained_pair_recall": trinity_metrics.get(
+            "retained_pair_recall"
+        ),
         "trinity_lengths": trinity_metrics.get("lengths"),
         "trinity_truth_min_coverage": trinity_metrics.get("truth_recovery", {}).get(
             "min_best_coverage"

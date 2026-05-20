@@ -376,6 +376,54 @@ def normalized_pair_metrics(left: Path, right: Path, input_pairs: int) -> dict[s
     }
 
 
+def fastq_record_names(path: Path) -> list[str]:
+    names: list[str] = []
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle):
+            if line_number % 4 != 0:
+                continue
+            header = line.strip()
+            if header.startswith("@"):
+                names.append(header[1:].split()[0])
+    return names
+
+
+def fastq_pair_indices(path: Path, source_name_to_index: dict[str, int]) -> set[int]:
+    indices: set[int] = set()
+    for name in fastq_record_names(path):
+        if name.startswith("read") and "/" in name:
+            numeric = name[4:].split("/", 1)[0]
+            if numeric.isdigit():
+                indices.add(int(numeric))
+                continue
+        source_index = source_name_to_index.get(name)
+        if source_index is not None:
+            indices.add(source_index)
+    return indices
+
+
+def retained_pair_overlap_metrics(
+    source_left: Path, raptor_left: Path, trinity_left: Path
+) -> dict[str, object]:
+    source_name_to_index = {
+        name: idx for idx, name in enumerate(fastq_record_names(source_left), start=1)
+    }
+    raptor_indices = fastq_pair_indices(raptor_left, source_name_to_index)
+    trinity_indices = fastq_pair_indices(trinity_left, source_name_to_index)
+    intersection = raptor_indices & trinity_indices
+    union = raptor_indices | trinity_indices
+    precision = len(intersection) / len(raptor_indices) if raptor_indices else 0.0
+    recall = len(intersection) / len(trinity_indices) if trinity_indices else 0.0
+    return {
+        "retained_pair_overlap": len(intersection),
+        "retained_pair_union": len(union),
+        "retained_pair_jaccard": round(len(intersection) / len(union), 6) if union else 0.0,
+        "retained_pair_precision": round(precision, 6),
+        "retained_pair_recall": round(recall, 6),
+    }
+
+
 def trinity_normalization_metrics(trinity_out: Path, input_pairs: int) -> dict[str, object]:
     norm_dir = trinity_out / "insilico_read_normalization"
     left_candidates = sorted(norm_dir.glob("*_R1.fastq.gz.normalized_*.fq"))
@@ -1718,6 +1766,18 @@ def run_one_fixture(
                     trinity_out, int(fixture["paired_end_pairs"])
                 )
             )
+            raptor_normalize = report.get("raptor_normalize") or {}
+            raptor_normalize_metrics = raptor_normalize.get("metrics", {})
+            raptor_normalized_left = raptor_normalize_metrics.get("normalized_r1")
+            trinity_normalized_left = metrics.get("normalized_r1")
+            if raptor_normalized_left and trinity_normalized_left:
+                metrics.update(
+                    retained_pair_overlap_metrics(
+                        Path(fixture["paths"]["r1_fastq"]),
+                        Path(raptor_normalized_left),
+                        Path(trinity_normalized_left),
+                    )
+                )
             result["metrics"] = metrics
             report["trinity"]["result"] = result
 
@@ -2605,6 +2665,18 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         if normalize_metrics.get("kept_pair_fraction") is not None
         and trinity_metrics.get("normalized_kept_pair_fraction") is not None
         else None,
+        "normalization_retained_pair_overlap": trinity_metrics.get(
+            "retained_pair_overlap"
+        ),
+        "normalization_retained_pair_jaccard": trinity_metrics.get(
+            "retained_pair_jaccard"
+        ),
+        "normalization_retained_pair_precision": trinity_metrics.get(
+            "retained_pair_precision"
+        ),
+        "normalization_retained_pair_recall": trinity_metrics.get(
+            "retained_pair_recall"
+        ),
         "trinity_lengths": trinity_metrics.get("lengths"),
         "trinity_n50": trinity_metrics.get("n50"),
         "trinity_truth_min_coverage": trinity_metrics.get("truth_recovery", {}).get(
