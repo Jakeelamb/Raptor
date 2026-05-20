@@ -670,7 +670,7 @@ pub enum Commands {
         max_reads: usize,
 
         /// Minimum transcript/contig length
-        #[arg(long, default_value_t = 50)]
+        #[arg(long, default_value_t = 200)]
         min_len: usize,
     },
 

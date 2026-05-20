@@ -70,6 +70,13 @@ existing output emits 12,569 short transcripts with N50 233. The manifest F1
 gate is now enforced, and this case currently fails at reciprocal FASTA F1
 `0.0 < 0.9`.
 
+After raising the Raptor Trinity workflow default `--min-len` to 200 and bounding
+large fragmented component artifacts, the same public case completes with 4,392
+Raptor contigs, N50 328, and max length 886. Trinity in the same bounded output
+root emits 73 transcripts with N50 5,399. Reciprocal FASTA F1 remains `0.0`, so
+the real blocker is still public-case contiguity/isoform reconstruction, not
+only short-fragment filtering.
+
 ## Candidate Panel
 
 `panel.json` defines the current deterministic candidate panel. It is not the

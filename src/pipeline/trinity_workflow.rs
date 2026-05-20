@@ -19,6 +19,7 @@ use std::time::Instant;
 
 const MIN_SELECTED_NOVEL_SEQUENCE_FRACTION: f64 = 0.5;
 const COMPONENT_CONTIG_SELECTION_METHOD: &str = "component_contig_evidence_score_v2";
+const MAX_EXHAUSTIVE_COMPONENT_ARTIFACT_CONTIGS: usize = 1_000;
 
 #[derive(Debug, Clone)]
 pub struct TrinityWorkflowConfig {
@@ -280,6 +281,35 @@ fn write_component_artifacts(
     reads2_path: Option<&str>,
 ) -> io::Result<ComponentArtifacts> {
     let contigs = read_contigs_from_fasta(assembly_fasta)?;
+    if contigs.len() > MAX_EXHAUSTIVE_COMPONENT_ARTIFACT_CONTIGS {
+        write_json(
+            component_path,
+            &Vec::<RaptorComponent>::new(),
+            "component report",
+        )?;
+        write_json(
+            component_graphs_path,
+            &Vec::<RaptorComponentGraph>::new(),
+            "component graph report",
+        )?;
+        fs::write(component_paths_fasta, b"")?;
+        fs::write(component_selected_isoforms_fasta, b"")?;
+        write_json(
+            component_selected_isoforms_json,
+            &Vec::<SelectedComponentIsoform>::new(),
+            "selected component isoform report",
+        )?;
+        write_json(
+            component_isoform_candidates_json,
+            &Vec::<ComponentIsoformCandidate>::new(),
+            "component isoform candidate report",
+        )?;
+        return Ok(ComponentArtifacts {
+            components: Vec::new(),
+            component_graphs: Vec::new(),
+            clustering: "skipped_fragmented_large_contig_set",
+        });
+    }
     let reads1 = read_fastq_sequences(reads1_path)?;
     let reads2 = reads2_path.map(read_fastq_sequences).transpose()?;
     if let Some(reads2) = &reads2 {
