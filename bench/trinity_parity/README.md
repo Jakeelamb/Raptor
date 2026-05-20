@@ -39,6 +39,19 @@ These checks validate the manifest and local data readiness. Download and full
 Raptor-vs-Trinity execution still need to be implemented before the public panel
 can support a parity claim.
 
+Materialize datasets with declared recipes:
+
+```bash
+python3 bench/trinity_parity/materialize_public_panel.py
+```
+
+The current manifest can automatically materialize the two GitHub-backed cases:
+`trinity_workshop_spombe_rf` and `trinity_source_test_assembly`. The
+`mini_human_x_genome_guided_reference` case is intentionally still manual until
+a stable direct course-data bundle is encoded. After materializing the automatic
+cases, `plan_public_panel.py --require-data` should still fail, but with
+`ready_dataset_count=2` and only mini-humanX inputs missing.
+
 ## Candidate Panel
 
 `panel.json` defines the current deterministic candidate panel. It is not the

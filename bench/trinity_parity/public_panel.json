@@ -37,6 +37,12 @@
         "url": "https://github.com/trinityrnaseq/RNASeq_Trinity_Tuxedo_Workshop",
         "documentation_url": "https://github-wiki-see.page/m/trinityrnaseq/RNASeq_Trinity_Tuxedo_Workshop/wiki/Trinity-De-novo-Transcriptome-Assembly-Workshop"
       },
+      "materialization": {
+        "type": "git_sparse",
+        "repo": "https://github.com/trinityrnaseq/RNASeq_Trinity_Tuxedo_Workshop.git",
+        "ref": "37df0cd4b33d6e9d4b59105516c8cc5cb2954c16",
+        "paths": ["RNASEQ_data", "GENOME_data"]
+      },
       "description": "Small genuine fission-yeast strand-specific paired-end 76 bp tutorial panel with four expression conditions.",
       "library": {
         "layout": "paired",
@@ -87,6 +93,12 @@
         "url": "https://github.com/trinityrnaseq/trinityrnaseq",
         "documentation_url": "https://github.com/trinityrnaseq/trinityrnaseq/wiki/Running-Trinity"
       },
+      "materialization": {
+        "type": "git_sparse",
+        "repo": "https://github.com/trinityrnaseq/trinityrnaseq.git",
+        "ref": "653e43a777390bb5cde27d6f27673dadfe1c7115",
+        "paths": ["sample_data/test_Trinity_Assembly"]
+      },
       "description": "Upstream Trinity smoke dataset distributed with Trinity and used by external Trinity examples.",
       "library": {
         "layout": "paired",
@@ -122,6 +134,10 @@
         "name": "Griffith Lab RNA Bio Trinity tutorial mini_humanX",
         "url": "https://rnabio.org/module-06-trinity/0006/02/01/Trinity_Assembly_And_Analysis/",
         "documentation_url": "https://rnabio.org/module-06-trinity/0006/02/01/Trinity_Assembly_And_Analysis/"
+      },
+      "materialization": {
+        "type": "manual",
+        "note": "Stage reads_1.fq.gz, reads_2.fq.gz, minigenome.fa, and minigenome.gtf from the Griffith Lab course data into this dataset root."
       },
       "description": "Small paired-end human X-chromosome tutorial subset with matching minigenome and GTF for reference-recovery checks.",
       "library": {
