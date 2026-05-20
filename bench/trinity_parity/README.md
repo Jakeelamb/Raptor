@@ -13,13 +13,14 @@ Current status: scaffold only. It intentionally starts with a tiny truth-known f
 - truth FASTA
 - truth metadata JSON
 
-It then runs the current Raptor production CLI on the single-end reads:
+It then runs the current Raptor production CLI on the single-end reads and compares the output against both generated truth and the checked-in frozen oracle at `oracles/tiny_alt_isoform.fa`:
 
 ```bash
 python3 bench/trinity_parity/run_tiny_fixture.py
 ```
 
 By default the harness fails if minimum best truth coverage is below `0.95`.
+It also fails if minimum best oracle coverage is below `0.95`.
 
 Outputs are written under `target/trinity_parity/tiny_alt_isoform/`.
 
@@ -28,6 +29,7 @@ The script records:
 - exact command lines
 - tool versions where available
 - transcript length/count metrics
+- truth and oracle recovery metrics
 - whether Trinity was available on `PATH`
 - the current Raptor limitation that the normal `assemble` CLI accepts one input FASTQ and does not yet consume paired-end evidence
 

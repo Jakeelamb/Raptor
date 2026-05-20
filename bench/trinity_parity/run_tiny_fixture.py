@@ -20,6 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUT = ROOT / "target" / "trinity_parity" / "tiny_alt_isoform"
+DEFAULT_ORACLE = ROOT / "bench" / "trinity_parity" / "oracles" / "tiny_alt_isoform.fa"
 
 
 def deterministic_dna(label: str, length: int) -> str:
@@ -128,23 +129,23 @@ def longest_common_substring_len(a: str, b: str) -> int:
     return best
 
 
-def truth_recovery_metrics(truth_fasta: Path, assembly_fasta: Path) -> dict[str, object]:
-    truth = read_fasta_records(truth_fasta)
+def fasta_recovery_metrics(reference_fasta: Path, assembly_fasta: Path) -> dict[str, object]:
+    reference = read_fasta_records(reference_fasta)
     assembled = read_fasta_records(assembly_fasta)
-    per_transcript: dict[str, object] = {}
-    for truth_name, truth_seq in truth.items():
+    per_reference: dict[str, object] = {}
+    for reference_name, reference_seq in reference.items():
         best = 0
         best_contig = None
         for contig_name, contig_seq in assembled.items():
-            forward = longest_common_substring_len(truth_seq, contig_seq)
-            reverse = longest_common_substring_len(truth_seq, revcomp(contig_seq))
+            forward = longest_common_substring_len(reference_seq, contig_seq)
+            reverse = longest_common_substring_len(reference_seq, revcomp(contig_seq))
             observed = max(forward, reverse)
             if observed > best:
                 best = observed
                 best_contig = contig_name
-        coverage = best / len(truth_seq) if truth_seq else 0.0
-        per_transcript[truth_name] = {
-            "truth_length": len(truth_seq),
+        coverage = best / len(reference_seq) if reference_seq else 0.0
+        per_reference[reference_name] = {
+            "reference_length": len(reference_seq),
             "best_matching_bases": best,
             "best_contig": best_contig,
             "best_coverage": round(coverage, 6),
@@ -152,18 +153,28 @@ def truth_recovery_metrics(truth_fasta: Path, assembly_fasta: Path) -> dict[str,
 
     coverages = [
         entry["best_coverage"]
-        for entry in per_transcript.values()
+        for entry in per_reference.values()
         if isinstance(entry, dict)
     ]
     return {
-        "truth_transcript_count": len(truth),
+        "reference_transcript_count": len(reference),
         "assembled_record_count": len(assembled),
         "mean_best_coverage": round(sum(coverages) / len(coverages), 6)
         if coverages
         else 0.0,
         "min_best_coverage": min(coverages) if coverages else 0.0,
-        "per_transcript": per_transcript,
+        "per_reference": per_reference,
     }
+
+
+def truth_recovery_metrics(truth_fasta: Path, assembly_fasta: Path) -> dict[str, object]:
+    metrics = fasta_recovery_metrics(truth_fasta, assembly_fasta)
+    metrics["truth_transcript_count"] = metrics.pop("reference_transcript_count")
+    metrics["per_transcript"] = metrics.pop("per_reference")
+    for entry in metrics["per_transcript"].values():
+        if isinstance(entry, dict):
+            entry["truth_length"] = entry.pop("reference_length")
+    return metrics
 
 
 def n50(lengths: list[int]) -> int:
@@ -263,7 +274,9 @@ def main() -> int:
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--skip-raptor", action="store_true")
     parser.add_argument("--run-trinity", action="store_true")
+    parser.add_argument("--oracle-fasta", type=Path, default=DEFAULT_ORACLE)
     parser.add_argument("--min-truth-coverage", type=float, default=0.95)
+    parser.add_argument("--min-oracle-coverage", type=float, default=0.95)
     args = parser.parse_args()
 
     out_dir = args.out_dir.resolve()
@@ -278,6 +291,11 @@ def main() -> int:
             "available": shutil.which("Trinity") is not None,
             "ran": False,
             "note": "Trinity is optional for this scaffold until the benchmark panel is frozen.",
+        },
+        "oracle": {
+            "path": str(args.oracle_fasta),
+            "available": args.oracle_fasta.exists(),
+            "note": "Checked-in tiny oracle is a frozen stand-in until Trinity is installed or a Trinity oracle is captured.",
         },
         "known_limitations": [
             "Current raptor assemble CLI accepts one input FASTQ, so this scaffold runs single-end reads only.",
@@ -318,6 +336,10 @@ def main() -> int:
             metrics["truth_recovery"] = truth_recovery_metrics(
                 Path(fixture["paths"]["truth_fasta"]), output_fasta
             )
+            if args.oracle_fasta.exists():
+                metrics["oracle_recovery"] = fasta_recovery_metrics(
+                    args.oracle_fasta, output_fasta
+                )
         result["metrics"] = metrics
         report["raptor"] = result
 
@@ -362,6 +384,16 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
+        oracle_recovery = metrics.get("oracle_recovery")
+        if oracle_recovery:
+            min_oracle_coverage = oracle_recovery.get("min_best_coverage", 0.0)
+            if min_oracle_coverage < args.min_oracle_coverage:
+                print(
+                    "oracle recovery below threshold: "
+                    f"{min_oracle_coverage} < {args.min_oracle_coverage}",
+                    file=sys.stderr,
+                )
+                return 1
     return 0
 
 

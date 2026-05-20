@@ -87,10 +87,12 @@ After adding bounded read-overlap rescue for small fragmented transcriptome inpu
 - N50: 252
 - mean best truth coverage: 1.0
 - minimum best truth coverage: 1.0
+- mean best frozen-oracle coverage: 1.0
+- minimum best frozen-oracle coverage: 1.0
 - truth transcripts: 252 bp and 240 bp
 - Trinity executable on PATH: false
 
-Interpretation: current `raptor assemble` now recovers the two truth transcripts exactly on this tiny non-repetitive two-isoform fixture. This is useful Inchworm-direction progress, but it is still not Trinity parity: Trinity is not yet run or frozen as an oracle, paired-end evidence is not consumed by this path, and broader isoform correctness is not measured.
+Interpretation: current `raptor assemble` now recovers the two truth transcripts exactly on this tiny non-repetitive two-isoform fixture and matches the checked-in frozen oracle at `bench/trinity_parity/oracles/tiny_alt_isoform.fa`. This is useful Inchworm-direction progress, but it is still not Trinity parity: Trinity is not yet run, paired-end evidence is not consumed by this path, and broader isoform correctness is not measured.
 
 ## Misleading Or Risky Areas
 
@@ -102,7 +104,7 @@ Interpretation: current `raptor assemble` now recovers the two truth transcripts
 
 ## Immediate Next Work
 
-1. Extend `bench/trinity_parity/run_tiny_fixture.py` to compare against Trinity when Trinity is installed or a frozen Trinity oracle is supplied.
+1. Extend `bench/trinity_parity/run_tiny_fixture.py` to capture and compare live Trinity output when Trinity is installed.
 2. Replace stale `bench/README.md` claims about missing scripts with the new harness contract.
 3. Fix normalization single-codepath drift: one implementation should own k, target coverage, min abundance, paired/single behavior, and GPU/no-GPU semantics.
 4. Use the tiny fixture to drive Inchworm-equivalent improvements until the output matches truth/transcript-oracle identity and not just length scale.
