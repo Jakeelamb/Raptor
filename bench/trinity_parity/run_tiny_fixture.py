@@ -109,11 +109,26 @@ def component_graph_metrics(path: Path) -> dict[str, object]:
     if not path.exists():
         return {"component_graphs_exist": False}
     graphs = json.loads(path.read_text(encoding="utf-8"))
+    edges = [
+        edge
+        for graph in graphs
+        for edge in graph.get("edges", [])
+        if isinstance(edge, dict)
+    ]
     return {
         "component_graphs_exist": True,
         "component_graph_count": len(graphs),
         "component_graph_node_count": sum(int(graph.get("node_count", 0)) for graph in graphs),
         "component_graph_edge_count": sum(int(graph.get("edge_count", 0)) for graph in graphs),
+        "component_graph_edge_read_support": sum(
+            int(edge.get("shared_read_count", 0)) for edge in edges
+        ),
+        "component_graph_edge_pair_support": sum(
+            int(edge.get("shared_pair_count", 0)) for edge in edges
+        ),
+        "component_graph_edge_observed_kmers": sum(
+            int(edge.get("shared_observed_kmer_count", 0)) for edge in edges
+        ),
     }
 
 
@@ -617,6 +632,12 @@ def check_report_thresholds(
             failures.append("raptor trinity workflow emitted empty component graphs")
         if workflow_metrics.get("component_graph_edge_count", 0) < 1:
             failures.append("raptor trinity workflow did not emit component graph edges")
+        if workflow_metrics.get("component_graph_edge_read_support", 0) < 1:
+            failures.append("raptor trinity workflow component graph edges lack read support")
+        if workflow_metrics.get("component_graph_edge_pair_support", 0) < 1:
+            failures.append("raptor trinity workflow component graph edges lack pair support")
+        if workflow_metrics.get("component_graph_edge_observed_kmers", 0) < 1:
+            failures.append("raptor trinity workflow component graph edges lack observed k-mer support")
         if workflow_metrics.get("component_assigned_read_count", 0) < 1:
             failures.append("raptor trinity workflow did not assign reads to components")
         if workflow_metrics.get("component_assigned_pair_count", 0) < 1:
@@ -687,6 +708,15 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         "workflow_component_graph_count": workflow_metrics.get("component_graph_count"),
         "workflow_component_graph_nodes": workflow_metrics.get("component_graph_node_count"),
         "workflow_component_graph_edges": workflow_metrics.get("component_graph_edge_count"),
+        "workflow_component_graph_edge_read_support": workflow_metrics.get(
+            "component_graph_edge_read_support"
+        ),
+        "workflow_component_graph_edge_pair_support": workflow_metrics.get(
+            "component_graph_edge_pair_support"
+        ),
+        "workflow_component_graph_edge_observed_kmers": workflow_metrics.get(
+            "component_graph_edge_observed_kmers"
+        ),
         "workflow_component_assigned_reads": workflow_metrics.get(
             "component_assigned_read_count"
         ),

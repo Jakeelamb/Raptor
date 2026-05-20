@@ -180,7 +180,13 @@ fn write_component_artifacts(
         }
     }
     assign_read_evidence_to_components(&contigs, &mut components, &reads1, reads2.as_deref());
-    let component_graphs = build_component_graphs(&contigs, &components, min_shared_bases);
+    let component_graphs = build_component_graphs(
+        &contigs,
+        &components,
+        min_shared_bases,
+        &reads1,
+        reads2.as_deref(),
+    );
     write_json(component_path, &components, "component report")?;
     write_json(
         component_graphs_path,

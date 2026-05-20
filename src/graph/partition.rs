@@ -35,6 +35,9 @@ pub struct RaptorComponentEdge {
     pub left_contig_id: usize,
     pub right_contig_id: usize,
     pub shared_bases: usize,
+    pub shared_read_count: usize,
+    pub shared_pair_count: usize,
+    pub shared_observed_kmer_count: usize,
 }
 
 pub fn merge_clusters(
@@ -133,6 +136,8 @@ pub fn build_component_graphs(
     contigs: &[Contig],
     components: &[RaptorComponent],
     min_shared_bases: usize,
+    reads1: &[String],
+    reads2: Option<&[String]>,
 ) -> Vec<RaptorComponentGraph> {
     let contigs_by_id: BTreeMap<usize, &Contig> =
         contigs.iter().map(|contig| (contig.id, contig)).collect();
@@ -173,6 +178,15 @@ pub fn build_component_graphs(
                             left_contig_id: left_id,
                             right_contig_id: right_id,
                             shared_bases,
+                            shared_read_count: shared_read_support(left, right, reads1, reads2),
+                            shared_pair_count: shared_pair_support(left, right, reads1, reads2),
+                            shared_observed_kmer_count: shared_observed_kmer_count(
+                                left,
+                                right,
+                                reads1,
+                                reads2,
+                                25.min(shared_bases),
+                            ),
                         });
                     }
                 }
@@ -188,6 +202,97 @@ pub fn build_component_graphs(
             }
         })
         .collect()
+}
+
+fn shared_read_support(
+    left: &Contig,
+    right: &Contig,
+    reads1: &[String],
+    reads2: Option<&[String]>,
+) -> usize {
+    let left = left.sequence.as_str();
+    let right = right.sequence.as_str();
+    let mut count = reads1
+        .iter()
+        .filter(|read| read_matches_both(read, left, right))
+        .count();
+    if let Some(reads2) = reads2 {
+        count += reads2
+            .iter()
+            .filter(|read| read_matches_both(read, left, right))
+            .count();
+    }
+    count
+}
+
+fn shared_pair_support(
+    left: &Contig,
+    right: &Contig,
+    reads1: &[String],
+    reads2: Option<&[String]>,
+) -> usize {
+    let Some(reads2) = reads2 else {
+        return 0;
+    };
+    let left = left.sequence.as_str();
+    let right = right.sequence.as_str();
+    reads1
+        .iter()
+        .zip(reads2.iter())
+        .filter(|(read1, read2)| {
+            let pair_hits_left =
+                read_matches_sequence(read1, left) || read_matches_sequence(read2, left);
+            let pair_hits_right =
+                read_matches_sequence(read1, right) || read_matches_sequence(read2, right);
+            pair_hits_left && pair_hits_right
+        })
+        .count()
+}
+
+fn shared_observed_kmer_count(
+    left: &Contig,
+    right: &Contig,
+    reads1: &[String],
+    reads2: Option<&[String]>,
+    k: usize,
+) -> usize {
+    let k = k.min(left.sequence.len()).min(right.sequence.len()).max(1);
+    let mut observed = BTreeSet::new();
+    collect_observed_kmers(reads1, k, &mut observed);
+    if let Some(reads2) = reads2 {
+        collect_observed_kmers(reads2, k, &mut observed);
+    }
+    observed
+        .into_iter()
+        .filter(|kmer| {
+            sequence_contains(&left.sequence, kmer) && sequence_contains(&right.sequence, kmer)
+        })
+        .count()
+}
+
+fn collect_observed_kmers(reads: &[String], k: usize, observed: &mut BTreeSet<String>) {
+    for read in reads {
+        if read.len() < k {
+            continue;
+        }
+        for window in read.as_bytes().windows(k) {
+            observed.insert(String::from_utf8_lossy(window).to_ascii_uppercase());
+        }
+        let read_rc = reverse_complement(read);
+        for window in read_rc.as_bytes().windows(k) {
+            observed.insert(String::from_utf8_lossy(window).to_ascii_uppercase());
+        }
+    }
+}
+
+fn read_matches_both(read: &str, left: &str, right: &str) -> bool {
+    read_matches_sequence(read, left) && read_matches_sequence(read, right)
+}
+
+fn read_matches_sequence(read: &str, sequence: &str) -> bool {
+    let read_rc = reverse_complement(read);
+    sequence_contains(sequence, read)
+        || (!read_rc.eq_ignore_ascii_case(read) && sequence_contains(sequence, &read_rc))
 }
 
 fn contig_component_index(components: &[RaptorComponent]) -> BTreeMap<usize, usize> {
@@ -343,7 +448,9 @@ mod tests {
             contig(30, "TATATATATATA"),
         ];
         let components = cluster_contigs_by_shared_sequence(&contigs, 8);
-        let graphs = build_component_graphs(&contigs, &components, 8);
+        let reads1 = vec!["CCCCGGGG".to_string()];
+        let reads2 = vec!["CCCCGGGG".to_string()];
+        let graphs = build_component_graphs(&contigs, &components, 8, &reads1, Some(&reads2));
 
         assert_eq!(graphs.len(), 2);
         assert_eq!(graphs[0].component_id, 0);
@@ -352,6 +459,9 @@ mod tests {
         assert_eq!(graphs[0].edges[0].left_contig_id, 10);
         assert_eq!(graphs[0].edges[0].right_contig_id, 20);
         assert_eq!(graphs[0].edges[0].shared_bases, 8);
+        assert_eq!(graphs[0].edges[0].shared_read_count, 2);
+        assert_eq!(graphs[0].edges[0].shared_pair_count, 1);
+        assert_eq!(graphs[0].edges[0].shared_observed_kmer_count, 1);
         assert_eq!(graphs[1].node_count, 1);
         assert_eq!(graphs[1].edge_count, 0);
     }
