@@ -17,10 +17,13 @@ impl GpuOverlapFinder {
     /// * `max_results` - Maximum number of overlaps to return
     pub fn new(max_contigs: usize, max_results: usize) -> Result<Self, String> {
         let kernel_src = include_str!("kernels/overlap.cl");
+        let (platform, device) = crate::gpu::kmer_gpu::first_opencl_device()?;
 
         // Use 2D work size for the 2D kernel
         let pro_que = ProQue::builder()
             .src(kernel_src)
+            .platform(platform)
+            .device(device)
             .dims([max_contigs, max_contigs])
             .build()
             .map_err(|e| format!("Failed to build OpenCL program: {}", e))?;

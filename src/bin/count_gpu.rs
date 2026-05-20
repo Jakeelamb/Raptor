@@ -57,6 +57,7 @@ fn main() -> std::process::ExitCode {
                 return std::process::ExitCode::FAILURE;
             }
         }
+        std::process::ExitCode::SUCCESS
     }
 
     #[cfg(not(feature = "gpu"))]
@@ -65,8 +66,6 @@ fn main() -> std::process::ExitCode {
         println!(
             "GPU support is not enabled. Compile with '--features gpu' to enable GPU support."
         );
-        return std::process::ExitCode::FAILURE;
+        std::process::ExitCode::FAILURE
     }
-
-    std::process::ExitCode::SUCCESS
 }

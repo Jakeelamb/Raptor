@@ -2,11 +2,53 @@
 #![allow(dead_code)]
 
 #[cfg(feature = "gpu")]
-use ocl::{flags, Buffer, ProQue};
+use ocl::{flags, Buffer, Device, Platform, ProQue};
 use std::collections::HashMap;
+#[cfg(feature = "gpu")]
+use std::panic::UnwindSafe;
+#[cfg(feature = "gpu")]
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(feature = "gpu")]
 use crate::gpu::kmer_encode::decode_kmer;
+
+#[cfg(feature = "gpu")]
+fn catch_opencl_discovery<T, F>(label: &str, f: F) -> Result<T, String>
+where
+    F: FnOnce() -> T + UnwindSafe,
+{
+    static PANIC_HOOK_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let lock = PANIC_HOOK_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = lock
+        .lock()
+        .map_err(|_| "OpenCL panic hook lock was poisoned".to_string())?;
+
+    let old_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let result = std::panic::catch_unwind(f);
+    std::panic::set_hook(old_hook);
+
+    result.map_err(|_| format!("{} panicked", label))
+}
+
+#[cfg(feature = "gpu")]
+pub(crate) fn first_opencl_device() -> Result<(Platform, Device), String> {
+    let platforms = catch_opencl_discovery("OpenCL platform discovery", Platform::list)?;
+    if platforms.is_empty() {
+        return Err("No OpenCL platforms found".to_string());
+    }
+
+    for platform in platforms {
+        let devices =
+            catch_opencl_discovery("OpenCL device discovery", || Device::list_all(&platform))?
+                .map_err(|err| format!("Failed to list OpenCL devices: {}", err))?;
+        if let Some(device) = devices.into_iter().next() {
+            return Ok((platform, device));
+        }
+    }
+
+    Err("No OpenCL devices found".to_string())
+}
 
 /// GPU k-mer counter using OpenCL
 #[cfg(feature = "gpu")]
@@ -33,9 +75,12 @@ impl GpuKmerCounter {
 
         // Load and compile the kernel
         let kernel_src = include_str!("kernels/count_kmers_v2.cl");
+        let (platform, device) = first_opencl_device()?;
 
         let pro_que = ProQue::builder()
             .src(kernel_src)
+            .platform(platform)
+            .device(device)
             .dims(max_reads)
             .build()
             .map_err(|e| format!("Failed to build OpenCL program: {}", e))?;
@@ -224,17 +269,7 @@ impl GpuKmerCounter {
 /// Check if GPU is available
 #[cfg(feature = "gpu")]
 pub fn is_gpu_available() -> bool {
-    match ocl::Platform::list() {
-        platforms if !platforms.is_empty() => {
-            // Check if any platform has devices
-            platforms.iter().any(|p| {
-                ocl::Device::list_all(p)
-                    .map(|d| !d.is_empty())
-                    .unwrap_or(false)
-            })
-        }
-        _ => false,
-    }
+    first_opencl_device().is_ok()
 }
 
 #[cfg(not(feature = "gpu"))]
@@ -245,7 +280,8 @@ pub fn is_gpu_available() -> bool {
 /// Get GPU device information
 #[cfg(feature = "gpu")]
 pub fn get_gpu_info() -> Option<String> {
-    let platforms = ocl::Platform::list();
+    let platforms =
+        catch_opencl_discovery("OpenCL platform discovery", ocl::Platform::list).ok()?;
     if platforms.is_empty() {
         return None;
     }
@@ -357,9 +393,12 @@ impl GpuKmerCounterNtHash {
 
         // Load the ntHash kernel
         let kernel_src = include_str!("kernels/count_kmers_nthash.cl");
+        let (platform, device) = first_opencl_device()?;
 
         let pro_que = ProQue::builder()
             .src(kernel_src)
+            .platform(platform)
+            .device(device)
             .dims(max_reads)
             .build()
             .map_err(|e| format!("Failed to build ntHash OpenCL program: {}", e))?;

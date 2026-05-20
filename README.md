@@ -1,4 +1,4 @@
-# 🦖 Raptor
+# Raptor
 
 **A blazing-fast, parallel, graph-based RNA-Seq assembler.**  
 _K-mer powered. Isoform aware. Built for scale._
@@ -12,20 +12,20 @@ _K-mer powered. Isoform aware. Built for scale._
 
 Raptor is a modern RNA-Seq assembler built for performance and biological accuracy. Inspired by Trinity, bbnorm, and SeqKit, Raptor supports:
 
-- 🧠 **Greedy k-mer extension** (adaptive k, canonical hashing)
-- ⚙️ **Parallel assembly** (Rayon, SIMD)
-- ⚡ **GPU-accelerated k-mer normalization**
-- 🔗 **Graph-based isoform stitching** (Butterfly-like traversal)
-- 💾 **Streaming input and low-RAM support**
-- 🧬 **Isoform filtering, polishing, quantification**
-- 📈 **PCA, heatmaps, TPM matrices, and GTF export**
-- 🖥️ **HPC support with MPI for distributed assembly**
+- **Greedy k-mer extension** (adaptive k, canonical hashing)
+- **Parallel assembly** (Rayon, SIMD)
+- **GPU-accelerated k-mer normalization and overlap detection through OpenCL**
+- **Graph-based isoform stitching** (Butterfly-like traversal)
+- **Streaming input and low-RAM support**
+- **Isoform filtering, polishing, quantification**
+- **PCA, heatmaps, TPM matrices, and GTF export**
+- **HPC-oriented shell workflows**
 
 ---
 
-## 📦 Installation
+## Installation
 
-> Requires Rust 1.72+ and optionally CUDA for GPU support.
+> Requires Rust 1.72+. GPU support currently uses OpenCL through the optional `gpu` feature.
 
 ```bash
 git clone https://github.com/Jakeelamb/Raptor.git
@@ -35,22 +35,29 @@ cargo build --release
 # Optional: compile with GPU support:
 cargo build --release --features "gpu"
 
-# Optional: compile with MPI support:
-cargo build --release --features "mpi-support"
-
-# Optional: compile with both GPU and MPI support:
-cargo build --release --features "gpu mpi-support"
-
 # HPC environments with module system:
-./compile_hpc.sh         # Default with MPI
+./compile_hpc.sh         # Default build path for HPC environments
 ./compile_hpc.sh --gpu   # With GPU support
-./compile_hpc.sh --no-mpi # Without MPI
 ```
 
-## 🚀 Quick Start
+## Known-Good Rescue Checks
+
+This branch was rescued on May 20, 2026 as `rescue/gpu-trinity`. The current restart checks are:
 
 ```bash
-# Normalize reads using GPU-accelerated CMS
+cargo check
+cargo check --features gpu
+cargo test
+cargo test --features gpu
+./scripts/rescue_smoke.sh
+```
+
+The GPU backend is OpenCL today. CUDA is a valid future backend for NVIDIA hardware, but it should be added only after the OpenCL path has a saved baseline to beat.
+
+## Quick Start
+
+```bash
+# Normalize reads using GPU-accelerated counting when an OpenCL device is available
 raptor normalize \
   -i sample_R1.fastq.gz \
   -o norm.fastq.gz \
@@ -70,7 +77,7 @@ raptor assemble \
 raptor stats --input my_assembly_isoform.counts.matrix --pca pca.png --heatmap heatmap.png
 ```
 
-## 🧪 Example Outputs
+## Example Outputs
 
 | File | Description |
 |------|-------------|
@@ -82,20 +89,19 @@ raptor stats --input my_assembly_isoform.counts.matrix --pca pca.png --heatmap h
 | my_assembly_isoform.counts.matrix | TPM + confidence scores |
 | heatmap.png, pca.png | Visual TPM analysis |
 
-## 🛠️ Key Features
+## Key Features
 
-✅ Adaptive k-mer selection  
-✅ Paired-end support  
-✅ Long-read polishing  
-✅ Splicing-aware path inference  
-✅ GFA2 + BandageNG annotations  
-✅ JSON/TSV metadata export  
-✅ Differential isoform comparison via GTF  
-✅ Optional MPI support for distributed processing  
-✅ Optional GPU acceleration for k-mer counting  
-✅ HPC-ready with job monitoring tools  
+- Adaptive k-mer selection
+- Paired-end support
+- Long-read polishing
+- Splicing-aware path inference
+- GFA2 + BandageNG annotations
+- JSON/TSV metadata export
+- Differential isoform comparison via GTF
+- Optional OpenCL acceleration for k-mer counting and overlap detection
+- HPC-ready shell scripts for build, submit, and monitoring workflows
 
-## 📊 Benchmarking
+## Benchmarking
 
 Raptor now ships with a reproducible genome-assembly benchmark workflow under [bench/genome_assembly](./bench/genome_assembly).
 
@@ -130,7 +136,7 @@ The generated cross-tool comparison view is in [docs/genome-benchmark-comparison
 
 The next-generation assembler redesign plan is in [docs/raptor-architecture-roadmap.md](./docs/raptor-architecture-roadmap.md).
 
-## 🖥️ HPC Support
+## HPC Support
 
 Raptor includes scripts specifically designed for high-performance computing environments:
 
@@ -141,7 +147,7 @@ Raptor includes scripts specifically designed for high-performance computing env
 
 For detailed HPC setup instructions, see [HPC_INSTRUCTIONS.md](./HPC_INSTRUCTIONS.md).
 
-## 📚 Citations & References
+## Citations & References
 
 If you use Raptor in your research, please cite the tool (citation coming soon) and the underlying software inspirations:
 
@@ -151,11 +157,11 @@ If you use Raptor in your research, please cite the tool (citation coming soon) 
 
 - SeqKit: https://bioinf.shenwei.me/seqkit/
 
-## 🤝 Contributing
+## Contributing
 
 PRs welcome! Run `cargo fmt && cargo clippy` before submitting.
 See CONTRIBUTING.md for details.
 
-## 🧠 License
+## License
 
 MIT © 2024 Jacob Lamb / Mueller Lab 
