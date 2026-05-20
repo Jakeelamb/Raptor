@@ -909,8 +909,14 @@ def run_raptor_workflow_case(
     oracle_fasta: Path,
     min_match_coverage: float,
     use_gpu: bool,
+    input_mode: str = "paired",
 ) -> dict[str, object]:
-    workflow_dir = out_dir / ("raptor_workflow_gpu" if use_gpu else "raptor_workflow")
+    if input_mode not in {"paired", "single"}:
+        raise ValueError(f"unknown workflow input mode: {input_mode}")
+    if input_mode == "single":
+        workflow_dir = out_dir / "raptor_workflow_single"
+    else:
+        workflow_dir = out_dir / ("raptor_workflow_gpu" if use_gpu else "raptor_workflow")
     workflow_fasta = workflow_dir / "raptor_trinity.fasta.gz"
     command = [
         "cargo",
@@ -924,15 +930,26 @@ def run_raptor_workflow_case(
         "--",
         "trinity",
         "--input1",
-        fixture["paths"]["r1_fastq"],
-        "--input2",
-        fixture["paths"]["r2_fastq"],
-        "--output-dir",
-        str(workflow_dir),
-        "--output-fasta",
-        str(workflow_fasta),
-        "--min-len",
-        "25",
+        fixture["paths"]["single_fastq"]
+        if input_mode == "single"
+        else fixture["paths"]["r1_fastq"],
+    ]
+    )
+    if input_mode == "paired":
+        command.extend(
+            [
+                "--input2",
+                fixture["paths"]["r2_fastq"],
+            ]
+        )
+    command.extend(
+        [
+            "--output-dir",
+            str(workflow_dir),
+            "--output-fasta",
+            str(workflow_fasta),
+            "--min-len",
+            "25",
         ]
     )
     if use_gpu:
@@ -940,6 +957,7 @@ def run_raptor_workflow_case(
     result = run_command(command, ROOT)
     metrics = {
         "gpu_requested": use_gpu,
+        "input_mode": input_mode,
         "output_exists": workflow_fasta.exists(),
         "output_fasta_bytes": file_size_bytes(workflow_fasta),
         "output_dir_footprint": directory_footprint(workflow_dir),
@@ -1037,6 +1055,7 @@ def run_one_fixture(
     assemble_normalized: bool,
     run_raptor_workflow: bool,
     run_raptor_workflow_gpu: bool,
+    run_raptor_workflow_single: bool,
     run_trinity: bool,
     require_trinity: bool,
     freeze_trinity_oracle: bool,
@@ -1053,6 +1072,7 @@ def run_one_fixture(
         "raptor": None,
         "raptor_workflow": None,
         "raptor_workflow_gpu": None,
+        "raptor_workflow_single": None,
         "trinity": {
             "available": shutil.which("Trinity") is not None,
             "ran": False,
@@ -1184,6 +1204,11 @@ def run_one_fixture(
             out_dir, fixture, oracle_fasta, min_match_coverage, True
         )
 
+    if run_raptor_workflow_single:
+        report["raptor_workflow_single"] = run_raptor_workflow_case(
+            out_dir, fixture, oracle_fasta, min_match_coverage, False, "single"
+        )
+
     add_cpu_gpu_workflow_comparison(report)
 
     if run_trinity:
@@ -1270,6 +1295,7 @@ def check_report_thresholds(
     raptor_normalize = report.get("raptor_normalize")
     raptor_workflow = report.get("raptor_workflow")
     raptor_workflow_gpu = report.get("raptor_workflow_gpu")
+    raptor_workflow_single = report.get("raptor_workflow_single")
     if raptor_normalize:
         if raptor_normalize.get("exit_code") != 0:
             failures.append("raptor normalize failed")
@@ -1455,6 +1481,40 @@ def check_report_thresholds(
                 f"GPU-requested selected isoform CPU-match F1 below threshold: {selected_match_f1} < {min_selected_f1}"
             )
 
+    if raptor_workflow_single:
+        if raptor_workflow_single.get("exit_code") != 0:
+            failures.append("raptor trinity single-end workflow failed")
+        single_workflow_metrics = raptor_workflow_single.get("metrics", {})
+        if not single_workflow_metrics.get("output_exists"):
+            failures.append("raptor trinity single-end workflow did not produce assembly output")
+        if single_workflow_metrics.get("input_mode") != "single":
+            failures.append("raptor trinity single-end workflow did not record single input mode")
+        if single_workflow_metrics.get("component_count", 0) < 1:
+            failures.append("raptor trinity single-end workflow did not emit components")
+        if single_workflow_metrics.get("component_assigned_read_count", 0) < 1:
+            failures.append("raptor trinity single-end workflow did not assign reads to components")
+        selected_truth_recovery = single_workflow_metrics.get(
+            "component_selected_truth_recovery", {}
+        )
+        selected_min_coverage = selected_truth_recovery.get("min_best_coverage", 0.0)
+        if selected_min_coverage < min_truth_coverage:
+            failures.append(
+                f"single-end selected component isoform truth recovery below threshold: {selected_min_coverage} < {min_truth_coverage}"
+            )
+        selected_truth_precision = single_workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        )
+        selected_precision = selected_truth_precision.get("precision", 0.0)
+        selected_f1 = selected_truth_precision.get("f1", 0.0)
+        if selected_precision < min_selected_precision:
+            failures.append(
+                f"single-end selected component isoform precision below threshold: {selected_precision} < {min_selected_precision}"
+            )
+        if selected_f1 < min_selected_f1:
+            failures.append(
+                f"single-end selected component isoform F1 below threshold: {selected_f1} < {min_selected_f1}"
+            )
+
     if not raptor:
         return failures
 
@@ -1486,22 +1546,26 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
     raptor_normalize = report.get("raptor_normalize") or {}
     raptor_workflow = report.get("raptor_workflow") or {}
     raptor_workflow_gpu = report.get("raptor_workflow_gpu") or {}
+    raptor_workflow_single = report.get("raptor_workflow_single") or {}
     trinity = report.get("trinity") or {}
     metrics = raptor.get("metrics", {})
     normalize_metrics = raptor_normalize.get("metrics", {})
     workflow_metrics = raptor_workflow.get("metrics", {})
     gpu_workflow_metrics = raptor_workflow_gpu.get("metrics", {})
+    single_workflow_metrics = raptor_workflow_single.get("metrics", {})
     trinity_result = trinity.get("result", {})
     trinity_metrics = trinity_result.get("metrics", {})
     raptor_resources = raptor.get("resource_usage", {})
     normalize_resources = raptor_normalize.get("resource_usage", {})
     workflow_resources = raptor_workflow.get("resource_usage", {})
     gpu_workflow_resources = raptor_workflow_gpu.get("resource_usage", {})
+    single_workflow_resources = raptor_workflow_single.get("resource_usage", {})
     trinity_resources = trinity_result.get("resource_usage", {})
     raptor_gpu = raptor.get("gpu_usage", {})
     normalize_gpu = raptor_normalize.get("gpu_usage", {})
     workflow_gpu = raptor_workflow.get("gpu_usage", {})
     gpu_workflow_gpu = raptor_workflow_gpu.get("gpu_usage", {})
+    single_workflow_gpu = raptor_workflow_single.get("gpu_usage", {})
     trinity_gpu = trinity_result.get("gpu_usage", {})
     return {
         "insert": report["fixture"]["insert"],
@@ -1578,6 +1642,23 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
             "cpu_selected_isoform_match", {}
         ).get("f1"),
         "raptor_gpu_workflow_selected_isoform_lengths": gpu_workflow_metrics.get(
+            "component_selected_isoform_lengths"
+        ),
+        "raptor_single_workflow_exit_code": raptor_workflow_single.get("exit_code"),
+        "raptor_single_workflow_elapsed_seconds": raptor_workflow_single.get("elapsed_seconds"),
+        "raptor_single_workflow_max_rss_kb": single_workflow_resources.get("max_rss_kb"),
+        "raptor_single_workflow_gpu_available": single_workflow_gpu.get("available"),
+        "raptor_single_workflow_input_mode": single_workflow_metrics.get("input_mode"),
+        "raptor_single_workflow_selected_precision": single_workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("precision"),
+        "raptor_single_workflow_selected_recall": single_workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("recall"),
+        "raptor_single_workflow_selected_f1": single_workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("f1"),
+        "raptor_single_workflow_selected_isoform_lengths": single_workflow_metrics.get(
             "component_selected_isoform_lengths"
         ),
         "raptor_workflow_output_fasta_bytes": workflow_metrics.get("output_fasta_bytes"),
@@ -1814,6 +1895,11 @@ def main() -> int:
         action="store_true",
         help="Run the raptor trinity end-to-end CLI with --gpu and compare to the CPU-requested workflow when both are present",
     )
+    parser.add_argument(
+        "--run-raptor-workflow-single",
+        action="store_true",
+        help="Run the raptor trinity end-to-end CLI on the generated single-end FASTQ",
+    )
     parser.add_argument("--run-trinity", action="store_true")
     parser.add_argument("--oracle-fasta", type=Path, default=DEFAULT_ORACLE)
     parser.add_argument("--insert", type=int, default=160)
@@ -1882,6 +1968,7 @@ def main() -> int:
             args.assemble_normalized,
             args.run_raptor_workflow,
             args.run_raptor_workflow_gpu,
+            args.run_raptor_workflow_single,
             run_trinity,
             require_trinity,
             args.freeze_trinity_oracle,

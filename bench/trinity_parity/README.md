@@ -43,6 +43,11 @@ selected isoforms back to the CPU-requested workflow. This exercises the OpenCL
 k-mer counter when available, but graph build still runs on CPU and these tiny
 fixtures are an output-equivalence gate, not a speedup claim.
 
+The panel also gates single-end `raptor trinity` output for fixtures where
+single-end evidence is biologically sufficient. `compact_fusion` is paired-only
+because that case is designed to require paired-start evidence to split a compact
+overlap.
+
 ## Tiny Fixture
 
 `run_tiny_fixture.py` generates:
@@ -74,6 +79,12 @@ To exercise the single-command Raptor Trinity-like workflow:
 
 ```bash
 python3 bench/trinity_parity/run_tiny_fixture.py --run-raptor-workflow --skip-raptor
+```
+
+To exercise single-end input through the same workflow:
+
+```bash
+python3 bench/trinity_parity/run_tiny_fixture.py --run-raptor-workflow-single --skip-raptor
 ```
 
 To run the first harder ambiguous isoform/paralog stress fixture:
@@ -122,7 +133,7 @@ The script records:
 - transcript length/count metrics
 - truth and oracle recovery metrics
 - Raptor normalization command and kept-pair metrics when requested
-- Raptor `trinity` workflow command, report path, component clustering mode, component JSON path/count, component graph JSON path/count, component transcript candidate and selected-isoform FASTA metrics, selected-isoform precision/recall/F1 metrics, selected-isoform evidence JSON support metrics, scored isoform candidate JSON selection/rejection metrics, graph node/edge counts, edge read/pair/k-mer support, read k-mer node/edge counts, serialized read k-mer node/edge record counts, reconstructed read k-mer path counts/support, capped read k-mer edge sample count, component assigned read/pair counts, and recovery metrics when requested
+- Raptor `trinity` workflow command, input mode, report path, component clustering mode, component JSON path/count, component graph JSON path/count, component transcript candidate and selected-isoform FASTA metrics, selected-isoform precision/recall/F1 metrics, selected-isoform evidence JSON support metrics, scored isoform candidate JSON selection/rejection metrics, graph node/edge counts, edge read/pair/k-mer support, read k-mer node/edge counts, serialized read k-mer node/edge record counts, reconstructed read k-mer path counts/support, capped read k-mer edge sample count, component assigned read/pair counts, and recovery metrics when requested
 - Trinity paired-end command, exit status, output metrics, and truth recovery when requested
 - whether Trinity was available on `PATH`
 - the current Raptor limitation that paired-end evidence is only used as reverse-complemented mate sequence evidence, not yet full Butterfly-style pair path constraints

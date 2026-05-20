@@ -329,13 +329,16 @@ def fixture_summary(report_path: Path) -> dict[str, object]:
 def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, object]:
     raptor_workflow = payload.get("raptor_workflow") or {}
     raptor_workflow_gpu = payload.get("raptor_workflow_gpu") or {}
+    raptor_workflow_single = payload.get("raptor_workflow_single") or {}
     workflow_metrics = raptor_workflow.get("metrics", {})
     gpu_workflow_metrics = raptor_workflow_gpu.get("metrics", {})
+    single_workflow_metrics = raptor_workflow_single.get("metrics", {})
     trinity = payload.get("trinity") or {}
     trinity_result = trinity.get("result", {})
     trinity_metrics = trinity_result.get("metrics", {})
     workflow_resources = raptor_workflow.get("resource_usage", {})
     gpu_workflow_resources = raptor_workflow_gpu.get("resource_usage", {})
+    single_workflow_resources = raptor_workflow_single.get("resource_usage", {})
     trinity_resources = trinity_result.get("resource_usage", {})
     workflow_gpu = raptor_workflow.get("gpu_usage", {})
     gpu_workflow_gpu = raptor_workflow_gpu.get("gpu_usage", {})
@@ -379,6 +382,21 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
             "cpu_selected_isoform_match", {}
         ).get("f1"),
         "raptor_gpu_workflow_selected_isoform_lengths": gpu_workflow_metrics.get(
+            "component_selected_isoform_lengths"
+        ),
+        "raptor_single_workflow_exit_code": raptor_workflow_single.get("exit_code"),
+        "raptor_single_workflow_elapsed_seconds": raptor_workflow_single.get(
+            "elapsed_seconds"
+        ),
+        "raptor_single_workflow_max_rss_kb": single_workflow_resources.get("max_rss_kb"),
+        "raptor_single_workflow_input_mode": single_workflow_metrics.get("input_mode"),
+        "raptor_single_workflow_selected_precision": single_workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("precision"),
+        "raptor_single_workflow_selected_f1": single_workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("f1"),
+        "raptor_single_workflow_selected_isoform_lengths": single_workflow_metrics.get(
             "component_selected_isoform_lengths"
         ),
         "raptor_workflow_output_fasta_bytes": workflow_metrics.get("output_fasta_bytes"),
@@ -454,6 +472,19 @@ def run_fixture(
     name = str(fixture["name"])
     inserts = [int(insert) for insert in fixture["inserts"]]
     fixture_out = out_dir / name
+    run_raptor_workflow = bool(
+        fixture.get("run_raptor_workflow", defaults.get("run_raptor_workflow", True))
+    )
+    run_raptor_workflow_gpu = bool(
+        fixture.get("run_raptor_workflow_gpu", defaults.get("run_raptor_workflow_gpu", False))
+    )
+    run_raptor_workflow_single = bool(
+        fixture.get(
+            "run_raptor_workflow_single",
+            defaults.get("run_raptor_workflow_single", False),
+        )
+    )
+    skip_raptor = bool(fixture.get("skip_raptor", defaults.get("skip_raptor", True)))
     command = [
         sys.executable,
         str(FIXTURE_RUNNER),
@@ -472,11 +503,13 @@ def run_fixture(
         "--min-selected-f1",
         str(defaults["min_selected_f1"]),
     ]
-    if defaults.get("run_raptor_workflow", True):
+    if run_raptor_workflow:
         command.append("--run-raptor-workflow")
-    if defaults.get("run_raptor_workflow_gpu", False):
+    if run_raptor_workflow_gpu:
         command.append("--run-raptor-workflow-gpu")
-    if defaults.get("skip_raptor", True):
+    if run_raptor_workflow_single:
+        command.append("--run-raptor-workflow-single")
+    if skip_raptor:
         command.append("--skip-raptor")
     if run_trinity:
         command.append("--run-trinity")

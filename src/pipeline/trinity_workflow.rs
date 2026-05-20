@@ -382,8 +382,11 @@ fn select_component_isoforms(
     for graph in component_graphs {
         let component_isoforms =
             ranked_component_contig_isoforms(graph, &contigs_by_id, reads1, reads2);
-        let component_isoforms =
-            select_non_redundant_component_isoforms(component_isoforms, &contigs_by_id);
+        let component_isoforms = select_non_redundant_component_isoforms(
+            component_isoforms,
+            &contigs_by_id,
+            reads2.is_some(),
+        );
         for (idx, mut isoform) in component_isoforms.into_iter().enumerate() {
             isoform.component_rank = idx + 1;
             isoform.id = format!("component_{}_isoform_{}", graph.component_id, idx);
@@ -406,11 +409,14 @@ fn component_isoform_candidates(
         let mut component_candidates = Vec::new();
         let contig_isoforms =
             ranked_component_contig_isoforms(graph, &contigs_by_id, reads1, reads2);
-        let selected_contig_ids: BTreeSet<usize> =
-            select_non_redundant_component_isoforms(contig_isoforms.clone(), &contigs_by_id)
-                .into_iter()
-                .map(|isoform| isoform.source_contig_id)
-                .collect();
+        let selected_contig_ids: BTreeSet<usize> = select_non_redundant_component_isoforms(
+            contig_isoforms.clone(),
+            &contigs_by_id,
+            reads2.is_some(),
+        )
+        .into_iter()
+        .map(|isoform| isoform.source_contig_id)
+        .collect();
         for isoform in contig_isoforms {
             component_candidates.push(ComponentIsoformCandidate {
                 id: String::new(),
@@ -532,6 +538,7 @@ fn ranked_component_contig_isoforms(
 fn select_non_redundant_component_isoforms(
     ranked_isoforms: Vec<SelectedComponentIsoform>,
     contigs_by_id: &BTreeMap<usize, &Contig>,
+    require_pair_support: bool,
 ) -> Vec<SelectedComponentIsoform> {
     let mut selected = Vec::new();
     let mut selected_sequences: Vec<&str> = Vec::new();
@@ -539,7 +546,9 @@ fn select_non_redundant_component_isoforms(
         let Some(contig) = contigs_by_id.get(&isoform.source_contig_id) else {
             continue;
         };
-        if isoform.direct_read_support == 0 || isoform.direct_pair_support == 0 {
+        if isoform.direct_read_support == 0
+            || (require_pair_support && isoform.direct_pair_support == 0)
+        {
             continue;
         }
         if novel_sequence_fraction(&contig.sequence, &selected_sequences)
@@ -870,5 +879,49 @@ mod tests {
             candidate["source_kind"] == "contig" && candidate["selected"] == true
         }));
         assert!(output_dir.join("raptor_trinity_report.json").exists());
+    }
+
+    #[test]
+    fn trinity_workflow_selects_isoforms_for_single_end_reads_without_pair_support() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let r1 = temp_dir.path().join("single.fastq");
+        let seq = "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT";
+        fs::write(&r1, format!("@r1\n{seq}\n+\n{}\n", "I".repeat(seq.len())))
+            .expect("write single-end reads");
+
+        let output_dir = temp_dir.path().join("workflow_single");
+        let report = run_trinity_workflow(TrinityWorkflowConfig {
+            input1: r1.to_string_lossy().into_owned(),
+            input2: None,
+            output_dir: output_dir.to_string_lossy().into_owned(),
+            output_fasta: None,
+            report_json: None,
+            normalize: true,
+            normalize_config: NormalizeConfig {
+                k: 5,
+                target_coverage: u16::MAX,
+                min_abundance: 1,
+                max_reads: None,
+                use_gpu: false,
+            },
+            min_len: 10,
+            use_gpu: false,
+        })
+        .expect("single-end workflow should run");
+
+        let selected_isoforms: Vec<serde_json::Value> = serde_json::from_str(
+            &fs::read_to_string(&report.component_selected_isoforms_json)
+                .expect("selected isoform json"),
+        )
+        .expect("parse selected isoforms");
+        assert_eq!(selected_isoforms.len(), 1);
+        assert_eq!(selected_isoforms[0]["component_assigned_pairs"], 0);
+        assert_eq!(selected_isoforms[0]["direct_pair_support"], 0);
+        assert!(
+            selected_isoforms[0]["direct_read_support"]
+                .as_u64()
+                .expect("direct read support")
+                >= 1
+        );
     }
 }
