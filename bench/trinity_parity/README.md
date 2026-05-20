@@ -52,6 +52,18 @@ a stable direct course-data bundle is encoded. After materializing the automatic
 cases, `plan_public_panel.py --require-data` should still fail, but with
 `ready_dataset_count=2` and only mini-humanX inputs missing.
 
+Run ready public datasets through the execution/report harness:
+
+```bash
+python3 bench/trinity_parity/run_public_panel.py
+```
+
+Use `--dataset <id>` to run one case, `--run-trinity` to also run Trinity, and
+`--timeout-seconds N` to keep public runs bounded. The runner writes
+`target/trinity_parity/public_panel_report.json` with commands, exit codes,
+resource usage when available, FASTA stats, and reciprocal Raptor-vs-Trinity
+FASTA matching when both outputs exist.
+
 ## Candidate Panel
 
 `panel.json` defines the current deterministic candidate panel. It is not the
