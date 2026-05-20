@@ -19,6 +19,7 @@ from validate_public_panel import DEFAULT_MANIFEST, load_json, validate_manifest
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUT_ROOT = ROOT / "target" / "trinity_parity" / "public_panel"
 DEFAULT_REPORT = ROOT / "target" / "trinity_parity" / "public_panel_report.json"
+DEFAULT_COVERAGE_SWEEP = [0.90, 0.925, 0.95, 0.975]
 
 
 def open_text(path: Path):
@@ -139,6 +140,27 @@ def reciprocal_fasta_metrics(
     }
 
 
+def reciprocal_fasta_threshold_sweep(
+    raptor_fasta: Path,
+    trinity_fasta: Path,
+    thresholds: list[float],
+) -> list[dict[str, object]]:
+    sweep = []
+    for threshold in thresholds:
+        metrics = reciprocal_fasta_metrics(raptor_fasta, trinity_fasta, threshold)
+        sweep.append(
+            {
+                "min_match_coverage": threshold,
+                "precision": metrics["precision"],
+                "recall": metrics["recall"],
+                "f1": metrics["f1"],
+                "raptor_to_trinity_matched": metrics["raptor_to_trinity"]["matched"],
+                "trinity_to_raptor_matched": metrics["trinity_to_raptor"]["matched"],
+            }
+        )
+    return sweep
+
+
 def command_resource_usage(path: Path | None) -> dict[str, object]:
     if path is None or not path.exists():
         return {
@@ -253,6 +275,7 @@ def run_dataset(
     run_raptor: bool,
     run_trinity: bool,
     min_match_coverage: float,
+    coverage_sweep: list[float],
     dry_run: bool,
     timeout_seconds: int | None,
     min_fasta_f1: float | None,
@@ -298,6 +321,11 @@ def run_dataset(
             trinity_fasta,
             min_match_coverage,
         )
+        metrics["raptor_trinity_fasta_threshold_sweep"] = reciprocal_fasta_threshold_sweep(
+            raptor_fasta,
+            trinity_fasta,
+            coverage_sweep,
+        )
         metrics["min_raptor_vs_trinity_selected_f1"] = min_fasta_f1
     result["metrics"] = metrics
     return result
@@ -322,6 +350,11 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--min-match-coverage", type=float, default=0.95)
     parser.add_argument(
+        "--coverage-sweep",
+        default=",".join(str(value) for value in DEFAULT_COVERAGE_SWEEP),
+        help="Comma-separated reciprocal FASTA coverage thresholds to report as diagnostics.",
+    )
+    parser.add_argument(
         "--timeout-seconds",
         type=int,
         default=None,
@@ -336,6 +369,15 @@ def main() -> int:
         return 1
 
     out_root = args.out_root.resolve()
+    try:
+        coverage_sweep = [
+            float(value)
+            for value in args.coverage_sweep.split(",")
+            if value.strip()
+        ]
+    except ValueError as err:
+        print(json.dumps({"passed": False, "failures": [str(err)]}, indent=2))
+        return 1
     plan = build_plan(
         manifest,
         args.data_root.resolve(),
@@ -354,6 +396,7 @@ def main() -> int:
             run_raptor=not args.skip_raptor,
             run_trinity=args.run_trinity,
             min_match_coverage=args.min_match_coverage,
+            coverage_sweep=coverage_sweep,
             dry_run=args.dry_run,
             timeout_seconds=args.timeout_seconds,
             min_fasta_f1=plan.get("defaults", {}).get(
