@@ -209,6 +209,21 @@ def run_command(command: list[str], cwd: Path) -> dict[str, object]:
     }
 
 
+def parse_insert_sweep(text: str) -> list[int]:
+    inserts: list[int] = []
+    for part in text.split(","):
+        value = part.strip()
+        if not value:
+            continue
+        insert = int(value)
+        if insert <= 0:
+            raise ValueError(f"insert sizes must be positive, got {insert}")
+        inserts.append(insert)
+    if not inserts:
+        raise ValueError("insert sweep must contain at least one insert size")
+    return inserts
+
+
 def generate_fixture(out_dir: Path, insert: int) -> dict[str, object]:
     exon_a = deterministic_dna("shared_exon_a", 90)
     exon_b = deterministic_dna("dominant_exon_b", 72)
@@ -268,20 +283,15 @@ def generate_fixture(out_dir: Path, insert: int) -> dict[str, object]:
     return metadata
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
-    parser.add_argument("--skip-raptor", action="store_true")
-    parser.add_argument("--run-trinity", action="store_true")
-    parser.add_argument("--oracle-fasta", type=Path, default=DEFAULT_ORACLE)
-    parser.add_argument("--insert", type=int, default=160)
-    parser.add_argument("--min-truth-coverage", type=float, default=0.95)
-    parser.add_argument("--min-oracle-coverage", type=float, default=0.95)
-    args = parser.parse_args()
-
-    out_dir = args.out_dir.resolve()
+def run_one_fixture(
+    out_dir: Path,
+    insert: int,
+    oracle_fasta: Path,
+    run_trinity: bool,
+    skip_raptor: bool,
+) -> dict[str, object]:
     out_dir.mkdir(parents=True, exist_ok=True)
-    fixture = generate_fixture(out_dir, args.insert)
+    fixture = generate_fixture(out_dir, insert)
 
     report: dict[str, object] = {
         "fixture": fixture,
@@ -293,8 +303,8 @@ def main() -> int:
             "note": "Trinity is optional for this scaffold until the benchmark panel is frozen.",
         },
         "oracle": {
-            "path": str(args.oracle_fasta),
-            "available": args.oracle_fasta.exists(),
+            "path": str(oracle_fasta),
+            "available": oracle_fasta.exists(),
             "note": "Checked-in tiny oracle is a frozen stand-in until Trinity is installed or a Trinity oracle is captured.",
         },
         "known_limitations": [
@@ -303,7 +313,7 @@ def main() -> int:
         ],
     }
 
-    if not args.skip_raptor:
+    if not skip_raptor:
         output_fasta = out_dir / "raptor" / "assembly.fa.gz"
         output_fasta.parent.mkdir(parents=True, exist_ok=True)
         command = [
@@ -338,14 +348,12 @@ def main() -> int:
             metrics["truth_recovery"] = truth_recovery_metrics(
                 Path(fixture["paths"]["truth_fasta"]), output_fasta
             )
-            if args.oracle_fasta.exists():
-                metrics["oracle_recovery"] = fasta_recovery_metrics(
-                    args.oracle_fasta, output_fasta
-                )
+            if oracle_fasta.exists():
+                metrics["oracle_recovery"] = fasta_recovery_metrics(oracle_fasta, output_fasta)
         result["metrics"] = metrics
         report["raptor"] = result
 
-    if args.run_trinity:
+    if run_trinity:
         trinity_bin = shutil.which("Trinity")
         if not trinity_bin:
             report["trinity"]["ran"] = False
@@ -370,32 +378,110 @@ def main() -> int:
 
     report_path = out_dir / "report.json"
     write_text(report_path, json.dumps(report, indent=2) + "\n")
+    report["report_path"] = str(report_path)
+    return report
 
-    print(f"wrote {report_path}")
-    if report["raptor"] and report["raptor"]["exit_code"] != 0:
-        print("raptor assemble failed; see report.json", file=sys.stderr)
-        return 1
-    if report["raptor"]:
-        metrics = report["raptor"].get("metrics", {})
-        truth_recovery = metrics.get("truth_recovery", {})
-        min_coverage = truth_recovery.get("min_best_coverage", 0.0)
-        if min_coverage < args.min_truth_coverage:
-            print(
-                "truth recovery below threshold: "
-                f"{min_coverage} < {args.min_truth_coverage}",
-                file=sys.stderr,
+
+def check_report_thresholds(
+    report: dict[str, object],
+    min_truth_coverage: float,
+    min_oracle_coverage: float,
+) -> list[str]:
+    failures: list[str] = []
+    raptor = report.get("raptor")
+    if not raptor:
+        return failures
+
+    if raptor.get("exit_code") != 0:
+        failures.append("raptor assemble failed")
+        return failures
+
+    metrics = raptor.get("metrics", {})
+    truth_recovery = metrics.get("truth_recovery", {})
+    min_coverage = truth_recovery.get("min_best_coverage", 0.0)
+    if min_coverage < min_truth_coverage:
+        failures.append(
+            f"truth recovery below threshold: {min_coverage} < {min_truth_coverage}"
+        )
+
+    oracle_recovery = metrics.get("oracle_recovery")
+    if oracle_recovery:
+        min_oracle = oracle_recovery.get("min_best_coverage", 0.0)
+        if min_oracle < min_oracle_coverage:
+            failures.append(
+                f"oracle recovery below threshold: {min_oracle} < {min_oracle_coverage}"
             )
-            return 1
-        oracle_recovery = metrics.get("oracle_recovery")
-        if oracle_recovery:
-            min_oracle_coverage = oracle_recovery.get("min_best_coverage", 0.0)
-            if min_oracle_coverage < args.min_oracle_coverage:
-                print(
-                    "oracle recovery below threshold: "
-                    f"{min_oracle_coverage} < {args.min_oracle_coverage}",
-                    file=sys.stderr,
-                )
-                return 1
+
+    return failures
+
+
+def summarize_report(report: dict[str, object]) -> dict[str, object]:
+    metrics = report.get("raptor", {}).get("metrics", {})
+    return {
+        "insert": report["fixture"]["insert"],
+        "paired_end_pairs": report["fixture"]["paired_end_pairs"],
+        "report_path": report.get("report_path"),
+        "raptor_exit_code": report.get("raptor", {}).get("exit_code"),
+        "lengths": metrics.get("lengths"),
+        "n50": metrics.get("n50"),
+        "truth_min_coverage": metrics.get("truth_recovery", {}).get("min_best_coverage"),
+        "oracle_min_coverage": metrics.get("oracle_recovery", {}).get("min_best_coverage"),
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--skip-raptor", action="store_true")
+    parser.add_argument("--run-trinity", action="store_true")
+    parser.add_argument("--oracle-fasta", type=Path, default=DEFAULT_ORACLE)
+    parser.add_argument("--insert", type=int, default=160)
+    parser.add_argument(
+        "--insert-sweep",
+        default=None,
+        help="Comma-separated paired insert sizes to run as a sweep, e.g. 110,160,200",
+    )
+    parser.add_argument("--min-truth-coverage", type=float, default=0.95)
+    parser.add_argument("--min-oracle-coverage", type=float, default=0.95)
+    args = parser.parse_args()
+
+    out_dir = args.out_dir.resolve()
+
+    inserts = parse_insert_sweep(args.insert_sweep) if args.insert_sweep else [args.insert]
+    reports = []
+    failures = []
+    for insert in inserts:
+        run_dir = out_dir if len(inserts) == 1 else out_dir / f"insert_{insert}"
+        report = run_one_fixture(
+            run_dir,
+            insert,
+            args.oracle_fasta,
+            args.run_trinity,
+            args.skip_raptor,
+        )
+        reports.append(report)
+        failures.extend(
+            f"insert {insert}: {failure}"
+            for failure in check_report_thresholds(
+                report, args.min_truth_coverage, args.min_oracle_coverage
+            )
+        )
+        print(f"wrote {report['report_path']}")
+
+    if len(reports) > 1:
+        summary = {
+            "insert_sweep": inserts,
+            "summaries": [summarize_report(report) for report in reports],
+            "failures": failures,
+        }
+        summary_path = out_dir / "insert_sweep_report.json"
+        write_text(summary_path, json.dumps(summary, indent=2) + "\n")
+        print(f"wrote {summary_path}")
+
+    if failures:
+        for failure in failures:
+            print(failure, file=sys.stderr)
+        return 1
     return 0
 
 

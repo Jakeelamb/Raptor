@@ -92,7 +92,7 @@ After adding bounded read-overlap rescue for small fragmented transcriptome inpu
 - truth transcripts: 252 bp and 240 bp
 - Trinity executable on PATH: false
 
-Interpretation: current `raptor assemble --input R1 --input2 R2` now recovers the two truth transcripts exactly on this tiny non-repetitive two-isoform fixture with default non-overlapping 160 bp inserts and matches the checked-in frozen oracle at `bench/trinity_parity/oracles/tiny_alt_isoform.fa`. This is useful Inchworm and paired-ingestion progress, but it is still not Trinity parity: Trinity is not yet run, paired-end evidence is not yet used as full path/scaffold constraints, and broader isoform correctness is not measured.
+Interpretation: current `raptor assemble --input R1 --input2 R2` now recovers the two truth transcripts exactly on this tiny non-repetitive two-isoform fixture across insert sweep 110,140,160,180 and matches the checked-in frozen oracle at `bench/trinity_parity/oracles/tiny_alt_isoform.fa`. This is useful Inchworm and paired-ingestion progress, but it is still not Trinity parity: Trinity is not yet run, paired-end evidence is not yet used as full path/scaffold constraints, and broader isoform correctness is not measured.
 
 ## Misleading Or Risky Areas
 

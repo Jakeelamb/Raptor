@@ -19,10 +19,17 @@ It then runs the current Raptor production CLI on paired-end reads with a defaul
 python3 bench/trinity_parity/run_tiny_fixture.py
 ```
 
+For the current paired-insert stress gate:
+
+```bash
+python3 bench/trinity_parity/run_tiny_fixture.py --insert-sweep 110,140,160,180
+```
+
 By default the harness fails if minimum best truth coverage is below `0.95`.
 It also fails if minimum best oracle coverage is below `0.95`.
 
 Outputs are written under `target/trinity_parity/tiny_alt_isoform/`.
+Sweep mode writes one report per insert plus `insert_sweep_report.json`.
 
 The script records:
 
