@@ -1,6 +1,7 @@
 use crate::graph::assembler::Contig;
 use crate::graph::partition::{
-    assign_read_evidence_to_components, cluster_contigs_by_shared_sequence, RaptorComponent,
+    assign_read_evidence_to_components, build_component_graphs, cluster_contigs_by_shared_sequence,
+    RaptorComponent, RaptorComponentGraph,
 };
 use crate::io::fasta::try_open_fasta;
 use crate::io::fastq::{stream_fastq_records_checked, try_open_fastq};
@@ -41,7 +42,9 @@ pub struct TrinityWorkflowReport {
     pub assembly_metrics_json: String,
     pub assembly_metrics_tsv: String,
     pub components_json: String,
+    pub component_graphs_json: String,
     pub component_count: usize,
+    pub component_graph_count: usize,
     pub report_json: String,
     pub elapsed_seconds: f64,
 }
@@ -100,9 +103,11 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
 
     let assembly_fasta_string = path_to_str(&assembly_fasta)?.to_string();
     let component_path = output_dir.join("raptor_components.json");
-    let components = write_component_report(
+    let component_graphs_path = output_dir.join("raptor_component_graphs.json");
+    let component_artifacts = write_component_artifacts(
         &assembly_fasta_string,
         &component_path,
+        &component_graphs_path,
         60,
         &assembly_input1,
         assembly_input2.as_deref(),
@@ -133,7 +138,9 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
         assembly_metrics_json: sidecar_path(&assembly_fasta_string, "assembly_metrics.json"),
         assembly_metrics_tsv: sidecar_path(&assembly_fasta_string, "assembly_metrics.tsv"),
         components_json: path_to_str(&component_path)?.to_string(),
-        component_count: components.len(),
+        component_graphs_json: path_to_str(&component_graphs_path)?.to_string(),
+        component_count: component_artifacts.components.len(),
+        component_graph_count: component_artifacts.component_graphs.len(),
         assembly_fasta: assembly_fasta_string,
         report_json: path_to_str(&report_path)?.to_string(),
         elapsed_seconds: start.elapsed().as_secs_f64(),
@@ -143,13 +150,19 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
     Ok(report)
 }
 
-fn write_component_report(
+struct ComponentArtifacts {
+    components: Vec<RaptorComponent>,
+    component_graphs: Vec<RaptorComponentGraph>,
+}
+
+fn write_component_artifacts(
     assembly_fasta: &str,
     component_path: &Path,
+    component_graphs_path: &Path,
     min_shared_bases: usize,
     reads1_path: &str,
     reads2_path: Option<&str>,
-) -> io::Result<Vec<RaptorComponent>> {
+) -> io::Result<ComponentArtifacts> {
     let contigs = read_contigs_from_fasta(assembly_fasta)?;
     let mut components = cluster_contigs_by_shared_sequence(&contigs, min_shared_bases);
     let reads1 = read_fastq_sequences(reads1_path)?;
@@ -167,17 +180,30 @@ fn write_component_report(
         }
     }
     assign_read_evidence_to_components(&contigs, &mut components, &reads1, reads2.as_deref());
-    if let Some(parent) = component_path.parent() {
+    let component_graphs = build_component_graphs(&contigs, &components, min_shared_bases);
+    write_json(component_path, &components, "component report")?;
+    write_json(
+        component_graphs_path,
+        &component_graphs,
+        "component graph report",
+    )?;
+    Ok(ComponentArtifacts {
+        components,
+        component_graphs,
+    })
+}
+
+fn write_json<T: Serialize>(path: &Path, value: &T, label: &str) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let file = fs::File::create(component_path)?;
-    serde_json::to_writer_pretty(file, &components).map_err(|err| {
+    let file = fs::File::create(path)?;
+    serde_json::to_writer_pretty(file, value).map_err(|err| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("failed to serialize component report: {err}"),
+            format!("failed to serialize {label}: {err}"),
         )
-    })?;
-    Ok(components)
+    })
 }
 
 fn read_fastq_sequences(path: &str) -> io::Result<Vec<String>> {
@@ -338,12 +364,19 @@ mod tests {
         assert_eq!(report.component_count, 1);
         assert!(std::path::Path::new(&report.assembly_fasta).exists());
         assert!(std::path::Path::new(&report.components_json).exists());
+        assert!(std::path::Path::new(&report.component_graphs_json).exists());
         let components: Vec<serde_json::Value> = serde_json::from_str(
             &fs::read_to_string(&report.components_json).expect("component json"),
         )
         .expect("parse components");
         assert_eq!(components[0]["assigned_read_count"], 2);
         assert_eq!(components[0]["assigned_pair_count"], 1);
+        let component_graphs: Vec<serde_json::Value> = serde_json::from_str(
+            &fs::read_to_string(&report.component_graphs_json).expect("component graph json"),
+        )
+        .expect("parse component graphs");
+        assert_eq!(component_graphs[0]["node_count"], 1);
+        assert_eq!(component_graphs[0]["assigned_pair_count"], 1);
         assert!(output_dir.join("raptor_trinity_report.json").exists());
     }
 }

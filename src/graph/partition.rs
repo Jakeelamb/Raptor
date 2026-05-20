@@ -13,6 +13,30 @@ pub struct RaptorComponent {
     pub assigned_pair_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RaptorComponentGraph {
+    pub component_id: usize,
+    pub nodes: Vec<RaptorComponentNode>,
+    pub edges: Vec<RaptorComponentEdge>,
+    pub node_count: usize,
+    pub edge_count: usize,
+    pub assigned_read_count: usize,
+    pub assigned_pair_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RaptorComponentNode {
+    pub contig_id: usize,
+    pub length: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RaptorComponentEdge {
+    pub left_contig_id: usize,
+    pub right_contig_id: usize,
+    pub shared_bases: usize,
+}
+
 pub fn merge_clusters(
     clusters: Vec<Vec<usize>>,
     _distance_matrix: &[Vec<f32>],
@@ -105,6 +129,67 @@ pub fn assign_read_evidence_to_components(
     }
 }
 
+pub fn build_component_graphs(
+    contigs: &[Contig],
+    components: &[RaptorComponent],
+    min_shared_bases: usize,
+) -> Vec<RaptorComponentGraph> {
+    let contigs_by_id: BTreeMap<usize, &Contig> =
+        contigs.iter().map(|contig| (contig.id, contig)).collect();
+    let threshold = min_shared_bases.max(1);
+
+    components
+        .iter()
+        .map(|component| {
+            let nodes: Vec<RaptorComponentNode> = component
+                .contig_ids
+                .iter()
+                .filter_map(|contig_id| {
+                    contigs_by_id
+                        .get(contig_id)
+                        .map(|contig| RaptorComponentNode {
+                            contig_id: *contig_id,
+                            length: contig.sequence.len(),
+                        })
+                })
+                .collect();
+            let mut edges = Vec::new();
+            for left_idx in 0..component.contig_ids.len() {
+                for right_idx in left_idx + 1..component.contig_ids.len() {
+                    let left_id = component.contig_ids[left_idx];
+                    let right_id = component.contig_ids[right_idx];
+                    let Some(left) = contigs_by_id.get(&left_id) else {
+                        continue;
+                    };
+                    let Some(right) = contigs_by_id.get(&right_id) else {
+                        continue;
+                    };
+                    let shared_bases = longest_common_substring_len(
+                        left.sequence.as_bytes(),
+                        right.sequence.as_bytes(),
+                    );
+                    if shared_bases >= threshold {
+                        edges.push(RaptorComponentEdge {
+                            left_contig_id: left_id,
+                            right_contig_id: right_id,
+                            shared_bases,
+                        });
+                    }
+                }
+            }
+            RaptorComponentGraph {
+                component_id: component.id,
+                node_count: nodes.len(),
+                edge_count: edges.len(),
+                nodes,
+                edges,
+                assigned_read_count: component.assigned_read_count,
+                assigned_pair_count: component.assigned_pair_count,
+            }
+        })
+        .collect()
+}
+
 fn contig_component_index(components: &[RaptorComponent]) -> BTreeMap<usize, usize> {
     let mut index = BTreeMap::new();
     for (component_idx, component) in components.iter().enumerate() {
@@ -189,7 +274,10 @@ fn longest_common_substring_len(left: &[u8], right: &[u8]) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{assign_read_evidence_to_components, cluster_contigs_by_shared_sequence};
+    use super::{
+        assign_read_evidence_to_components, build_component_graphs,
+        cluster_contigs_by_shared_sequence,
+    };
     use crate::graph::assembler::Contig;
 
     fn contig(id: usize, sequence: &str) -> Contig {
@@ -245,5 +333,26 @@ mod tests {
         assert_eq!(components[1].contig_ids, vec![2]);
         assert_eq!(components[1].assigned_read_count, 2);
         assert_eq!(components[1].assigned_pair_count, 1);
+    }
+
+    #[test]
+    fn component_graphs_preserve_shared_sequence_edges() {
+        let contigs = vec![
+            contig(10, "AAAACCCCGGGGTTTT"),
+            contig(20, "CCCCGGGGAAAATTTT"),
+            contig(30, "TATATATATATA"),
+        ];
+        let components = cluster_contigs_by_shared_sequence(&contigs, 8);
+        let graphs = build_component_graphs(&contigs, &components, 8);
+
+        assert_eq!(graphs.len(), 2);
+        assert_eq!(graphs[0].component_id, 0);
+        assert_eq!(graphs[0].node_count, 2);
+        assert_eq!(graphs[0].edge_count, 1);
+        assert_eq!(graphs[0].edges[0].left_contig_id, 10);
+        assert_eq!(graphs[0].edges[0].right_contig_id, 20);
+        assert_eq!(graphs[0].edges[0].shared_bases, 8);
+        assert_eq!(graphs[1].node_count, 1);
+        assert_eq!(graphs[1].edge_count, 0);
     }
 }
