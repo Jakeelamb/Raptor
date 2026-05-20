@@ -957,9 +957,27 @@ fn maybe_replace_fragmented_contigs_with_oriented_kmer_paths(
         return contigs;
     }
 
-    let oriented_counts = count_oriented_kmers_u64_filtered(sequences, k, min_kmer_count);
-    let oriented_adjacency = build_oriented_adjacency_u64(&oriented_counts, k);
-    let oriented = greedy_assembly_u64(k, &oriented_counts, &oriented_adjacency, min_len);
+    let mut candidate_ks = vec![k];
+    if k != 25 && sequences.iter().any(|sequence| sequence.len() >= 25) {
+        candidate_ks.push(25);
+    }
+    candidate_ks.sort_unstable();
+    candidate_ks.dedup();
+
+    let mut best_oriented = Vec::new();
+    let mut best_k = k;
+    for candidate_k in candidate_ks {
+        let oriented_counts =
+            count_oriented_kmers_u64_filtered(sequences, candidate_k, min_kmer_count);
+        let oriented_adjacency = build_oriented_adjacency_u64(&oriented_counts, candidate_k);
+        let oriented =
+            greedy_assembly_u64(candidate_k, &oriented_counts, &oriented_adjacency, min_len);
+        if assembly_contiguity_key(&oriented) > assembly_contiguity_key(&best_oriented) {
+            best_k = candidate_k;
+            best_oriented = oriented;
+        }
+    }
+    let oriented = best_oriented;
     let oriented_longest = oriented
         .iter()
         .map(|contig| contig.sequence.len())
@@ -968,7 +986,8 @@ fn maybe_replace_fragmented_contigs_with_oriented_kmer_paths(
 
     if oriented_longest > current_longest {
         info!(
-            "Oriented k-mer paths improved longest contig from {} bp to {} bp ({} -> {} contigs)",
+            "Oriented k-mer paths at k={} improved longest contig from {} bp to {} bp ({} -> {} contigs)",
+            best_k,
             current_longest,
             oriented_longest,
             contigs.len(),
@@ -978,6 +997,32 @@ fn maybe_replace_fragmented_contigs_with_oriented_kmer_paths(
     } else {
         contigs
     }
+}
+
+fn assembly_contiguity_key(contigs: &[Contig]) -> (usize, usize, usize) {
+    let mut lengths: Vec<usize> = contigs.iter().map(|contig| contig.sequence.len()).collect();
+    lengths.sort_unstable_by(|a, b| b.cmp(a));
+    let total: usize = lengths.iter().sum();
+    (
+        n50_from_sorted_lengths(&lengths),
+        lengths.first().copied().unwrap_or(0),
+        total,
+    )
+}
+
+fn n50_from_sorted_lengths(lengths: &[usize]) -> usize {
+    let total: usize = lengths.iter().sum();
+    if total == 0 {
+        return 0;
+    }
+    let mut running = 0usize;
+    for &length in lengths {
+        running += length;
+        if running.saturating_mul(2) >= total {
+            return length;
+        }
+    }
+    0
 }
 
 fn count_oriented_kmers_u64_filtered(
@@ -2054,8 +2099,8 @@ fn canonicalize_contig_output_order(contigs: &mut [Contig]) {
 #[cfg(test)]
 mod tests {
     use super::{
-        assemble_read_overlap_contigs, assemble_reads_with_gpu, build_read_prefix_index,
-        canonical_sequence_key, canonicalize_contig_output_order,
+        assemble_read_overlap_contigs, assemble_reads_with_gpu, assembly_contiguity_key,
+        build_read_prefix_index, canonical_sequence_key, canonicalize_contig_output_order,
         count_oriented_kmers_u64_filtered, derive_contig_expression_map,
         estimate_sequence_capacity, maybe_replace_fragmented_contigs_with_oriented_kmer_paths,
         maybe_rescue_fragmented_contigs_with_read_overlaps, sequence_only_record,
@@ -2107,6 +2152,14 @@ mod tests {
             }
         }
         runs
+    }
+
+    fn test_contig(sequence: &str) -> Contig {
+        Contig {
+            id: 0,
+            sequence: sequence.to_string(),
+            kmer_path: Vec::new(),
+        }
     }
 
     #[inline]
@@ -2333,6 +2386,35 @@ mod tests {
         let counts = count_oriented_kmers_u64_filtered(&reads, 4, 1);
 
         assert_eq!(counts.len(), 1);
+    }
+
+    #[test]
+    fn assembly_contiguity_key_prefers_n50_then_longest_then_total_bases() {
+        let n50_winner = vec![
+            test_contig("AAAAAA"),
+            test_contig("CCCCCC"),
+            test_contig("GGGGGG"),
+        ];
+        let longer_only = vec![
+            test_contig("AAAAAAA"),
+            test_contig("C"),
+            test_contig("G"),
+            test_contig("T"),
+            test_contig("A"),
+            test_contig("C"),
+            test_contig("G"),
+            test_contig("T"),
+            test_contig("A"),
+        ];
+        let more_total = vec![
+            test_contig("AAAAAA"),
+            test_contig("CCCCCC"),
+            test_contig("GGGGGG"),
+            test_contig("T"),
+        ];
+
+        assert!(assembly_contiguity_key(&n50_winner) > assembly_contiguity_key(&longer_only));
+        assert!(assembly_contiguity_key(&more_total) > assembly_contiguity_key(&n50_winner));
     }
 
     #[test]

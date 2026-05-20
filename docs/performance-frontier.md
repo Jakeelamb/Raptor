@@ -16,61 +16,63 @@ Command shape:
 python3 bench/trinity_parity/run_public_panel.py \
   --dataset trinity_source_test_assembly \
   --timeout-seconds 180 \
-  --out-root target/trinity_parity/public_panel_oriented_kmers_capped
+  --out-root target/trinity_parity/public_panel_oriented_k25_probe
 
 python3 bench/trinity_parity/run_public_panel.py \
   --dataset trinity_source_test_assembly \
   --skip-raptor \
   --run-trinity \
   --timeout-seconds 120 \
-  --out-root target/trinity_parity/public_panel_oriented_kmers_capped
+  --out-root target/trinity_parity/public_panel_oriented_k25_probe
 ```
 
 Current Raptor output:
 
 | Metric | Value |
 | --- | ---: |
-| Contigs | 31 |
-| Total bases | 50,507 |
-| N50 | 3,532 bp |
+| Contigs | 30 |
+| Total bases | 50,612 |
+| N50 | 3,580 bp |
 | Max length | 8,756 bp |
 | Contigs >=1kb | 12 |
-| Bases >=1kb | 43,274 |
-| App-level workflow elapsed | 1.20 s |
-| Harness wall time with release compile | 14.99 s |
+| Bases >=1kb | 43,391 |
+| App-level workflow elapsed | 1.35 s |
+| Harness wall time with release compile | 18.40 s |
 
-Trinity in the same output root emits 74 transcripts, 132,171 bases, N50 3,697
+Trinity in the same output root emits 76 transcripts, 155,664 bases, N50 5,399
 bp, and max length 8,973 bp.
 
-Strict parity still fails. Reciprocal FASTA F1 is 0.0 at the frozen 0.95
-coverage threshold because no reciprocal match reaches that threshold. The best
-observed reciprocal coverage is 0.917342, so the current problem is path
-correctness/isoform boundary accuracy, not gross contiguity or raw speed.
+Strict parity still fails. Reciprocal FASTA F1 is 0.018868 at the frozen 0.95
+coverage threshold, far below the required 0.9. The best observed reciprocal
+coverage remains 0.999886 for one nearly full-length match, while the next
+public boundary miss remains 0.917342. The current problem is still transcript
+selection and boundary accuracy, not gross contiguity or raw speed.
 
 Current diagnostic threshold sweep:
 
 | Min coverage | Raptor matches | Trinity matches | F1 |
 | --- | ---: | ---: | ---: |
-| 0.900 | 1 / 31 | 1 / 74 | 0.019048 |
-| 0.925 | 0 / 31 | 0 / 74 | 0.0 |
-| 0.950 | 0 / 31 | 0 / 74 | 0.0 |
-| 0.975 | 0 / 31 | 0 / 74 | 0.0 |
+| 0.900 | 2 / 30 | 2 / 76 | 0.037736 |
+| 0.925 | 1 / 30 | 1 / 76 | 0.018868 |
+| 0.950 | 1 / 30 | 1 / 76 | 0.018868 |
+| 0.975 | 1 / 30 | 1 / 76 | 0.018868 |
 
 Against Trinity's `inchworm.DS.fa`, Raptor's current contigs have stronger
 stage-level overlap:
 
 | Min coverage | Raptor matches | Trinity Inchworm matches | F1 |
 | --- | ---: | ---: | ---: |
-| 0.900 | 4 / 31 | 4 / 1,282 | 0.006093 |
-| 0.925 | 3 / 31 | 3 / 1,282 | 0.004570 |
-| 0.950 | 2 / 31 | 2 / 1,282 | 0.003046 |
-| 0.975 | 1 / 31 | 1 / 1,282 | 0.001523 |
+| 0.900 | 3 / 30 | 3 / 1,278 | 0.004586 |
+| 0.925 | 2 / 30 | 2 / 1,278 | 0.003058 |
+| 0.950 | 1 / 30 | 1 / 1,278 | 0.001528 |
+| 0.975 | 1 / 30 | 1 / 1,278 | 0.001528 |
 
-Interpretation: the oriented k-mer fallback is now overlapping Trinity's
-Inchworm-stage sequences at strict thresholds, but the final Trinity transcript
-set is still not matched. The next blocker is likely selection/boundary
-reconstruction across Chrysalis/Butterfly-style stages, not only raw contig
-length.
+Interpretation: the oriented k-mer fallback now tries the adaptive k and
+Trinity-style k=25, then keeps the candidate with the best N50/longest/total
+bases key. This slightly improves final Trinity FASTA matching, but it trades
+off some Inchworm-stage reciprocal hits on the fresh Trinity run. The next
+blocker is likely selection/boundary reconstruction across
+Chrysalis/Butterfly-style stages, not only k selection or raw contig length.
 
 ## Accepted Changes
 
@@ -81,6 +83,7 @@ length.
 | Prefix index for exact read-overlap rescue | Public runtime improved from 209.67 s to 115.09 s with unchanged 4,392-contig output | Kept as a fallback speed fix |
 | Paired-start fusion split bounded to compact contigs | Public output improved to 3,974 contigs, N50 338, max 1,052 without breaking compact-fusion fixture | Kept |
 | Oriented k-mer path fallback before read-overlap rescue | Public output jumped to 31 contigs, N50 3,532, max 8,756; best reciprocal coverage improved from 0.634298 to 0.917342 | Current frontier |
+| Adaptive oriented k plus Trinity-style k=25 candidate selection | Public final FASTA F1 moved from 0.0 to 0.018868 at 0.95 coverage; output is 30 contigs, N50 3,580, max 8,756 | Current frontier |
 | Component artifact cap above 20,000 contig bases | Lets public oriented-contig output finish and be scored while full graph artifacts remain expensive | Kept as a bounded reporting guard |
 
 ## Limited Or Negative Results
@@ -91,6 +94,9 @@ length.
   It did not move reciprocal FASTA F1 off 0.0.
 - Oriented k-mer paths fixed the gross canonical-orientation bug and made output
   Trinity-scale, but still miss the strict 0.95 reciprocal coverage gate.
+- Trying Trinity-style k=25 improves final FASTA reciprocal matching, but it
+  does not solve the boundary problem and reduces fresh-run Inchworm-stage
+  matches from the prior 31-contig frontier.
 - Full component graph artifact generation is not yet public-scale. Current
   caps are honest bounded-reporting guards, not a Chrysalis parity solution.
 
