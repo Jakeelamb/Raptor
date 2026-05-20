@@ -13,7 +13,7 @@ Current status: scaffold only. It intentionally starts with a tiny truth-known f
 - truth FASTA
 - truth metadata JSON
 
-It then runs the current Raptor production CLI on the paired-end reads and compares the output against both generated truth and the checked-in frozen oracle at `oracles/tiny_alt_isoform.fa`:
+It then runs the current Raptor production CLI on paired-end reads with a default non-overlapping insert size of `160` bp and compares the output against both generated truth and the checked-in frozen oracle at `oracles/tiny_alt_isoform.fa`:
 
 ```bash
 python3 bench/trinity_parity/run_tiny_fixture.py

@@ -754,7 +754,7 @@ fn assemble_read_overlap_contigs(sequences: &[String], min_len: usize) -> Vec<Co
         return Vec::new();
     }
 
-    let min_overlap = (min_read_len / 2).max(16).min(min_read_len - 1);
+    let min_overlap = (min_read_len / 3).max(8).min(min_read_len - 1);
     let mut successors: Vec<Vec<(usize, usize)>> = vec![Vec::new(); reads.len()];
     let mut predecessors: Vec<Vec<(usize, usize)>> = vec![Vec::new(); reads.len()];
 

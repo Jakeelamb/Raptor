@@ -209,7 +209,7 @@ def run_command(command: list[str], cwd: Path) -> dict[str, object]:
     }
 
 
-def generate_fixture(out_dir: Path) -> dict[str, object]:
+def generate_fixture(out_dir: Path, insert: int) -> dict[str, object]:
     exon_a = deterministic_dna("shared_exon_a", 90)
     exon_b = deterministic_dna("dominant_exon_b", 72)
     exon_alt = deterministic_dna("alternative_exon", 60)
@@ -230,7 +230,6 @@ def generate_fixture(out_dir: Path) -> dict[str, object]:
     r1_records: list[tuple[str, str]] = []
     r2_records: list[tuple[str, str]] = []
     read_len = 75
-    insert = 110
     step = 24
 
     for tx_name, seq in transcripts.items():
@@ -275,13 +274,14 @@ def main() -> int:
     parser.add_argument("--skip-raptor", action="store_true")
     parser.add_argument("--run-trinity", action="store_true")
     parser.add_argument("--oracle-fasta", type=Path, default=DEFAULT_ORACLE)
+    parser.add_argument("--insert", type=int, default=160)
     parser.add_argument("--min-truth-coverage", type=float, default=0.95)
     parser.add_argument("--min-oracle-coverage", type=float, default=0.95)
     args = parser.parse_args()
 
     out_dir = args.out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    fixture = generate_fixture(out_dir)
+    fixture = generate_fixture(out_dir, args.insert)
 
     report: dict[str, object] = {
         "fixture": fixture,
