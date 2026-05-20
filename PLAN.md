@@ -11,7 +11,7 @@ Start by building the parity map and benchmark harness before changing core algo
 ## Phases
 
 - [x] Create Trinity parity map.
-- [ ] Freeze benchmark panel. Current deterministic candidate panel exists in `bench/trinity_parity/panel.json`; proposed public panel contract now exists in `bench/trinity_parity/public_panel.json` and is schema-gated by `bench/trinity_parity/validate_public_panel.py`; data download/execution and final approval are still pending.
+- [ ] Freeze benchmark panel. Current deterministic candidate panel exists in `bench/trinity_parity/panel.json`; proposed public panel contract now exists in `bench/trinity_parity/public_panel.json`, is schema-gated by `bench/trinity_parity/validate_public_panel.py`, and can emit a local missing-input/run-command report through `bench/trinity_parity/plan_public_panel.py`; data download/execution and final approval are still pending.
 - [ ] Build Trinity-vs-Raptor benchmark harness. Initial fixture scaffold and candidate-panel runner exist and can capture paired-end Trinity output when Trinity is installed; frozen public panel still missing.
 - [ ] Close normalization parity.
 - [ ] Close Inchworm-equivalent contig construction parity.
@@ -53,3 +53,4 @@ Start by building the parity map and benchmark harness before changing core algo
 - The high-depth normalization fixture now assembles from Raptor-normalized reads and compares directly to Trinity FASTA output. Current normalized biological output is one 900 bp transcript for both tools with assembly F1 1.0, despite weak retained-pair identity.
 - A high-depth alternative-isoform normalized-output fixture now gates two-isoform recovery after read reduction. Raptor keeps 1006/2200 pairs, Trinity keeps 861/2200 pairs, retained-pair Jaccard is 0.270068, and both tools recover [336,324] with assembly F1 1.0.
 - `bench/trinity_parity/public_panel.json` now declares a proposed public Trinity-parity panel with three real/public cases: Trinity workshop fission-yeast RF data, Trinity source `test_Trinity_Assembly`, and Griffith Lab `mini_humanX`. The manifest encodes required metrics, resource-ratio thresholds, per-dataset inputs, Trinity arguments, and stage coverage; `validate_public_panel.py` fails if the panel has fewer than three datasets or lacks normalization/Inchworm/Chrysalis/Butterfly/reporting coverage.
+- `bench/trinity_parity/plan_public_panel.py` turns that manifest into concrete Raptor and Trinity commands, resolves inputs under `data/trinity_public_panel/<dataset_id>/`, writes `target/trinity_parity/public_panel_run_plan.json`, and can fail with `--require-data` when any declared FASTQ/reference input is absent.

@@ -24,7 +24,18 @@ runtime/RSS thresholds. Validate the manifest contract with:
 python3 bench/trinity_parity/validate_public_panel.py
 ```
 
-This check only validates the manifest. Download/materialization and full
+Build the local run plan and missing-input report with:
+
+```bash
+python3 bench/trinity_parity/plan_public_panel.py
+```
+
+The run plan writes `target/trinity_parity/public_panel_run_plan.json` with the
+per-dataset Raptor and Trinity commands, expected data root, resolved input
+paths, and missing files. Add `--require-data` to make missing local FASTQs or
+references a hard failure.
+
+These checks validate the manifest and local data readiness. Download and full
 Raptor-vs-Trinity execution still need to be implemented before the public panel
 can support a parity claim.
 
