@@ -37,10 +37,11 @@ python3 bench/trinity_parity/run_panel.py --run-trinity
 
 Use `--require-trinity` when Trinity output is mandatory for the gate.
 
-The panel also runs a GPU-requested Raptor workflow with `raptor trinity --gpu`
-for each case and compares its selected isoforms back to the CPU-requested
-workflow. This is an output-equivalence gate for GPU request state; it is not a
-claim that the current tiny workflow is GPU-accelerated.
+The panel also runs a GPU-requested Raptor workflow with
+`cargo run --features gpu -- trinity --gpu` for each case and compares its
+selected isoforms back to the CPU-requested workflow. This exercises the OpenCL
+k-mer counter when available, but graph build still runs on CPU and these tiny
+fixtures are an output-equivalence gate, not a speedup claim.
 
 ## Tiny Fixture
 

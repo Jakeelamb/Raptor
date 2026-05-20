@@ -916,6 +916,11 @@ def run_raptor_workflow_case(
         "cargo",
         "run",
         "--quiet",
+    ]
+    if use_gpu:
+        command.extend(["--features", "gpu"])
+    command.extend(
+        [
         "--",
         "trinity",
         "--input1",
@@ -928,7 +933,8 @@ def run_raptor_workflow_case(
         str(workflow_fasta),
         "--min-len",
         "25",
-    ]
+        ]
+    )
     if use_gpu:
         command.append("--gpu")
     result = run_command(command, ROOT)

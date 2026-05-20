@@ -10,6 +10,7 @@ use crate::io::fastq::{
 use crate::io::gfa::GfaWriter;
 use crate::io::gfa2::Gfa2Writer;
 use crate::kmer::variable_k::{kmer_coverage_histogram, optimal_k, select_best_k};
+use ahash::AHashMap;
 use serde::Serialize;
 use std::fs;
 use std::io::{self, Write};
@@ -950,6 +951,67 @@ fn split_contigs_at_paired_start_gaps(
     split_contigs
 }
 
+fn count_kmers_u64_filtered_with_optional_gpu(
+    cpu_backend: &CpuBackend,
+    sequences: &[String],
+    k: usize,
+    min_kmer_count: u32,
+    use_gpu: bool,
+) -> AHashMap<u64, u32> {
+    if use_gpu {
+        #[cfg(feature = "gpu")]
+        {
+            match count_kmers_u64_filtered_gpu(sequences, k, min_kmer_count) {
+                Ok(counts) => {
+                    info!(
+                        "GPU k-mer counting produced {} filtered canonical k-mers",
+                        counts.len()
+                    );
+                    return counts;
+                }
+                Err(err) => {
+                    warn!("GPU k-mer counting failed, falling back to CPU: {}", err);
+                }
+            }
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            warn!("GPU requested but binary was not built with --features gpu; using CPU k-mer counting");
+        }
+    }
+
+    info!("Using CPU k-mer counting and CPU graph build");
+    cpu_backend.count_kmers_u64_filtered(sequences, k, min_kmer_count)
+}
+
+#[cfg(feature = "gpu")]
+fn count_kmers_u64_filtered_gpu(
+    sequences: &[String],
+    k: usize,
+    min_kmer_count: u32,
+) -> Result<AHashMap<u64, u32>, String> {
+    use crate::gpu::kmer_gpu::GpuKmerCounter;
+    use crate::kmer::kmer::KmerU64;
+
+    if !(1..=32).contains(&k) || sequences.is_empty() {
+        return Ok(AHashMap::new());
+    }
+
+    let counter = GpuKmerCounter::new(k, sequences.len(), 24)?;
+    let string_counts = counter.count(sequences)?;
+    let mut counts = AHashMap::with_capacity(string_counts.len());
+    for (kmer, count) in string_counts {
+        if count < min_kmer_count {
+            continue;
+        }
+        let Some(encoded) = KmerU64::from_slice(kmer.as_bytes()) else {
+            continue;
+        };
+        counts.insert(encoded.canonical().encoded, count);
+    }
+    Ok(counts)
+}
+
 fn paired_start_gap_splits(
     contig: &str,
     paired_sequences: &[(String, String)],
@@ -1182,9 +1244,8 @@ pub fn assemble_reads_with_gpu(
     let can_try_read_overlap_rescue = num_sequences <= READ_OVERLAP_RESCUE_MAX_READS;
 
     if use_gpu {
-        info!("GPU requested; current assembly path uses CPU k-mer/graph kernels");
+        info!("GPU requested for k-mer counting; graph build remains CPU");
     }
-    info!("Using CPU backend for k-mer counting and graph build");
 
     // Determine k-mer size from a bounded prefix sample without cloning.
     let sample_size = sequences.len().min(10_000);
@@ -1212,7 +1273,13 @@ pub fn assemble_reads_with_gpu(
         k
     );
     let min_kmer_count = 2; // Filter k-mers appearing only once
-    let kmer_counts_u64 = cpu_backend.count_kmers_u64_filtered(&sequences, k, min_kmer_count);
+    let kmer_counts_u64 = count_kmers_u64_filtered_with_optional_gpu(
+        &cpu_backend,
+        &sequences,
+        k,
+        min_kmer_count,
+        use_gpu,
+    );
     info!(
         "Found {} unique k-mers (after filtering singletons)",
         kmer_counts_u64.len()
