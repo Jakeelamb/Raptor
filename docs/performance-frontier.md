@@ -180,6 +180,25 @@ fix.
    useful until biological FASTA output matches the CPU path and public Trinity
    comparison remains stable.
 
+## Observed-Edge Oriented Rescue Probe
+
+The oriented rescue path now builds its fallback graph from read-observed
+adjacent k-mer transitions. The previous oriented fallback connected any k-mers
+with compatible suffix/prefix sequence, which can invent transcript paths not
+present in the reads.
+
+Accepted guarded result on `trinity_source_test_assembly`:
+
+| Variant | Runtime | Contigs | Total bases | N50 | Max | Strict final F1 | Raptor->Trinity exact containment |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Observed-edge rescue, branch variants guarded | 26.68 s | 41 | 115,915 | 5,381 | 8,723 | 0.052174 | 10 |
+
+Rejected probe:
+
+| Variant | Runtime | Contigs | Total bases | N50 | Max | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Unguarded branch variants | timeout after 180 s | 515 | 1,274,003 | 4,272 | 8,723 | Rejected: output inflation and post-assembly timeout before scoring. |
+
 ## Stop Rule
 
 Do not make a performance claim from a local microbenchmark alone. A change only

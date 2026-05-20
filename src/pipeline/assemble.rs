@@ -19,6 +19,9 @@ use tracing::{info, warn};
 
 const READ_OVERLAP_RESCUE_MAX_READS: usize = 200_000;
 const ORIENTED_BOUNDARY_MAX_STEPS: usize = 10_000;
+const ORIENTED_BRANCH_VARIANT_MAX_CONTIGS: usize = 512;
+const ORIENTED_BRANCH_VARIANT_MAX_DEGREE: usize = 4;
+const ORIENTED_BRANCH_VARIANT_MAX_GRAPH_NODES: usize = 5_000;
 const DNA_BASE_BYTES: [u8; 4] = [b'A', b'C', b'G', b'T'];
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -1073,10 +1076,17 @@ fn maybe_replace_fragmented_contigs_with_oriented_kmer_paths(
     for candidate_k in candidate_ks {
         let oriented_counts =
             count_oriented_kmers_u64_filtered(sequences, candidate_k, min_kmer_count);
-        let oriented_adjacency = build_oriented_adjacency_u64(&oriented_counts, candidate_k);
+        let oriented_adjacency =
+            build_observed_oriented_adjacency_u64(sequences, &oriented_counts, candidate_k);
         let mut oriented =
             greedy_assembly_u64(candidate_k, &oriented_counts, &oriented_adjacency, min_len);
         oriented = extend_oriented_contig_boundaries(oriented, &oriented_adjacency, candidate_k);
+        append_oriented_branch_variant_contigs(
+            &mut oriented,
+            &oriented_adjacency,
+            candidate_k,
+            min_len,
+        );
         canonicalize_contig_output_order(&mut oriented);
         if assembly_contiguity_key(&oriented) > assembly_contiguity_key(&best_oriented) {
             best_k = candidate_k;
@@ -1103,6 +1113,196 @@ fn maybe_replace_fragmented_contigs_with_oriented_kmer_paths(
     } else {
         contigs
     }
+}
+
+fn append_oriented_branch_variant_contigs(
+    contigs: &mut Vec<Contig>,
+    adjacency: &AdjacencyTableU64,
+    k: usize,
+    min_len: usize,
+) {
+    if contigs.len() >= ORIENTED_BRANCH_VARIANT_MAX_CONTIGS || !(1..=32).contains(&k) {
+        return;
+    }
+    if adjacency.forward.len() > ORIENTED_BRANCH_VARIANT_MAX_GRAPH_NODES {
+        return;
+    }
+
+    let mut starts: Vec<u64> = adjacency.forward.keys().copied().collect();
+    starts.sort_unstable();
+    for start in starts {
+        if contigs.len() >= ORIENTED_BRANCH_VARIANT_MAX_CONTIGS {
+            break;
+        }
+        let Some(successors) = adjacency.get_successors(start) else {
+            continue;
+        };
+        if successors.len() < 2 || successors.len() > ORIENTED_BRANCH_VARIANT_MAX_DEGREE {
+            continue;
+        }
+
+        let mut ordered_successors = successors.clone();
+        ordered_successors.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        for &(next, _count) in &ordered_successors {
+            if contigs.len() >= ORIENTED_BRANCH_VARIANT_MAX_CONTIGS {
+                break;
+            }
+            let Some(candidate) = trace_oriented_branch_variant(start, next, adjacency, k, min_len)
+            else {
+                continue;
+            };
+            if candidate.sequence.len() < min_len {
+                continue;
+            }
+            if is_redundant_contig_sequence(&candidate.sequence, contigs) {
+                continue;
+            }
+            contigs.push(candidate);
+        }
+    }
+}
+
+fn trace_oriented_branch_variant(
+    start: u64,
+    first_next: u64,
+    adjacency: &AdjacencyTableU64,
+    k: usize,
+    _min_len: usize,
+) -> Option<Contig> {
+    let mut path = vec![start, first_next];
+    extend_branch_variant_left(&mut path, adjacency);
+    extend_branch_variant_right(&mut path, adjacency);
+    let sequence = oriented_path_to_sequence(&path, k)?;
+    Some(Contig {
+        id: 0,
+        sequence,
+        kmer_path: path,
+    })
+}
+
+fn extend_branch_variant_left(path: &mut Vec<u64>, adjacency: &AdjacencyTableU64) {
+    let mut seen: AHashSet<u64> = path.iter().copied().collect();
+    let mut steps = 0usize;
+    while steps < ORIENTED_BOUNDARY_MAX_STEPS {
+        let Some(&first) = path.first() else {
+            break;
+        };
+        let Some((prev, _count)) =
+            best_variant_neighbor(adjacency, adjacency.get_predecessors(first), &seen, false)
+        else {
+            break;
+        };
+        path.insert(0, prev);
+        seen.insert(prev);
+        steps += 1;
+    }
+}
+
+fn extend_branch_variant_right(path: &mut Vec<u64>, adjacency: &AdjacencyTableU64) {
+    let mut seen: AHashSet<u64> = path.iter().copied().collect();
+    let mut steps = 0usize;
+    while steps < ORIENTED_BOUNDARY_MAX_STEPS {
+        let Some(&last) = path.last() else {
+            break;
+        };
+        let Some((next, _count)) =
+            best_variant_neighbor(adjacency, adjacency.get_successors(last), &seen, true)
+        else {
+            break;
+        };
+        path.push(next);
+        seen.insert(next);
+        steps += 1;
+    }
+}
+
+fn best_variant_neighbor(
+    adjacency: &AdjacencyTableU64,
+    neighbors: Option<&Vec<(u64, u32)>>,
+    seen: &AHashSet<u64>,
+    forward: bool,
+) -> Option<(u64, u32)> {
+    let mut best: Option<(u64, u32)> = None;
+    for &(node, count) in neighbors? {
+        if seen.contains(&node) || variant_reenters_seen(adjacency, node, seen, forward) {
+            continue;
+        }
+        match best {
+            None => best = Some((node, count)),
+            Some((best_node, best_count)) => {
+                if count > best_count || (count == best_count && node < best_node) {
+                    best = Some((node, count));
+                }
+            }
+        }
+    }
+    best
+}
+
+fn variant_reenters_seen(
+    adjacency: &AdjacencyTableU64,
+    node: u64,
+    seen: &AHashSet<u64>,
+    forward: bool,
+) -> bool {
+    let mut current = node;
+    let mut local_seen = AHashSet::new();
+    local_seen.insert(current);
+    for _ in 0..32 {
+        let neighbors = if forward {
+            adjacency.get_successors(current)
+        } else {
+            adjacency.get_predecessors(current)
+        };
+        let Some(neighbors) = neighbors else {
+            return false;
+        };
+        let mut best: Option<(u64, u32)> = None;
+        for &(next, count) in neighbors {
+            match best {
+                None => best = Some((next, count)),
+                Some((best_node, best_count)) => {
+                    if count > best_count || (count == best_count && next < best_node) {
+                        best = Some((next, count));
+                    }
+                }
+            }
+        }
+        let Some((next, _)) = best else {
+            return false;
+        };
+        if seen.contains(&next) {
+            return true;
+        }
+        if !local_seen.insert(next) {
+            return false;
+        }
+        current = next;
+    }
+    false
+}
+
+fn oriented_path_to_sequence(path: &[u64], k: usize) -> Option<String> {
+    let (&first, rest) = path.split_first()?;
+    let mut sequence = Vec::with_capacity(k + rest.len());
+    for offset in (0..k).rev() {
+        let shift = offset * 2;
+        sequence.push(DNA_BASE_BYTES[((first >> shift) & 0b11) as usize]);
+    }
+    for &node in rest {
+        sequence.push(DNA_BASE_BYTES[(node & 0b11) as usize]);
+    }
+    String::from_utf8(sequence).ok()
+}
+
+fn is_redundant_contig_sequence(sequence: &str, contigs: &[Contig]) -> bool {
+    let reverse_complement = reverse_complement_dna(sequence);
+    contigs.iter().any(|contig| {
+        contig.sequence.contains(sequence)
+            || sequence.contains(&contig.sequence)
+            || contig.sequence.contains(&reverse_complement)
+            || reverse_complement.contains(&contig.sequence)
+    })
 }
 
 fn assembly_contiguity_key(contigs: &[Contig]) -> (usize, usize, usize) {
@@ -1177,6 +1377,42 @@ fn build_oriented_adjacency_u64(kmer_counts: &AHashMap<u64, u32>, k: usize) -> A
             if let Some(&next_count) = kmer_counts.get(&next) {
                 adjacency.add_edge(kmer, next, next_count);
             }
+        }
+    }
+
+    adjacency
+}
+
+fn build_observed_oriented_adjacency_u64(
+    sequences: &[String],
+    kmer_counts: &AHashMap<u64, u32>,
+    k: usize,
+) -> AdjacencyTableU64 {
+    let adjacency_k = u8::try_from(k).ok().unwrap_or(u8::MAX);
+    let mut adjacency = AdjacencyTableU64::with_capacity(adjacency_k, kmer_counts.len());
+    if !(1..=32).contains(&k) || kmer_counts.is_empty() {
+        return adjacency;
+    }
+
+    for sequence in sequences {
+        let bytes = sequence.as_bytes();
+        if bytes.len() <= k {
+            continue;
+        }
+        for offset in 0..=(bytes.len() - k - 1) {
+            let Some(from) = encode_kmer_bytes(&bytes[offset..offset + k]) else {
+                continue;
+            };
+            if !kmer_counts.contains_key(&from) {
+                continue;
+            }
+            let Some(to) = encode_kmer_bytes(&bytes[offset + 1..offset + 1 + k]) else {
+                continue;
+            };
+            let Some(&to_count) = kmer_counts.get(&to) else {
+                continue;
+            };
+            adjacency.add_edge(from, to, to_count);
         }
     }
 
@@ -2205,7 +2441,8 @@ fn canonicalize_contig_output_order(contigs: &mut [Contig]) {
 #[cfg(test)]
 mod tests {
     use super::{
-        assemble_read_overlap_contigs, assemble_reads_with_gpu, assembly_contiguity_key,
+        append_oriented_branch_variant_contigs, assemble_read_overlap_contigs,
+        assemble_reads_with_gpu, assembly_contiguity_key, build_observed_oriented_adjacency_u64,
         build_oriented_adjacency_u64, build_read_prefix_index, canonical_sequence_key,
         canonicalize_contig_output_order, count_oriented_kmers_u64_filtered,
         derive_contig_expression_map, encode_kmer_bytes, estimate_sequence_capacity,
@@ -2500,7 +2737,7 @@ mod tests {
     fn oriented_graph_boundary_extension_reuses_graph_kmers_outside_contig_path() {
         let reads = vec!["AAACCCGGGTTT".to_string()];
         let counts = count_oriented_kmers_u64_filtered(&reads, 3, 1);
-        let adjacency = build_oriented_adjacency_u64(&counts, 3);
+        let adjacency = build_observed_oriented_adjacency_u64(&reads, &counts, 3);
         let partial = Contig {
             id: 0,
             sequence: "CCCGGG".to_string(),
@@ -2515,6 +2752,64 @@ mod tests {
         let extended = extend_oriented_contig_boundaries(vec![partial], &adjacency, 3);
 
         assert_eq!(extended[0].sequence, "AAACCCGGGTTT");
+    }
+
+    #[test]
+    fn oriented_branch_variants_preserve_shared_path_isoforms() {
+        let reads = vec!["GGGCCCTTTAAA".to_string(), "GGGCCCACAGTA".to_string()];
+        let counts = count_oriented_kmers_u64_filtered(&reads, 3, 1);
+        let adjacency = build_observed_oriented_adjacency_u64(&reads, &counts, 3);
+        let mut contigs = vec![Contig {
+            id: 0,
+            sequence: "GGGCCCTTTAAA".to_string(),
+            kmer_path: vec![
+                encode_kmer_bytes(b"GGG").unwrap(),
+                encode_kmer_bytes(b"GGC").unwrap(),
+                encode_kmer_bytes(b"GCC").unwrap(),
+                encode_kmer_bytes(b"CCC").unwrap(),
+                encode_kmer_bytes(b"CCT").unwrap(),
+                encode_kmer_bytes(b"CTT").unwrap(),
+                encode_kmer_bytes(b"TTT").unwrap(),
+                encode_kmer_bytes(b"TTA").unwrap(),
+                encode_kmer_bytes(b"TAA").unwrap(),
+                encode_kmer_bytes(b"AAA").unwrap(),
+            ],
+        }];
+
+        append_oriented_branch_variant_contigs(&mut contigs, &adjacency, 3, 12);
+
+        let sequences: Vec<&str> = contigs
+            .iter()
+            .map(|contig| contig.sequence.as_str())
+            .collect();
+        assert!(sequences.contains(&"GGGCCCTTTAAA"), "{sequences:?}");
+        assert!(sequences.contains(&"GGGCCCACAGTA"), "{sequences:?}");
+    }
+
+    #[test]
+    fn observed_oriented_adjacency_rejects_unseen_suffix_prefix_edges() {
+        let reads = vec!["GGGCCCTTTAAA".to_string(), "GGGCCCACAGTA".to_string()];
+        let counts = count_oriented_kmers_u64_filtered(&reads, 3, 1);
+        let suffix_prefix = build_oriented_adjacency_u64(&counts, 3);
+        let observed = build_observed_oriented_adjacency_u64(&reads, &counts, 3);
+        let cca = encode_kmer_bytes(b"CCA").unwrap();
+        let cac = encode_kmer_bytes(b"CAC").unwrap();
+        let cag = encode_kmer_bytes(b"CAG").unwrap();
+        let suffix_neighbors = suffix_prefix
+            .get_successors(cca)
+            .cloned()
+            .unwrap_or_default();
+        let observed_neighbors = observed.get_successors(cca).cloned().unwrap_or_default();
+
+        assert!(suffix_neighbors.iter().any(|(node, _)| *node == cac));
+        assert!(suffix_neighbors.iter().any(|(node, _)| *node == cag));
+        assert_eq!(
+            observed_neighbors
+                .iter()
+                .map(|(node, _)| *node)
+                .collect::<Vec<_>>(),
+            vec![cac]
+        );
     }
 
     #[test]
