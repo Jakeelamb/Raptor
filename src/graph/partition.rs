@@ -26,6 +26,8 @@ pub struct RaptorComponentGraph {
     pub read_kmer_nodes: Vec<String>,
     pub read_kmer_edges: Vec<RaptorReadKmerEdge>,
     pub read_kmer_edges_sample: Vec<RaptorReadKmerEdge>,
+    pub read_kmer_path_count: usize,
+    pub read_kmer_paths: Vec<RaptorReadKmerPath>,
     pub assigned_read_count: usize,
     pub assigned_pair_count: usize,
 }
@@ -51,6 +53,13 @@ pub struct RaptorReadKmerEdge {
     pub from: String,
     pub to: String,
     pub support: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RaptorReadKmerPath {
+    pub sequence: String,
+    pub edge_count: usize,
+    pub min_support: usize,
 }
 
 pub fn merge_clusters(
@@ -240,6 +249,7 @@ pub fn build_component_graphs(
                 })
                 .collect();
             let read_kmer_edges_sample = read_kmer_edges.iter().take(32).cloned().collect();
+            let read_kmer_paths = read_kmer_paths_from_edges(&read_kmer_edges, read_kmer_k);
             RaptorComponentGraph {
                 component_id: component.id,
                 node_count: nodes.len(),
@@ -250,6 +260,8 @@ pub fn build_component_graphs(
                 read_kmer_nodes: read_kmer_nodes.into_iter().collect(),
                 read_kmer_edges,
                 read_kmer_edges_sample,
+                read_kmer_path_count: read_kmer_paths.len(),
+                read_kmer_paths,
                 nodes,
                 edges,
                 assigned_read_count: component.assigned_read_count,
@@ -289,6 +301,97 @@ fn component_read_kmer_edges(
         collect_read_kmer_edges(&read_rc, k, &mut edges);
     }
     edges
+}
+
+fn read_kmer_paths_from_edges(edges: &[RaptorReadKmerEdge], k: usize) -> Vec<RaptorReadKmerPath> {
+    if edges.is_empty() {
+        return Vec::new();
+    }
+
+    let mut outgoing: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    let mut indegree: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut outdegree: BTreeMap<&str, usize> = BTreeMap::new();
+    for (idx, edge) in edges.iter().enumerate() {
+        outgoing.entry(&edge.from).or_default().push(idx);
+        *outdegree.entry(&edge.from).or_default() += 1;
+        *indegree.entry(&edge.to).or_default() += 1;
+        indegree.entry(&edge.from).or_default();
+        outdegree.entry(&edge.to).or_default();
+    }
+
+    let mut used = vec![false; edges.len()];
+    let mut paths = Vec::new();
+    for (idx, edge) in edges.iter().enumerate() {
+        let from = edge.from.as_str();
+        if used[idx] {
+            continue;
+        }
+        if indegree.get(from).copied().unwrap_or(0) == 1
+            && outdegree.get(from).copied().unwrap_or(0) == 1
+        {
+            continue;
+        }
+        paths.push(walk_read_kmer_path(
+            idx, edges, &outgoing, &indegree, &outdegree, &mut used, k,
+        ));
+    }
+    for idx in 0..edges.len() {
+        if !used[idx] {
+            paths.push(walk_read_kmer_path(
+                idx, edges, &outgoing, &indegree, &outdegree, &mut used, k,
+            ));
+        }
+    }
+    paths
+}
+
+fn walk_read_kmer_path(
+    start_idx: usize,
+    edges: &[RaptorReadKmerEdge],
+    outgoing: &BTreeMap<&str, Vec<usize>>,
+    indegree: &BTreeMap<&str, usize>,
+    outdegree: &BTreeMap<&str, usize>,
+    used: &mut [bool],
+    k: usize,
+) -> RaptorReadKmerPath {
+    let start = &edges[start_idx];
+    let mut sequence = start.from.clone();
+    append_kmer_suffix(&mut sequence, &start.to, k);
+    let mut edge_count = 1;
+    let mut min_support = start.support;
+    used[start_idx] = true;
+
+    let mut current = start.to.as_str();
+    while indegree.get(current).copied().unwrap_or(0) == 1
+        && outdegree.get(current).copied().unwrap_or(0) == 1
+    {
+        let Some(next_edges) = outgoing.get(current) else {
+            break;
+        };
+        let Some(next_idx) = next_edges.iter().copied().find(|idx| !used[*idx]) else {
+            break;
+        };
+        let next = &edges[next_idx];
+        append_kmer_suffix(&mut sequence, &next.to, k);
+        edge_count += 1;
+        min_support = min_support.min(next.support);
+        used[next_idx] = true;
+        current = next.to.as_str();
+    }
+
+    RaptorReadKmerPath {
+        sequence,
+        edge_count,
+        min_support,
+    }
+}
+
+fn append_kmer_suffix(sequence: &mut String, kmer: &str, k: usize) {
+    if k == 0 {
+        sequence.push_str(kmer);
+    } else if kmer.len() >= k {
+        sequence.push_str(&kmer[k - 1..]);
+    }
 }
 
 fn component_read_kmer_nodes(
@@ -632,6 +735,8 @@ mod tests {
         assert_eq!(graphs[0].read_kmer_nodes, vec!["CCCCGGGG".to_string()]);
         assert!(graphs[0].read_kmer_edges.is_empty());
         assert!(graphs[0].read_kmer_edges_sample.is_empty());
+        assert_eq!(graphs[0].read_kmer_path_count, 0);
+        assert!(graphs[0].read_kmer_paths.is_empty());
         assert_eq!(graphs[0].edges[0].left_contig_id, 10);
         assert_eq!(graphs[0].edges[0].right_contig_id, 20);
         assert_eq!(graphs[0].edges[0].shared_bases, 8);
@@ -666,6 +771,19 @@ mod tests {
             .read_kmer_edges_sample
             .iter()
             .all(|edge| edge.support >= 1));
+        assert!(!graphs[0].read_kmer_paths.is_empty());
+        assert_eq!(
+            graphs[0].read_kmer_paths.len(),
+            graphs[0].read_kmer_path_count
+        );
+        assert!(graphs[0]
+            .read_kmer_paths
+            .iter()
+            .all(|path| path.edge_count >= 1 && path.min_support >= 1));
+        assert!(graphs[0]
+            .read_kmer_paths
+            .iter()
+            .any(|path| path.sequence.contains("AAAACCCCGG")));
         assert_eq!(
             graphs[0].read_kmer_edges_sample,
             graphs[0]
