@@ -252,6 +252,10 @@ def trinity_fasta_path(dataset_id: str, out_root: Path) -> Path:
     return candidates[0]
 
 
+def trinity_inchworm_fasta_path(dataset_id: str, out_root: Path) -> Path:
+    return out_root / dataset_id / "trinity" / "inchworm.DS.fa"
+
+
 def selected_dataset_plans(
     plan: dict[str, object],
     dataset_ids: list[str],
@@ -311,9 +315,11 @@ def run_dataset(
 
     raptor_fasta = raptor_fasta_path(dataset_id, out_root)
     trinity_fasta = trinity_fasta_path(dataset_id, out_root)
+    trinity_inchworm_fasta = trinity_inchworm_fasta_path(dataset_id, out_root)
     metrics = {
         "raptor_fasta": fasta_stats(raptor_fasta),
         "trinity_fasta": fasta_stats(trinity_fasta),
+        "trinity_inchworm_fasta": fasta_stats(trinity_inchworm_fasta),
     }
     if raptor_fasta.exists() and trinity_fasta.exists():
         metrics["raptor_trinity_fasta_match"] = reciprocal_fasta_metrics(
@@ -327,6 +333,19 @@ def run_dataset(
             coverage_sweep,
         )
         metrics["min_raptor_vs_trinity_selected_f1"] = min_fasta_f1
+    if raptor_fasta.exists() and trinity_inchworm_fasta.exists():
+        metrics["raptor_trinity_inchworm_fasta_match"] = reciprocal_fasta_metrics(
+            raptor_fasta,
+            trinity_inchworm_fasta,
+            min_match_coverage,
+        )
+        metrics["raptor_trinity_inchworm_fasta_threshold_sweep"] = (
+            reciprocal_fasta_threshold_sweep(
+                raptor_fasta,
+                trinity_inchworm_fasta,
+                coverage_sweep,
+            )
+        )
     result["metrics"] = metrics
     return result
 

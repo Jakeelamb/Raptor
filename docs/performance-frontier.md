@@ -56,6 +56,22 @@ Current diagnostic threshold sweep:
 | 0.950 | 0 / 31 | 0 / 74 | 0.0 |
 | 0.975 | 0 / 31 | 0 / 74 | 0.0 |
 
+Against Trinity's `inchworm.DS.fa`, Raptor's current contigs have stronger
+stage-level overlap:
+
+| Min coverage | Raptor matches | Trinity Inchworm matches | F1 |
+| --- | ---: | ---: | ---: |
+| 0.900 | 4 / 31 | 4 / 1,282 | 0.006093 |
+| 0.925 | 3 / 31 | 3 / 1,282 | 0.004570 |
+| 0.950 | 2 / 31 | 2 / 1,282 | 0.003046 |
+| 0.975 | 1 / 31 | 1 / 1,282 | 0.001523 |
+
+Interpretation: the oriented k-mer fallback is now overlapping Trinity's
+Inchworm-stage sequences at strict thresholds, but the final Trinity transcript
+set is still not matched. The next blocker is likely selection/boundary
+reconstruction across Chrysalis/Butterfly-style stages, not only raw contig
+length.
+
 ## Accepted Changes
 
 | Change | Public effect | Status |
@@ -80,8 +96,8 @@ Current diagnostic threshold sweep:
 
 ## Next Serious Moves
 
-1. Compare Raptor oriented k-mer contigs directly against Trinity
-   `inchworm.DS.fa`, not only final `Trinity.fasta`.
+1. Use the Raptor-vs-Trinity-Inchworm diagnostics to separate raw contig
+   construction progress from final transcript selection failures.
 2. Use the public report threshold sweep to track near-match progress at 0.90
    and 0.925 coverage while the hard 0.95 gate remains intact.
 3. Tighten oriented path selection around the current 0.917 best match:
