@@ -718,15 +718,56 @@ fn assemble_read_overlap_contigs(sequences: &[String], min_len: usize) -> Vec<Co
         return Vec::new();
     }
 
-    let min_read_len = sequences.iter().map(|seq| seq.len()).min().unwrap_or(0);
+    let mut reads: Vec<&str> = sequences.iter().map(String::as_str).collect();
+    reads.sort_unstable();
+    reads.dedup();
+
+    let min_read_len = reads.iter().map(|seq| seq.len()).min().unwrap_or(0);
     if min_read_len < 2 {
         return Vec::new();
     }
 
     let min_overlap = (min_read_len / 2).max(16).min(min_read_len - 1);
-    let builder = OverlapGraphBuilder::new(min_overlap, 0, 0);
-    let graph = builder.build_overlap_graph(sequences);
-    let (stitched, _) = builder.stitch_contigs(&graph);
+    let mut successors: Vec<Vec<(usize, usize)>> = vec![Vec::new(); reads.len()];
+    let mut predecessors: Vec<Vec<(usize, usize)>> = vec![Vec::new(); reads.len()];
+
+    for (left_idx, left) in reads.iter().enumerate() {
+        for (right_idx, right) in reads.iter().enumerate() {
+            if left_idx == right_idx {
+                continue;
+            }
+            if let Some(overlap) = exact_suffix_prefix_overlap(left, right, min_overlap) {
+                successors[left_idx].push((right_idx, overlap));
+                predecessors[right_idx].push((left_idx, overlap));
+            }
+        }
+    }
+
+    for edges in &mut successors {
+        edges.sort_unstable_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| read_tie_break_key(reads[b.0]).cmp(&read_tie_break_key(reads[a.0])))
+                .then_with(|| a.0.cmp(&b.0))
+        });
+    }
+    for edges in &mut predecessors {
+        edges.sort_unstable_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| read_tie_break_key(reads[b.0]).cmp(&read_tie_break_key(reads[a.0])))
+                .then_with(|| a.0.cmp(&b.0))
+        });
+    }
+
+    let mut stitched = Vec::with_capacity(reads.len());
+    for seed_idx in 0..reads.len() {
+        stitched.push(stitch_read_overlap_path(
+            seed_idx,
+            &reads,
+            &successors,
+            &predecessors,
+        ));
+    }
+    remove_contained_sequences(&mut stitched);
 
     let mut contigs = Vec::new();
     for sequence in stitched {
@@ -739,6 +780,76 @@ fn assemble_read_overlap_contigs(sequences: &[String], min_len: usize) -> Vec<Co
         }
     }
     contigs
+}
+
+#[inline]
+fn read_tie_break_key(read: &str) -> (usize, &str) {
+    (read.len(), read)
+}
+
+fn exact_suffix_prefix_overlap(left: &str, right: &str, min_overlap: usize) -> Option<usize> {
+    let max_overlap = left.len().min(right.len());
+    if max_overlap < min_overlap {
+        return None;
+    }
+
+    (min_overlap..=max_overlap)
+        .rev()
+        .find(|&overlap| left[left.len() - overlap..] == right[..overlap])
+}
+
+fn stitch_read_overlap_path(
+    seed_idx: usize,
+    reads: &[&str],
+    successors: &[Vec<(usize, usize)>],
+    predecessors: &[Vec<(usize, usize)>],
+) -> String {
+    let mut used = vec![false; reads.len()];
+    used[seed_idx] = true;
+
+    let mut contig = reads[seed_idx].to_string();
+
+    let mut current = seed_idx;
+    while let Some((prev, overlap)) = predecessors[current]
+        .iter()
+        .copied()
+        .find(|(candidate, _)| !used[*candidate])
+    {
+        let prefix = &reads[prev][..reads[prev].len() - overlap];
+        let mut extended = String::with_capacity(prefix.len() + contig.len());
+        extended.push_str(prefix);
+        extended.push_str(&contig);
+        contig = extended;
+        used[prev] = true;
+        current = prev;
+    }
+
+    current = seed_idx;
+    while let Some((next, overlap)) = successors[current]
+        .iter()
+        .copied()
+        .find(|(candidate, _)| !used[*candidate])
+    {
+        contig.push_str(&reads[next][overlap..]);
+        used[next] = true;
+        current = next;
+    }
+
+    contig
+}
+
+fn remove_contained_sequences(sequences: &mut Vec<String>) {
+    sequences.sort_unstable_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+    let mut kept: Vec<String> = Vec::with_capacity(sequences.len());
+    'candidate: for sequence in sequences.drain(..) {
+        for existing in &kept {
+            if existing.contains(&sequence) {
+                continue 'candidate;
+            }
+        }
+        kept.push(sequence);
+    }
+    *sequences = kept;
 }
 
 fn maybe_rescue_fragmented_contigs_with_read_overlaps(

@@ -83,14 +83,14 @@ After adding bounded read-overlap rescue for small fragmented transcriptome inpu
 
 - exit code: 0
 - transcript/contig count: 2
-- total output bases: 426
-- N50: 231
-- mean best truth coverage: 0.864583
-- minimum best truth coverage: 0.8125
+- total output bases: 492
+- N50: 252
+- mean best truth coverage: 1.0
+- minimum best truth coverage: 1.0
 - truth transcripts: 252 bp and 240 bp
 - Trinity executable on PATH: false
 
-Interpretation: current `raptor assemble` now recovers transcript-scale contigs on this tiny two-isoform fixture. This is useful Inchworm-direction progress, but it is still not Trinity parity: Trinity is not yet run or frozen as an oracle, paired-end evidence is not consumed by this path, and isoform correctness is not measured.
+Interpretation: current `raptor assemble` now recovers the two truth transcripts exactly on this tiny non-repetitive two-isoform fixture. This is useful Inchworm-direction progress, but it is still not Trinity parity: Trinity is not yet run or frozen as an oracle, paired-end evidence is not consumed by this path, and broader isoform correctness is not measured.
 
 ## Misleading Or Risky Areas
 

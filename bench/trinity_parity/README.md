@@ -19,6 +19,8 @@ It then runs the current Raptor production CLI on the single-end reads:
 python3 bench/trinity_parity/run_tiny_fixture.py
 ```
 
+By default the harness fails if minimum best truth coverage is below `0.95`.
+
 Outputs are written under `target/trinity_parity/tiny_alt_isoform/`.
 
 The script records:

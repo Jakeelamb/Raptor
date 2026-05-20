@@ -33,5 +33,5 @@ Start by building the parity map and benchmark harness before changing core algo
 - `docs/trinity-parity-map.md` is the current stage inventory.
 - Overall Trinity replacement readiness is currently 0 because multiple Trinity-stage equivalents and the frozen comparison artifacts are missing or unproven.
 - `bench/trinity_parity/run_tiny_fixture.py` now generates a tiny truth-known alternative-isoform fixture and runs current `raptor assemble`.
-- Current tiny fixture result after read-overlap rescue: Raptor exits 0 and emits 2 contigs/transcripts with N50 231 against truth transcript lengths 252 and 240. Mean best truth coverage is 0.864583 and minimum best truth coverage is 0.8125. Previous baseline was 51 contigs with N50 27. This is Inchworm-direction progress, not parity.
+- Current tiny fixture result after read-overlap rescue and non-repetitive fixture correction: Raptor exits 0 and emits 2 contigs/transcripts with N50 252 against truth transcript lengths 252 and 240. Mean and minimum best truth coverage are 1.0. Previous baseline was 51 contigs with N50 27. This is Inchworm-direction progress, not parity.
 - Normalization has a single-codepath problem: CLI knobs and standalone binaries do not currently converge on one parameterized implementation/default set.

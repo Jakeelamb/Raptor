@@ -22,8 +22,24 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUT = ROOT / "target" / "trinity_parity" / "tiny_alt_isoform"
 
 
-def repeat_pattern(pattern: str, length: int) -> str:
-    return (pattern * ((length // len(pattern)) + 1))[:length]
+def deterministic_dna(label: str, length: int) -> str:
+    state = 0x9E3779B97F4A7C15
+    for byte in label.encode("utf-8"):
+        state ^= byte
+        state = (state * 0xBF58476D1CE4E5B9) & ((1 << 64) - 1)
+
+    bases = "ACGT"
+    out: list[str] = []
+    while len(out) < length:
+        state ^= (state >> 12) & ((1 << 64) - 1)
+        state ^= (state << 25) & ((1 << 64) - 1)
+        state ^= (state >> 27) & ((1 << 64) - 1)
+        value = (state * 0x2545F4914F6CDD1D) & ((1 << 64) - 1)
+        base = bases[value & 3]
+        if len(out) >= 3 and out[-1] == out[-2] == out[-3] == base:
+            base = bases[(bases.index(base) + 1) & 3]
+        out.append(base)
+    return "".join(out)
 
 
 def revcomp(seq: str) -> str:
@@ -183,10 +199,10 @@ def run_command(command: list[str], cwd: Path) -> dict[str, object]:
 
 
 def generate_fixture(out_dir: Path) -> dict[str, object]:
-    exon_a = repeat_pattern("ACGTTGCAAGTC", 90)
-    exon_b = repeat_pattern("GGAACCTTACGA", 72)
-    exon_alt = repeat_pattern("TTGACCGATGAA", 60)
-    exon_c = repeat_pattern("CGTACGATTCGA", 90)
+    exon_a = deterministic_dna("shared_exon_a", 90)
+    exon_b = deterministic_dna("dominant_exon_b", 72)
+    exon_alt = deterministic_dna("alternative_exon", 60)
+    exon_c = deterministic_dna("shared_exon_c", 90)
 
     tx1 = exon_a + exon_b + exon_c
     tx2 = exon_a + exon_alt + exon_c
@@ -247,6 +263,7 @@ def main() -> int:
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--skip-raptor", action="store_true")
     parser.add_argument("--run-trinity", action="store_true")
+    parser.add_argument("--min-truth-coverage", type=float, default=0.95)
     args = parser.parse_args()
 
     out_dir = args.out_dir.resolve()
@@ -334,6 +351,17 @@ def main() -> int:
     if report["raptor"] and report["raptor"]["exit_code"] != 0:
         print("raptor assemble failed; see report.json", file=sys.stderr)
         return 1
+    if report["raptor"]:
+        metrics = report["raptor"].get("metrics", {})
+        truth_recovery = metrics.get("truth_recovery", {})
+        min_coverage = truth_recovery.get("min_best_coverage", 0.0)
+        if min_coverage < args.min_truth_coverage:
+            print(
+                "truth recovery below threshold: "
+                f"{min_coverage} < {args.min_truth_coverage}",
+                file=sys.stderr,
+            )
+            return 1
     return 0
 
 
