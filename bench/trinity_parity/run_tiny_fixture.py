@@ -177,9 +177,43 @@ def selected_isoform_evidence_metrics(path: Path) -> dict[str, object]:
     if not path.exists():
         return {"component_selected_isoforms_json_exists": False}
     records = json.loads(path.read_text(encoding="utf-8"))
+    methods = sorted(
+        {
+            str(record.get("selection_method", ""))
+            for record in records
+            if record.get("selection_method")
+        }
+    )
+    ranks_by_component: dict[int, list[int]] = {}
+    scores_by_component: dict[int, list[int]] = {}
+    for record in records:
+        component_id = int(record.get("component_id", -1))
+        ranks_by_component.setdefault(component_id, []).append(
+            int(record.get("component_rank", 0))
+        )
+        scores_by_component.setdefault(component_id, []).append(
+            int(record.get("evidence_score", 0))
+        )
+    ranks_are_dense = all(
+        sorted(ranks) == list(range(1, len(ranks) + 1))
+        for ranks in ranks_by_component.values()
+    )
+    scores_are_descending = all(
+        scores == sorted(scores, reverse=True) for scores in scores_by_component.values()
+    )
     return {
         "component_selected_isoforms_json_exists": True,
         "component_selected_isoform_record_count": len(records),
+        "component_selected_selection_methods": methods,
+        "component_selected_component_ranks_are_dense": ranks_are_dense,
+        "component_selected_scores_are_descending": scores_are_descending,
+        "component_selected_evidence_score": sum(
+            int(record.get("evidence_score", 0)) for record in records
+        ),
+        "component_selected_max_evidence_score": max(
+            (int(record.get("evidence_score", 0)) for record in records),
+            default=0,
+        ),
         "component_selected_direct_read_support": sum(
             int(record.get("direct_read_support", 0)) for record in records
         ),
@@ -812,6 +846,16 @@ def check_report_thresholds(
             "component_selected_isoform_count", 0
         ):
             failures.append("selected isoform evidence records do not match selected FASTA records")
+        if "component_contig_evidence_score_v1" not in workflow_metrics.get(
+            "component_selected_selection_methods", []
+        ):
+            failures.append("selected isoforms do not report the expected scoring method")
+        if not workflow_metrics.get("component_selected_component_ranks_are_dense"):
+            failures.append("selected isoform component ranks are not dense")
+        if not workflow_metrics.get("component_selected_scores_are_descending"):
+            failures.append("selected isoforms are not sorted by descending evidence score")
+        if workflow_metrics.get("component_selected_evidence_score", 0) < 1:
+            failures.append("selected isoforms lack positive evidence score")
         if workflow_metrics.get("component_selected_direct_read_support", 0) < 1:
             failures.append("selected isoforms lack direct read support")
         if workflow_metrics.get("component_selected_direct_pair_support", 0) < 1:
@@ -967,6 +1011,21 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         ),
         "workflow_component_selected_isoform_records": workflow_metrics.get(
             "component_selected_isoform_record_count"
+        ),
+        "workflow_component_selected_selection_methods": workflow_metrics.get(
+            "component_selected_selection_methods"
+        ),
+        "workflow_component_selected_ranks_dense": workflow_metrics.get(
+            "component_selected_component_ranks_are_dense"
+        ),
+        "workflow_component_selected_scores_descending": workflow_metrics.get(
+            "component_selected_scores_are_descending"
+        ),
+        "workflow_component_selected_evidence_score": workflow_metrics.get(
+            "component_selected_evidence_score"
+        ),
+        "workflow_component_selected_max_evidence_score": workflow_metrics.get(
+            "component_selected_max_evidence_score"
         ),
         "workflow_component_selected_isoform_lengths": workflow_metrics.get(
             "component_selected_isoform_lengths"

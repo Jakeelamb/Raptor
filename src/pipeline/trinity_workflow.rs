@@ -179,8 +179,11 @@ struct ComponentArtifacts {
 struct SelectedComponentIsoform {
     id: String,
     component_id: usize,
+    component_rank: usize,
     source_contig_id: usize,
     length: usize,
+    selection_method: &'static str,
+    evidence_score: usize,
     component_assigned_reads: usize,
     component_assigned_pairs: usize,
     direct_read_support: usize,
@@ -310,11 +313,14 @@ fn write_component_selected_isoforms_fasta(
     for isoform in selected_isoforms {
         if let Some(contig) = contigs_by_id.get(&isoform.source_contig_id) {
             output.push_str(&format!(
-                ">{} component={} source=contig_{} length={} direct_reads={} direct_pairs={} read_kmer_paths={} max_path_support={}\n",
+                ">{} component={} rank={} source=contig_{} length={} score={} method={} direct_reads={} direct_pairs={} read_kmer_paths={} max_path_support={}\n",
                 isoform.id,
                 isoform.component_id,
+                isoform.component_rank,
                 isoform.source_contig_id,
                 isoform.length,
+                isoform.evidence_score,
+                isoform.selection_method,
                 isoform.direct_read_support,
                 isoform.direct_pair_support,
                 isoform.overlapping_read_kmer_path_count,
@@ -336,7 +342,8 @@ fn select_component_isoforms(
         contigs.iter().map(|contig| (contig.id, contig)).collect();
     let mut selected = Vec::new();
     for graph in component_graphs {
-        for (isoform_idx, node) in graph.nodes.iter().enumerate() {
+        let mut component_isoforms = Vec::new();
+        for node in &graph.nodes {
             let Some(contig) = contigs_by_id.get(&node.contig_id) else {
                 continue;
             };
@@ -352,11 +359,20 @@ fn select_component_isoforms(
                 .map(|path| path.min_support)
                 .max()
                 .unwrap_or(0);
-            selected.push(SelectedComponentIsoform {
-                id: format!("component_{}_isoform_{}", graph.component_id, isoform_idx),
+            let evidence_score = selected_isoform_evidence_score(
+                direct_read_support,
+                direct_pair_support,
+                overlapping_paths.len(),
+                max_path_support,
+            );
+            component_isoforms.push(SelectedComponentIsoform {
+                id: String::new(),
                 component_id: graph.component_id,
+                component_rank: 0,
                 source_contig_id: node.contig_id,
                 length: contig.sequence.len(),
+                selection_method: "component_contig_evidence_score_v1",
+                evidence_score,
                 component_assigned_reads: graph.assigned_read_count,
                 component_assigned_pairs: graph.assigned_pair_count,
                 direct_read_support,
@@ -365,8 +381,34 @@ fn select_component_isoforms(
                 max_overlapping_read_kmer_path_support: max_path_support,
             });
         }
+        component_isoforms.sort_by(|left, right| {
+            right
+                .evidence_score
+                .cmp(&left.evidence_score)
+                .then_with(|| right.direct_pair_support.cmp(&left.direct_pair_support))
+                .then_with(|| right.direct_read_support.cmp(&left.direct_read_support))
+                .then_with(|| right.length.cmp(&left.length))
+                .then_with(|| left.source_contig_id.cmp(&right.source_contig_id))
+        });
+        for (idx, mut isoform) in component_isoforms.into_iter().enumerate() {
+            isoform.component_rank = idx + 1;
+            isoform.id = format!("component_{}_isoform_{}", graph.component_id, idx);
+            selected.push(isoform);
+        }
     }
     selected
+}
+
+fn selected_isoform_evidence_score(
+    direct_read_support: usize,
+    direct_pair_support: usize,
+    overlapping_read_kmer_path_count: usize,
+    max_overlapping_read_kmer_path_support: usize,
+) -> usize {
+    direct_read_support
+        + direct_pair_support * 5
+        + overlapping_read_kmer_path_count * 3
+        + max_overlapping_read_kmer_path_support * 2
 }
 
 fn contig_read_pair_support(
@@ -608,6 +650,17 @@ mod tests {
         )
         .expect("parse selected isoforms");
         assert_eq!(selected_isoforms.len(), 1);
+        assert_eq!(selected_isoforms[0]["component_rank"], 1);
+        assert_eq!(
+            selected_isoforms[0]["selection_method"],
+            "component_contig_evidence_score_v1"
+        );
+        assert!(
+            selected_isoforms[0]["evidence_score"]
+                .as_u64()
+                .expect("evidence score")
+                >= 1
+        );
         assert_eq!(selected_isoforms[0]["component_assigned_pairs"], 1);
         assert!(
             selected_isoforms[0]["direct_read_support"]
