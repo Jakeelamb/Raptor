@@ -637,6 +637,10 @@ pub enum Commands {
         #[arg(long)]
         samples_file: Option<String>,
 
+        /// Trinity-style strand-specific library type: F, R, FR, or RF
+        #[arg(long = "SS_lib_type", alias = "ss-lib-type")]
+        ss_lib_type: Option<String>,
+
         /// Output directory for normalized reads, assembly, and report
         #[arg(short, long)]
         output_dir: String,

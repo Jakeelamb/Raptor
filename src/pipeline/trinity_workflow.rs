@@ -25,6 +25,7 @@ pub struct TrinityWorkflowConfig {
     pub input1: Option<String>,
     pub input2: Option<String>,
     pub samples_file: Option<String>,
+    pub ss_lib_type: Option<String>,
     pub output_dir: String,
     pub output_fasta: Option<String>,
     pub report_json: Option<String>,
@@ -40,6 +41,7 @@ pub struct TrinityWorkflowReport {
     pub input1: String,
     pub input2: Option<String>,
     pub samples_file: Option<String>,
+    pub ss_lib_type: Option<String>,
     pub sample_count: usize,
     pub output_dir: String,
     pub normalized: bool,
@@ -78,6 +80,7 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
     }
 
     let resolved_inputs = resolve_workflow_inputs(&config, &output_dir)?;
+    let ss_lib_type = validate_ss_lib_type(config.ss_lib_type.as_deref())?;
 
     let (assembly_input1, assembly_input2, normalization) = if config.normalize {
         normalize_for_workflow(
@@ -158,6 +161,7 @@ pub fn run_trinity_workflow(config: TrinityWorkflowConfig) -> io::Result<Trinity
         input1: resolved_inputs.input1,
         input2: resolved_inputs.input2,
         samples_file: config.samples_file,
+        ss_lib_type,
         sample_count: resolved_inputs.sample_count,
         output_dir: config.output_dir,
         normalized: config.normalize,
@@ -783,6 +787,23 @@ fn split_input_list(input: &str) -> Vec<String> {
         .collect()
 }
 
+fn validate_ss_lib_type(ss_lib_type: Option<&str>) -> io::Result<Option<String>> {
+    let Some(raw_value) = ss_lib_type else {
+        return Ok(None);
+    };
+    let normalized = raw_value.trim().to_ascii_uppercase();
+    match normalized.as_str() {
+        "F" | "R" | "FR" | "RF" => Ok(Some(normalized)),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "--SS_lib_type must be one of F, R, FR, or RF; got '{}'",
+                raw_value
+            ),
+        )),
+    }
+}
+
 fn read_samples_file(path: &str) -> io::Result<Vec<TrinitySampleInput>> {
     let file = fs::File::open(path)?;
     let reader = io::BufReader::new(file);
@@ -1050,6 +1071,7 @@ mod tests {
         let report = run_trinity_workflow(TrinityWorkflowConfig {
             input1: Some(r1.to_string_lossy().into_owned()),
             input2: Some(r2.to_string_lossy().into_owned()),
+            ss_lib_type: None,
             samples_file: None,
             output_dir: output_dir.to_string_lossy().into_owned(),
             output_fasta: None,
@@ -1143,6 +1165,7 @@ mod tests {
         let report = run_trinity_workflow(TrinityWorkflowConfig {
             input1: Some(r1.to_string_lossy().into_owned()),
             input2: None,
+            ss_lib_type: None,
             samples_file: None,
             output_dir: output_dir.to_string_lossy().into_owned(),
             output_fasta: None,
@@ -1199,6 +1222,7 @@ mod tests {
         let report = run_trinity_workflow(TrinityWorkflowConfig {
             input1: None,
             input2: None,
+            ss_lib_type: None,
             samples_file: Some(samples_file.to_string_lossy().into_owned()),
             output_dir: output_dir.to_string_lossy().into_owned(),
             output_fasta: None,
@@ -1254,6 +1278,7 @@ mod tests {
         let report = run_trinity_workflow(TrinityWorkflowConfig {
             input1: None,
             input2: None,
+            ss_lib_type: None,
             samples_file: Some(samples_file.to_string_lossy().into_owned()),
             output_dir: output_dir.to_string_lossy().into_owned(),
             output_fasta: None,
@@ -1296,6 +1321,7 @@ mod tests {
         let report = run_trinity_workflow(TrinityWorkflowConfig {
             input1: Some(format!("{},{}", r1.display(), r1.display())),
             input2: Some(format!("{},{}", r2.display(), r2.display())),
+            ss_lib_type: None,
             samples_file: None,
             output_dir: output_dir.to_string_lossy().into_owned(),
             output_fasta: None,
@@ -1338,6 +1364,7 @@ mod tests {
         let err = run_trinity_workflow(TrinityWorkflowConfig {
             input1: Some(format!("{},{}", r1.display(), r1.display())),
             input2: Some(r2.to_string_lossy().into_owned()),
+            ss_lib_type: None,
             samples_file: None,
             output_dir: output_dir.to_string_lossy().into_owned(),
             output_fasta: None,
@@ -1357,5 +1384,76 @@ mod tests {
 
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         assert!(err.to_string().contains("same number of paths"));
+    }
+
+    #[test]
+    fn trinity_workflow_reports_valid_strand_specific_library_type() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let r1 = temp_dir.path().join("r1.fastq");
+        let r2 = temp_dir.path().join("r2.fastq");
+        let seq = "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT";
+        fs::write(&r1, format!("@r1/1\n{seq}\n+\n{}\n", "I".repeat(seq.len()))).expect("write r1");
+        fs::write(&r2, format!("@r1/2\n{seq}\n+\n{}\n", "I".repeat(seq.len()))).expect("write r2");
+
+        let output_dir = temp_dir.path().join("workflow_stranded");
+        let report = run_trinity_workflow(TrinityWorkflowConfig {
+            input1: Some(r1.to_string_lossy().into_owned()),
+            input2: Some(r2.to_string_lossy().into_owned()),
+            ss_lib_type: Some("rf".to_string()),
+            samples_file: None,
+            output_dir: output_dir.to_string_lossy().into_owned(),
+            output_fasta: None,
+            report_json: None,
+            normalize: true,
+            normalize_config: NormalizeConfig {
+                k: 5,
+                target_coverage: u16::MAX,
+                min_abundance: 1,
+                max_reads: None,
+                use_gpu: false,
+            },
+            min_len: 10,
+            use_gpu: false,
+        })
+        .expect("stranded workflow should run");
+
+        assert_eq!(report.ss_lib_type.as_deref(), Some("RF"));
+        let report_payload: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&report.report_json).expect("report json"))
+                .expect("parse workflow report");
+        assert_eq!(report_payload["ss_lib_type"], "RF");
+    }
+
+    #[test]
+    fn trinity_workflow_rejects_invalid_strand_specific_library_type() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let r1 = temp_dir.path().join("r1.fastq");
+        let seq = "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT";
+        fs::write(&r1, format!("@r1\n{seq}\n+\n{}\n", "I".repeat(seq.len()))).expect("write r1");
+
+        let output_dir = temp_dir.path().join("workflow_bad_stranded");
+        let err = run_trinity_workflow(TrinityWorkflowConfig {
+            input1: Some(r1.to_string_lossy().into_owned()),
+            input2: None,
+            ss_lib_type: Some("bad".to_string()),
+            samples_file: None,
+            output_dir: output_dir.to_string_lossy().into_owned(),
+            output_fasta: None,
+            report_json: None,
+            normalize: true,
+            normalize_config: NormalizeConfig {
+                k: 5,
+                target_coverage: u16::MAX,
+                min_abundance: 1,
+                max_reads: None,
+                use_gpu: false,
+            },
+            min_len: 10,
+            use_gpu: false,
+        })
+        .expect_err("invalid strand type should fail");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("--SS_lib_type"));
     }
 }

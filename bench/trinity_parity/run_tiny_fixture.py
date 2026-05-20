@@ -917,6 +917,7 @@ def run_raptor_workflow_case(
         "samples_file",
         "samples_file_multi",
         "comma_lists",
+        "stranded_rf",
     }:
         raise ValueError(f"unknown workflow input mode: {input_mode}")
     if input_mode == "single":
@@ -927,6 +928,8 @@ def run_raptor_workflow_case(
         workflow_dir = out_dir / "raptor_workflow_samples_file_multi"
     elif input_mode == "comma_lists":
         workflow_dir = out_dir / "raptor_workflow_comma_lists"
+    elif input_mode == "stranded_rf":
+        workflow_dir = out_dir / "raptor_workflow_stranded_rf"
     else:
         workflow_dir = out_dir / ("raptor_workflow_gpu" if use_gpu else "raptor_workflow")
     workflow_fasta = workflow_dir / "raptor_trinity.fasta.gz"
@@ -983,7 +986,7 @@ def run_raptor_workflow_case(
                 else fixture["paths"]["r1_fastq"],
             ]
         )
-    if input_mode == "paired":
+    if input_mode == "paired" or input_mode == "stranded_rf":
         command.extend(
             [
                 "--input2",
@@ -997,6 +1000,8 @@ def run_raptor_workflow_case(
                 f"{fixture['paths']['r2_fastq']},{fixture['paths']['r2_fastq']}",
             ]
         )
+    if input_mode == "stranded_rf":
+        command.extend(["--SS_lib_type", "RF"])
     command.extend(
         [
             "--output-dir",
@@ -1024,6 +1029,7 @@ def run_raptor_workflow_case(
         metrics["component_count"] = workflow_payload.get("component_count")
         metrics["sample_count"] = workflow_payload.get("sample_count")
         metrics["samples_file"] = workflow_payload.get("samples_file")
+        metrics["ss_lib_type"] = workflow_payload.get("ss_lib_type")
         metrics["components_json"] = workflow_payload.get("components_json")
         metrics["component_clustering"] = workflow_payload.get("component_clustering")
         metrics["component_graph_count"] = workflow_payload.get("component_graph_count")
@@ -1156,6 +1162,7 @@ def run_one_fixture(
     run_raptor_workflow_samples_file: bool,
     run_raptor_workflow_samples_file_multi: bool,
     run_raptor_workflow_comma_lists: bool,
+    run_raptor_workflow_stranded_rf: bool,
     run_malformed_fastq_checks: bool,
     run_trinity: bool,
     require_trinity: bool,
@@ -1177,6 +1184,7 @@ def run_one_fixture(
         "raptor_workflow_samples_file": None,
         "raptor_workflow_samples_file_multi": None,
         "raptor_workflow_comma_lists": None,
+        "raptor_workflow_stranded_rf": None,
         "malformed_fastq_check": None,
         "trinity": {
             "available": shutil.which("Trinity") is not None,
@@ -1329,6 +1337,11 @@ def run_one_fixture(
             out_dir, fixture, oracle_fasta, min_match_coverage, False, "comma_lists"
         )
 
+    if run_raptor_workflow_stranded_rf:
+        report["raptor_workflow_stranded_rf"] = run_raptor_workflow_case(
+            out_dir, fixture, oracle_fasta, min_match_coverage, False, "stranded_rf"
+        )
+
     if run_malformed_fastq_checks:
         report["malformed_fastq_check"] = run_malformed_fastq_check(out_dir, fixture)
 
@@ -1422,6 +1435,7 @@ def check_report_thresholds(
     raptor_workflow_samples_file = report.get("raptor_workflow_samples_file")
     raptor_workflow_samples_file_multi = report.get("raptor_workflow_samples_file_multi")
     raptor_workflow_comma_lists = report.get("raptor_workflow_comma_lists")
+    raptor_workflow_stranded_rf = report.get("raptor_workflow_stranded_rf")
     malformed_fastq_check = report.get("malformed_fastq_check")
     if raptor_normalize:
         if raptor_normalize.get("exit_code") != 0:
@@ -1441,6 +1455,7 @@ def check_report_thresholds(
                 raptor_workflow_samples_file,
                 raptor_workflow_samples_file_multi,
                 raptor_workflow_comma_lists,
+                raptor_workflow_stranded_rf,
                 malformed_fastq_check,
             ]
         ):
@@ -1720,6 +1735,28 @@ def check_report_thresholds(
                 f"comma-list selected component isoform F1 below threshold: {selected_f1} < {min_selected_f1}"
             )
 
+    if raptor_workflow_stranded_rf:
+        if raptor_workflow_stranded_rf.get("exit_code") != 0:
+            failures.append("raptor trinity stranded RF workflow failed")
+        stranded_metrics = raptor_workflow_stranded_rf.get("metrics", {})
+        if not stranded_metrics.get("output_exists"):
+            failures.append("raptor trinity stranded RF workflow did not produce assembly output")
+        if stranded_metrics.get("input_mode") != "stranded_rf":
+            failures.append("raptor trinity stranded RF workflow did not record stranded input mode")
+        if stranded_metrics.get("ss_lib_type") != "RF":
+            failures.append("raptor trinity stranded RF workflow did not report SS_lib_type RF")
+        selected_truth_precision = stranded_metrics.get("component_selected_truth_precision", {})
+        selected_precision = selected_truth_precision.get("precision", 0.0)
+        selected_f1 = selected_truth_precision.get("f1", 0.0)
+        if selected_precision < min_selected_precision:
+            failures.append(
+                f"stranded RF selected component isoform precision below threshold: {selected_precision} < {min_selected_precision}"
+            )
+        if selected_f1 < min_selected_f1:
+            failures.append(
+                f"stranded RF selected component isoform F1 below threshold: {selected_f1} < {min_selected_f1}"
+            )
+
     if malformed_fastq_check:
         malformed_metrics = malformed_fastq_check.get("metrics", {})
         if malformed_fastq_check.get("exit_code") == 0:
@@ -1766,6 +1803,7 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
     raptor_workflow_samples_file = report.get("raptor_workflow_samples_file") or {}
     raptor_workflow_samples_file_multi = report.get("raptor_workflow_samples_file_multi") or {}
     raptor_workflow_comma_lists = report.get("raptor_workflow_comma_lists") or {}
+    raptor_workflow_stranded_rf = report.get("raptor_workflow_stranded_rf") or {}
     malformed_fastq_check = report.get("malformed_fastq_check") or {}
     trinity = report.get("trinity") or {}
     metrics = raptor.get("metrics", {})
@@ -1776,6 +1814,7 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
     samples_workflow_metrics = raptor_workflow_samples_file.get("metrics", {})
     samples_multi_workflow_metrics = raptor_workflow_samples_file_multi.get("metrics", {})
     comma_workflow_metrics = raptor_workflow_comma_lists.get("metrics", {})
+    stranded_workflow_metrics = raptor_workflow_stranded_rf.get("metrics", {})
     malformed_metrics = malformed_fastq_check.get("metrics", {})
     trinity_result = trinity.get("result", {})
     trinity_metrics = trinity_result.get("metrics", {})
@@ -1787,6 +1826,7 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
     samples_workflow_resources = raptor_workflow_samples_file.get("resource_usage", {})
     samples_multi_workflow_resources = raptor_workflow_samples_file_multi.get("resource_usage", {})
     comma_workflow_resources = raptor_workflow_comma_lists.get("resource_usage", {})
+    stranded_workflow_resources = raptor_workflow_stranded_rf.get("resource_usage", {})
     trinity_resources = trinity_result.get("resource_usage", {})
     raptor_gpu = raptor.get("gpu_usage", {})
     normalize_gpu = raptor_normalize.get("gpu_usage", {})
@@ -1942,6 +1982,22 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
             "component_selected_truth_precision", {}
         ).get("f1"),
         "raptor_comma_list_workflow_selected_isoform_lengths": comma_workflow_metrics.get(
+            "component_selected_isoform_lengths"
+        ),
+        "raptor_stranded_rf_workflow_exit_code": raptor_workflow_stranded_rf.get("exit_code"),
+        "raptor_stranded_rf_workflow_elapsed_seconds": raptor_workflow_stranded_rf.get(
+            "elapsed_seconds"
+        ),
+        "raptor_stranded_rf_workflow_max_rss_kb": stranded_workflow_resources.get("max_rss_kb"),
+        "raptor_stranded_rf_workflow_input_mode": stranded_workflow_metrics.get("input_mode"),
+        "raptor_stranded_rf_workflow_ss_lib_type": stranded_workflow_metrics.get("ss_lib_type"),
+        "raptor_stranded_rf_workflow_selected_precision": stranded_workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("precision"),
+        "raptor_stranded_rf_workflow_selected_f1": stranded_workflow_metrics.get(
+            "component_selected_truth_precision", {}
+        ).get("f1"),
+        "raptor_stranded_rf_workflow_selected_isoform_lengths": stranded_workflow_metrics.get(
             "component_selected_isoform_lengths"
         ),
         "malformed_fastq_exit_code": malformed_fastq_check.get("exit_code"),
@@ -2206,6 +2262,11 @@ def main() -> int:
         help="Run the raptor trinity end-to-end CLI through comma-separated direct read lists",
     )
     parser.add_argument(
+        "--run-raptor-workflow-stranded-rf",
+        action="store_true",
+        help="Run the raptor trinity end-to-end CLI with Trinity-style --SS_lib_type RF",
+    )
+    parser.add_argument(
         "--run-malformed-fastq-checks",
         action="store_true",
         help="Run negative FASTQ validation checks against the raptor trinity workflow",
@@ -2282,6 +2343,7 @@ def main() -> int:
             args.run_raptor_workflow_samples_file,
             args.run_raptor_workflow_samples_file_multi,
             args.run_raptor_workflow_comma_lists,
+            args.run_raptor_workflow_stranded_rf,
             args.run_malformed_fastq_checks,
             run_trinity,
             require_trinity,
