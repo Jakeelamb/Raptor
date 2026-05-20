@@ -1,3 +1,4 @@
+use crate::accel::backend::AdjacencyTableU64;
 use crate::accel::CpuBackend;
 use crate::eval::metrics::{evaluate_lengths_in_place, normalized_run_base, BaseComposition};
 use crate::graph::assembler::{greedy_assembly_u64, Contig};
@@ -940,6 +941,112 @@ fn maybe_rescue_fragmented_contigs_with_read_overlaps(
     }
 }
 
+fn maybe_replace_fragmented_contigs_with_oriented_kmer_paths(
+    contigs: Vec<Contig>,
+    sequences: &[String],
+    k: usize,
+    min_kmer_count: u32,
+    min_len: usize,
+) -> Vec<Contig> {
+    let current_longest = contigs
+        .iter()
+        .map(|contig| contig.sequence.len())
+        .max()
+        .unwrap_or(0);
+    if current_longest >= min_len || sequences.is_empty() || !(1..=32).contains(&k) {
+        return contigs;
+    }
+
+    let oriented_counts = count_oriented_kmers_u64_filtered(sequences, k, min_kmer_count);
+    let oriented_adjacency = build_oriented_adjacency_u64(&oriented_counts, k);
+    let oriented = greedy_assembly_u64(k, &oriented_counts, &oriented_adjacency, min_len);
+    let oriented_longest = oriented
+        .iter()
+        .map(|contig| contig.sequence.len())
+        .max()
+        .unwrap_or(0);
+
+    if oriented_longest > current_longest {
+        info!(
+            "Oriented k-mer paths improved longest contig from {} bp to {} bp ({} -> {} contigs)",
+            current_longest,
+            oriented_longest,
+            contigs.len(),
+            oriented.len()
+        );
+        oriented
+    } else {
+        contigs
+    }
+}
+
+fn count_oriented_kmers_u64_filtered(
+    sequences: &[String],
+    k: usize,
+    min_kmer_count: u32,
+) -> AHashMap<u64, u32> {
+    let mut counts = AHashMap::new();
+    if !(1..=32).contains(&k) {
+        return counts;
+    }
+
+    for sequence in sequences {
+        let bytes = sequence.as_bytes();
+        if bytes.len() < k {
+            continue;
+        }
+        for window in bytes.windows(k) {
+            if let Some(encoded) = encode_kmer_bytes(window) {
+                *counts.entry(encoded).or_insert(0) += 1;
+            }
+        }
+    }
+
+    counts.retain(|_, count| *count >= min_kmer_count);
+    counts
+}
+
+fn build_oriented_adjacency_u64(kmer_counts: &AHashMap<u64, u32>, k: usize) -> AdjacencyTableU64 {
+    let adjacency_k = u8::try_from(k).ok().unwrap_or(u8::MAX);
+    if !(1..=32).contains(&k) || kmer_counts.is_empty() {
+        return AdjacencyTableU64::new(adjacency_k);
+    }
+
+    let mut adjacency = AdjacencyTableU64::with_capacity(adjacency_k, kmer_counts.len());
+    let suffix_mask = if k == 1 {
+        0
+    } else {
+        (1u64 << ((k - 1) * 2)) - 1
+    };
+
+    for &kmer in kmer_counts.keys() {
+        let suffix = kmer & suffix_mask;
+        for base in 0u64..4 {
+            let next = (suffix << 2) | base;
+            if let Some(&next_count) = kmer_counts.get(&next) {
+                adjacency.add_edge(kmer, next, next_count);
+            }
+        }
+    }
+
+    adjacency
+}
+
+fn encode_kmer_bytes(bytes: &[u8]) -> Option<u64> {
+    let mut value = 0u64;
+    for &base in bytes {
+        value <<= 2;
+        value |= match base {
+            b'A' | b'a' => 0,
+            b'C' | b'c' => 1,
+            b'G' | b'g' => 2,
+            b'T' | b't' => 3,
+            _ => return None,
+        };
+    }
+    Some(value)
+}
+
 fn split_contigs_at_paired_start_gaps(
     contigs: Vec<Contig>,
     paired_sequences: &[(String, String)],
@@ -1371,6 +1478,13 @@ pub fn assemble_reads_with_gpu(
     info!("Assembling contigs with minimum length: {}", min_len);
     let mut contigs = greedy_assembly_u64(k, &kmer_counts_u64, &adjacency, min_len);
     if can_try_read_overlap_rescue {
+        contigs = maybe_replace_fragmented_contigs_with_oriented_kmer_paths(
+            contigs,
+            &sequences,
+            k,
+            min_kmer_count,
+            min_len,
+        );
         contigs = maybe_rescue_fragmented_contigs_with_read_overlaps(contigs, &sequences, min_len);
     }
 
@@ -1941,11 +2055,12 @@ fn canonicalize_contig_output_order(contigs: &mut [Contig]) {
 mod tests {
     use super::{
         assemble_read_overlap_contigs, assemble_reads_with_gpu, build_read_prefix_index,
-        canonical_sequence_key, canonicalize_contig_output_order, derive_contig_expression_map,
-        estimate_sequence_capacity, maybe_rescue_fragmented_contigs_with_read_overlaps,
-        sequence_only_record, should_try_paired_start_gap_split,
-        split_contigs_at_paired_start_gaps, summarize_assembly_quality,
-        write_assembly_quality_reports, AssemblyQualitySummary,
+        canonical_sequence_key, canonicalize_contig_output_order,
+        count_oriented_kmers_u64_filtered, derive_contig_expression_map,
+        estimate_sequence_capacity, maybe_replace_fragmented_contigs_with_oriented_kmer_paths,
+        maybe_rescue_fragmented_contigs_with_read_overlaps, sequence_only_record,
+        should_try_paired_start_gap_split, split_contigs_at_paired_start_gaps,
+        summarize_assembly_quality, write_assembly_quality_reports, AssemblyQualitySummary,
     };
     use crate::graph::assembler::Contig;
     use crate::io::fastq::FastqRecord;
@@ -2190,6 +2305,34 @@ mod tests {
         assert_eq!(index.get("CCC").cloned().unwrap_or_default(), vec![1]);
         assert_eq!(index.get("GGG").cloned().unwrap_or_default(), vec![2]);
         assert!(index.get("TTT").is_none());
+    }
+
+    #[test]
+    fn oriented_kmer_paths_rescue_fragmented_canonical_graph_output() {
+        let fragmented = Vec::new();
+        let reads = vec![
+            "AAACCCGGGTTT".to_string(),
+            "CCCGGGTTTAAA".to_string(),
+            "GGGTTTAAACCC".to_string(),
+        ];
+
+        let rescued =
+            maybe_replace_fragmented_contigs_with_oriented_kmer_paths(fragmented, &reads, 3, 1, 12);
+        let longest = rescued
+            .iter()
+            .map(|contig| contig.sequence.len())
+            .max()
+            .unwrap_or(0);
+
+        assert!(longest >= 12);
+    }
+
+    #[test]
+    fn oriented_kmer_counting_does_not_canonicalize_reverse_complements() {
+        let reads = vec!["AAAC".to_string()];
+        let counts = count_oriented_kmers_u64_filtered(&reads, 4, 1);
+
+        assert_eq!(counts.len(), 1);
     }
 
     #[test]
