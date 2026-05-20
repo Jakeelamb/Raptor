@@ -1,7 +1,8 @@
 use crate::graph::assembler::Contig;
 use crate::graph::partition::{
     assign_read_evidence_to_components, build_component_graphs,
-    cluster_contigs_by_sequence_or_read_kmers, RaptorComponent, RaptorComponentGraph,
+    cluster_contigs_by_sequence_or_read_kmers, cluster_contigs_by_shared_sequence, RaptorComponent,
+    RaptorComponentGraph,
 };
 use crate::io::fasta::try_open_fasta;
 use crate::io::fastq::{stream_fastq_records_checked, try_open_fastq, FastqRecord, FastqWriter};
@@ -283,9 +284,7 @@ fn write_component_artifacts(
 ) -> io::Result<ComponentArtifacts> {
     let contigs = read_contigs_from_fasta(assembly_fasta)?;
     let total_contig_bases: usize = contigs.iter().map(|contig| contig.sequence.len()).sum();
-    if contigs.len() > MAX_EXHAUSTIVE_COMPONENT_ARTIFACT_CONTIGS
-        || total_contig_bases > MAX_EXHAUSTIVE_COMPONENT_ARTIFACT_BASES
-    {
+    if contigs.len() > MAX_EXHAUSTIVE_COMPONENT_ARTIFACT_CONTIGS {
         write_json(
             component_path,
             &Vec::<RaptorComponent>::new(),
@@ -311,11 +310,33 @@ fn write_component_artifacts(
         return Ok(ComponentArtifacts {
             components: Vec::new(),
             component_graphs: Vec::new(),
-            clustering: if contigs.len() > MAX_EXHAUSTIVE_COMPONENT_ARTIFACT_CONTIGS {
-                "skipped_fragmented_large_contig_set"
-            } else {
-                "skipped_large_contig_base_set"
-            },
+            clustering: "skipped_fragmented_large_contig_set",
+        });
+    }
+    if total_contig_bases > MAX_EXHAUSTIVE_COMPONENT_ARTIFACT_BASES {
+        let components = cluster_contigs_by_shared_sequence(&contigs, min_shared_bases);
+        write_json(component_path, &components, "component report")?;
+        write_json(
+            component_graphs_path,
+            &Vec::<RaptorComponentGraph>::new(),
+            "component graph report",
+        )?;
+        fs::write(component_paths_fasta, b"")?;
+        fs::write(component_selected_isoforms_fasta, b"")?;
+        write_json(
+            component_selected_isoforms_json,
+            &Vec::<SelectedComponentIsoform>::new(),
+            "selected component isoform report",
+        )?;
+        write_json(
+            component_isoform_candidates_json,
+            &Vec::<ComponentIsoformCandidate>::new(),
+            "component isoform candidate report",
+        )?;
+        return Ok(ComponentArtifacts {
+            components,
+            component_graphs: Vec::new(),
+            clustering: "sequence_only_large_contig_base_set",
         });
     }
     let reads1 = read_fastq_sequences(reads1_path)?;

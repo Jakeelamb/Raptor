@@ -89,6 +89,7 @@ measured evidence-loss bug, not the whole problem.
 | Oriented graph boundary extension | Public output improved to 30 contigs, 96,750 bases, N50 5,379; final FASTA F1 moved to 0.019231 | Current frontier |
 | Component artifact cap above 20,000 contig bases | Lets public oriented-contig output finish and be scored while full graph artifacts remain expensive | Kept as a bounded reporting guard |
 | Trinity workflow normalization `--min-abundance` default lowered to 1 | Public normalized kept pairs improved from 23,898/30,575 to 30,258/30,575; final FASTA F1 moved to 0.052174 with 3 strict matches | Current frontier |
+| Sequence-only component summary above the exhaustive graph cap | Public 41-contig output now emits 23 cheap sequence-overlap component clusters instead of empty component JSON while keeping the F1/runtime frontier stable | Kept as bounded Chrysalis diagnostics |
 
 ## Limited Or Negative Results
 
@@ -115,6 +116,14 @@ measured evidence-loss bug, not the whole problem.
 - Public runner scoring must require a real Raptor-vs-Trinity comparison. A
   run with missing Trinity FASTA now fails the F1 gate instead of reporting a
   false pass.
+- Higher-specificity forced `k=31` oriented paths are worse on the public source
+  case: output drops to 32 contigs / 88,458 bases / N50 5,372 and strict final
+  FASTA F1 falls to 0.037736. Keep `k=21` selected by the current contiguity
+  key until path scoring has better biological evidence.
+- Raising the exhaustive component artifact cap to 200,000 bases is too slow for
+  the public loop because full read-kmer graph/path construction dominates the
+  run. Use the cheap sequence-only component summary for public-scale
+  diagnostics until incremental read assignment exists.
 
 ## Boundary Diagnostics
 
