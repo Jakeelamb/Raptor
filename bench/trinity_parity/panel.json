@@ -4,6 +4,7 @@
   "note": "Deterministic local stress panel. This is not the final frozen public Trinity parity panel.",
   "defaults": {
     "run_raptor_workflow": true,
+    "run_raptor_workflow_gpu": true,
     "skip_raptor": true,
     "min_truth_coverage": 0.95,
     "min_selected_match_coverage": 0.95,

@@ -903,6 +903,125 @@ def generate_fixture(out_dir: Path, fixture_name: str, insert: int) -> dict[str,
     return write_fixture_files(out_dir, fixture_name, transcripts, insert, coverage)
 
 
+def run_raptor_workflow_case(
+    out_dir: Path,
+    fixture: dict[str, object],
+    oracle_fasta: Path,
+    min_match_coverage: float,
+    use_gpu: bool,
+) -> dict[str, object]:
+    workflow_dir = out_dir / ("raptor_workflow_gpu" if use_gpu else "raptor_workflow")
+    workflow_fasta = workflow_dir / "raptor_trinity.fasta.gz"
+    command = [
+        "cargo",
+        "run",
+        "--quiet",
+        "--",
+        "trinity",
+        "--input1",
+        fixture["paths"]["r1_fastq"],
+        "--input2",
+        fixture["paths"]["r2_fastq"],
+        "--output-dir",
+        str(workflow_dir),
+        "--output-fasta",
+        str(workflow_fasta),
+        "--min-len",
+        "25",
+    ]
+    if use_gpu:
+        command.append("--gpu")
+    result = run_command(command, ROOT)
+    metrics = {
+        "gpu_requested": use_gpu,
+        "output_exists": workflow_fasta.exists(),
+        "output_fasta_bytes": file_size_bytes(workflow_fasta),
+        "output_dir_footprint": directory_footprint(workflow_dir),
+        "workflow_report": str(workflow_dir / "raptor_trinity_report.json"),
+    }
+    workflow_report = workflow_dir / "raptor_trinity_report.json"
+    if workflow_report.exists():
+        workflow_payload = json.loads(workflow_report.read_text(encoding="utf-8"))
+        metrics["component_count"] = workflow_payload.get("component_count")
+        metrics["components_json"] = workflow_payload.get("components_json")
+        metrics["component_clustering"] = workflow_payload.get("component_clustering")
+        metrics["component_graph_count"] = workflow_payload.get("component_graph_count")
+        metrics["component_graphs_json"] = workflow_payload.get("component_graphs_json")
+        metrics["component_paths_fasta"] = workflow_payload.get("component_paths_fasta")
+        metrics["component_selected_isoforms_fasta"] = workflow_payload.get(
+            "component_selected_isoforms_fasta"
+        )
+        metrics["component_selected_isoforms_json"] = workflow_payload.get(
+            "component_selected_isoforms_json"
+        )
+        metrics["component_isoform_candidates_json"] = workflow_payload.get(
+            "component_isoform_candidates_json"
+        )
+        components_json = workflow_payload.get("components_json")
+        if components_json:
+            metrics.update(component_evidence_metrics(Path(components_json)))
+        component_graphs_json = workflow_payload.get("component_graphs_json")
+        if component_graphs_json:
+            metrics.update(component_graph_metrics(Path(component_graphs_json)))
+        selected_isoforms_json = workflow_payload.get("component_selected_isoforms_json")
+        if selected_isoforms_json:
+            metrics.update(selected_isoform_evidence_metrics(Path(selected_isoforms_json)))
+        isoform_candidates_json = workflow_payload.get("component_isoform_candidates_json")
+        if isoform_candidates_json:
+            metrics.update(isoform_candidate_metrics(Path(isoform_candidates_json)))
+        component_paths_fasta = workflow_payload.get("component_paths_fasta")
+        if component_paths_fasta:
+            metrics.update(
+                component_candidate_metrics(
+                    Path(component_paths_fasta),
+                    Path(workflow_payload["component_selected_isoforms_fasta"])
+                    if workflow_payload.get("component_selected_isoforms_fasta")
+                    else None,
+                    Path(fixture["paths"]["truth_fasta"]),
+                    oracle_fasta,
+                    min_match_coverage,
+                )
+            )
+    if workflow_fasta.exists():
+        lengths = read_fasta_lengths(workflow_fasta)
+        metrics.update(
+            {
+                "transcript_count": len(lengths),
+                "total_bases": sum(lengths),
+                "n50": n50(lengths),
+                "lengths": lengths,
+            }
+        )
+        metrics["truth_recovery"] = truth_recovery_metrics(
+            Path(fixture["paths"]["truth_fasta"]), workflow_fasta
+        )
+        if oracle_fasta.exists():
+            metrics["oracle_recovery"] = fasta_recovery_metrics(oracle_fasta, workflow_fasta)
+    result["metrics"] = metrics
+    return result
+
+
+def add_cpu_gpu_workflow_comparison(report: dict[str, object]) -> None:
+    cpu = report.get("raptor_workflow") or {}
+    gpu = report.get("raptor_workflow_gpu") or {}
+    cpu_metrics = cpu.get("metrics", {})
+    gpu_metrics = gpu.get("metrics", {})
+    cpu_selected = cpu_metrics.get("component_selected_isoforms_fasta")
+    gpu_selected = gpu_metrics.get("component_selected_isoforms_fasta")
+    if not cpu_selected or not gpu_selected:
+        return
+    cpu_path = Path(cpu_selected)
+    gpu_path = Path(gpu_selected)
+    if not cpu_path.exists() or not gpu_path.exists():
+        return
+    gpu_metrics["cpu_selected_isoform_match"] = fasta_precision_recall_metrics(
+        cpu_path, gpu_path, 0.95
+    )
+    cpu_metrics["gpu_selected_isoform_match"] = fasta_precision_recall_metrics(
+        gpu_path, cpu_path, 0.95
+    )
+
+
 def run_one_fixture(
     out_dir: Path,
     fixture_name: str,
@@ -911,6 +1030,7 @@ def run_one_fixture(
     normalize_raptor: bool,
     assemble_normalized: bool,
     run_raptor_workflow: bool,
+    run_raptor_workflow_gpu: bool,
     run_trinity: bool,
     require_trinity: bool,
     freeze_trinity_oracle: bool,
@@ -926,6 +1046,7 @@ def run_one_fixture(
         "raptor_normalize": None,
         "raptor": None,
         "raptor_workflow": None,
+        "raptor_workflow_gpu": None,
         "trinity": {
             "available": shutil.which("Trinity") is not None,
             "ran": False,
@@ -1048,92 +1169,16 @@ def run_one_fixture(
         report["raptor"] = result
 
     if run_raptor_workflow:
-        workflow_dir = out_dir / "raptor_workflow"
-        workflow_fasta = workflow_dir / "raptor_trinity.fasta.gz"
-        command = [
-            "cargo",
-            "run",
-            "--quiet",
-            "--",
-            "trinity",
-            "--input1",
-            fixture["paths"]["r1_fastq"],
-            "--input2",
-            fixture["paths"]["r2_fastq"],
-            "--output-dir",
-            str(workflow_dir),
-            "--output-fasta",
-            str(workflow_fasta),
-            "--min-len",
-            "25",
-        ]
-        result = run_command(command, ROOT)
-        metrics = {
-            "output_exists": workflow_fasta.exists(),
-            "output_fasta_bytes": file_size_bytes(workflow_fasta),
-            "output_dir_footprint": directory_footprint(workflow_dir),
-            "workflow_report": str(workflow_dir / "raptor_trinity_report.json"),
-        }
-        workflow_report = workflow_dir / "raptor_trinity_report.json"
-        if workflow_report.exists():
-            workflow_payload = json.loads(workflow_report.read_text(encoding="utf-8"))
-            metrics["component_count"] = workflow_payload.get("component_count")
-            metrics["components_json"] = workflow_payload.get("components_json")
-            metrics["component_clustering"] = workflow_payload.get("component_clustering")
-            metrics["component_graph_count"] = workflow_payload.get("component_graph_count")
-            metrics["component_graphs_json"] = workflow_payload.get("component_graphs_json")
-            metrics["component_paths_fasta"] = workflow_payload.get("component_paths_fasta")
-            metrics["component_selected_isoforms_fasta"] = workflow_payload.get(
-                "component_selected_isoforms_fasta"
-            )
-            metrics["component_selected_isoforms_json"] = workflow_payload.get(
-                "component_selected_isoforms_json"
-            )
-            metrics["component_isoform_candidates_json"] = workflow_payload.get(
-                "component_isoform_candidates_json"
-            )
-            components_json = workflow_payload.get("components_json")
-            if components_json:
-                metrics.update(component_evidence_metrics(Path(components_json)))
-            component_graphs_json = workflow_payload.get("component_graphs_json")
-            if component_graphs_json:
-                metrics.update(component_graph_metrics(Path(component_graphs_json)))
-            selected_isoforms_json = workflow_payload.get("component_selected_isoforms_json")
-            if selected_isoforms_json:
-                metrics.update(selected_isoform_evidence_metrics(Path(selected_isoforms_json)))
-            isoform_candidates_json = workflow_payload.get("component_isoform_candidates_json")
-            if isoform_candidates_json:
-                metrics.update(isoform_candidate_metrics(Path(isoform_candidates_json)))
-            component_paths_fasta = workflow_payload.get("component_paths_fasta")
-            if component_paths_fasta:
-                metrics.update(
-                    component_candidate_metrics(
-                        Path(component_paths_fasta),
-                        Path(workflow_payload["component_selected_isoforms_fasta"])
-                        if workflow_payload.get("component_selected_isoforms_fasta")
-                        else None,
-                        Path(fixture["paths"]["truth_fasta"]),
-                        oracle_fasta,
-                        min_match_coverage,
-                    )
-                )
-        if workflow_fasta.exists():
-            lengths = read_fasta_lengths(workflow_fasta)
-            metrics.update(
-                {
-                    "transcript_count": len(lengths),
-                    "total_bases": sum(lengths),
-                    "n50": n50(lengths),
-                    "lengths": lengths,
-                }
-            )
-            metrics["truth_recovery"] = truth_recovery_metrics(
-                Path(fixture["paths"]["truth_fasta"]), workflow_fasta
-            )
-            if oracle_fasta.exists():
-                metrics["oracle_recovery"] = fasta_recovery_metrics(oracle_fasta, workflow_fasta)
-        result["metrics"] = metrics
-        report["raptor_workflow"] = result
+        report["raptor_workflow"] = run_raptor_workflow_case(
+            out_dir, fixture, oracle_fasta, min_match_coverage, False
+        )
+
+    if run_raptor_workflow_gpu:
+        report["raptor_workflow_gpu"] = run_raptor_workflow_case(
+            out_dir, fixture, oracle_fasta, min_match_coverage, True
+        )
+
+    add_cpu_gpu_workflow_comparison(report)
 
     if run_trinity:
         trinity_bin = shutil.which("Trinity")
@@ -1218,6 +1263,7 @@ def check_report_thresholds(
     raptor = report.get("raptor")
     raptor_normalize = report.get("raptor_normalize")
     raptor_workflow = report.get("raptor_workflow")
+    raptor_workflow_gpu = report.get("raptor_workflow_gpu")
     if raptor_normalize:
         if raptor_normalize.get("exit_code") != 0:
             failures.append("raptor normalize failed")
@@ -1228,7 +1274,7 @@ def check_report_thresholds(
             failures.append("raptor normalize produced mismatched R1/R2 record counts")
 
     if not raptor:
-        if not raptor_workflow:
+        if not raptor_workflow and not raptor_workflow_gpu:
             return failures
     if raptor_workflow:
         if raptor_workflow.get("exit_code") != 0:
@@ -1385,6 +1431,24 @@ def check_report_thresholds(
                     f"selected component isoform oracle recovery below threshold: {selected_min_oracle} < {min_oracle_coverage}"
                 )
 
+    if raptor_workflow_gpu:
+        if raptor_workflow_gpu.get("exit_code") != 0:
+            failures.append("raptor trinity GPU-requested workflow failed")
+        gpu_workflow_metrics = raptor_workflow_gpu.get("metrics", {})
+        if not gpu_workflow_metrics.get("output_exists"):
+            failures.append("raptor trinity GPU-requested workflow did not produce assembly output")
+        selected_match = gpu_workflow_metrics.get("cpu_selected_isoform_match", {})
+        selected_match_precision = selected_match.get("precision", 0.0)
+        selected_match_f1 = selected_match.get("f1", 0.0)
+        if selected_match_precision < min_selected_precision:
+            failures.append(
+                f"GPU-requested selected isoform CPU-match precision below threshold: {selected_match_precision} < {min_selected_precision}"
+            )
+        if selected_match_f1 < min_selected_f1:
+            failures.append(
+                f"GPU-requested selected isoform CPU-match F1 below threshold: {selected_match_f1} < {min_selected_f1}"
+            )
+
     if not raptor:
         return failures
 
@@ -1415,19 +1479,23 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
     raptor = report.get("raptor") or {}
     raptor_normalize = report.get("raptor_normalize") or {}
     raptor_workflow = report.get("raptor_workflow") or {}
+    raptor_workflow_gpu = report.get("raptor_workflow_gpu") or {}
     trinity = report.get("trinity") or {}
     metrics = raptor.get("metrics", {})
     normalize_metrics = raptor_normalize.get("metrics", {})
     workflow_metrics = raptor_workflow.get("metrics", {})
+    gpu_workflow_metrics = raptor_workflow_gpu.get("metrics", {})
     trinity_result = trinity.get("result", {})
     trinity_metrics = trinity_result.get("metrics", {})
     raptor_resources = raptor.get("resource_usage", {})
     normalize_resources = raptor_normalize.get("resource_usage", {})
     workflow_resources = raptor_workflow.get("resource_usage", {})
+    gpu_workflow_resources = raptor_workflow_gpu.get("resource_usage", {})
     trinity_resources = trinity_result.get("resource_usage", {})
     raptor_gpu = raptor.get("gpu_usage", {})
     normalize_gpu = raptor_normalize.get("gpu_usage", {})
     workflow_gpu = raptor_workflow.get("gpu_usage", {})
+    gpu_workflow_gpu = raptor_workflow_gpu.get("gpu_usage", {})
     trinity_gpu = trinity_result.get("gpu_usage", {})
     return {
         "insert": report["fixture"]["insert"],
@@ -1480,6 +1548,31 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         ),
         "raptor_workflow_gpu_max_power_draw_watts": first_gpu_metric(
             workflow_gpu, "max_power_draw_watts"
+        ),
+        "raptor_gpu_workflow_exit_code": raptor_workflow_gpu.get("exit_code"),
+        "raptor_gpu_workflow_elapsed_seconds": raptor_workflow_gpu.get("elapsed_seconds"),
+        "raptor_gpu_workflow_max_rss_kb": gpu_workflow_resources.get("max_rss_kb"),
+        "raptor_gpu_workflow_gpu_available": gpu_workflow_gpu.get("available"),
+        "raptor_gpu_workflow_gpu_max_memory_used_mib": first_gpu_metric(
+            gpu_workflow_gpu, "max_memory_used_mib"
+        ),
+        "raptor_gpu_workflow_gpu_max_utilization_percent": first_gpu_metric(
+            gpu_workflow_gpu, "max_utilization_gpu_percent"
+        ),
+        "raptor_gpu_workflow_gpu_max_power_draw_watts": first_gpu_metric(
+            gpu_workflow_gpu, "max_power_draw_watts"
+        ),
+        "raptor_gpu_workflow_selected_cpu_match_precision": gpu_workflow_metrics.get(
+            "cpu_selected_isoform_match", {}
+        ).get("precision"),
+        "raptor_gpu_workflow_selected_cpu_match_recall": gpu_workflow_metrics.get(
+            "cpu_selected_isoform_match", {}
+        ).get("recall"),
+        "raptor_gpu_workflow_selected_cpu_match_f1": gpu_workflow_metrics.get(
+            "cpu_selected_isoform_match", {}
+        ).get("f1"),
+        "raptor_gpu_workflow_selected_isoform_lengths": gpu_workflow_metrics.get(
+            "component_selected_isoform_lengths"
         ),
         "raptor_workflow_output_fasta_bytes": workflow_metrics.get("output_fasta_bytes"),
         "raptor_workflow_output_dir_bytes": workflow_metrics.get(
@@ -1710,6 +1803,11 @@ def main() -> int:
         action="store_true",
         help="Run the raptor trinity end-to-end CLI and record its output metrics",
     )
+    parser.add_argument(
+        "--run-raptor-workflow-gpu",
+        action="store_true",
+        help="Run the raptor trinity end-to-end CLI with --gpu and compare to the CPU-requested workflow when both are present",
+    )
     parser.add_argument("--run-trinity", action="store_true")
     parser.add_argument("--oracle-fasta", type=Path, default=DEFAULT_ORACLE)
     parser.add_argument("--insert", type=int, default=160)
@@ -1777,6 +1875,7 @@ def main() -> int:
             args.normalize_raptor,
             args.assemble_normalized,
             args.run_raptor_workflow,
+            args.run_raptor_workflow_gpu,
             run_trinity,
             require_trinity,
             args.freeze_trinity_oracle,
