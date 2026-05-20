@@ -92,6 +92,24 @@ def read_fasta_lengths(path: Path) -> list[int]:
     return lengths
 
 
+def file_size_bytes(path: Path) -> int | None:
+    if not path.exists() or not path.is_file():
+        return None
+    return path.stat().st_size
+
+
+def directory_footprint(path: Path) -> dict[str, object]:
+    file_count = 0
+    total_bytes = 0
+    if not path.exists():
+        return {"exists": False, "file_count": 0, "total_bytes": 0}
+    for child in path.rglob("*"):
+        if child.is_file():
+            file_count += 1
+            total_bytes += child.stat().st_size
+    return {"exists": True, "file_count": file_count, "total_bytes": total_bytes}
+
+
 def component_evidence_metrics(path: Path) -> dict[str, object]:
     if not path.exists():
         return {"component_evidence_exists": False}
@@ -835,6 +853,9 @@ def run_one_fixture(
             "output_r1": str(normalized_r1),
             "output_r2": str(normalized_r2),
             "output_exists": normalized_r1.exists() and normalized_r2.exists(),
+            "output_r1_bytes": file_size_bytes(normalized_r1),
+            "output_r2_bytes": file_size_bytes(normalized_r2),
+            "output_dir_footprint": directory_footprint(normalized_prefix.parent),
         }
         if normalized_r1.exists() and normalized_r2.exists():
             r1_count = count_fastq_records(normalized_r1)
@@ -881,6 +902,8 @@ def run_one_fixture(
         result = run_command(command, ROOT)
         metrics = {
             "output_exists": output_fasta.exists(),
+            "output_fasta_bytes": file_size_bytes(output_fasta),
+            "output_dir_footprint": directory_footprint(output_fasta.parent),
             "assembled_from_normalized_reads": assemble_normalized and normalize_raptor,
             "input_r1": str(raptor_r1),
             "input_r2": str(raptor_r2),
@@ -926,6 +949,8 @@ def run_one_fixture(
         result = run_command(command, ROOT)
         metrics = {
             "output_exists": workflow_fasta.exists(),
+            "output_fasta_bytes": file_size_bytes(workflow_fasta),
+            "output_dir_footprint": directory_footprint(workflow_dir),
             "workflow_report": str(workflow_dir / "raptor_trinity_report.json"),
         }
         workflow_report = workflow_dir / "raptor_trinity_report.json"
@@ -1016,7 +1041,11 @@ def run_one_fixture(
             report["trinity"]["ran"] = True
             result = run_command(command, ROOT)
             output_fasta = trinity_out / "Trinity.fasta"
-            metrics = {"output_exists": output_fasta.exists()}
+            metrics = {
+                "output_exists": output_fasta.exists(),
+                "output_fasta_bytes": file_size_bytes(output_fasta),
+                "output_dir_footprint": directory_footprint(trinity_out),
+            }
             if output_fasta.exists():
                 lengths = read_fasta_lengths(output_fasta)
                 metrics.update(
@@ -1289,6 +1318,12 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         "raptor_normalize_max_rss_kb": normalize_resources.get("max_rss_kb"),
         "raptor_normalize_user_seconds": normalize_resources.get("user_seconds"),
         "raptor_normalize_system_seconds": normalize_resources.get("system_seconds"),
+        "raptor_normalize_output_bytes": (
+            (normalize_metrics.get("output_r1_bytes") or 0)
+            + (normalize_metrics.get("output_r2_bytes") or 0)
+        )
+        if raptor_normalize
+        else None,
         "normalized_kept_pairs": normalize_metrics.get("kept_pairs"),
         "normalized_kept_pair_fraction": normalize_metrics.get("kept_pair_fraction"),
         "assembled_from_normalized_reads": metrics.get("assembled_from_normalized_reads"),
@@ -1297,6 +1332,13 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         "raptor_workflow_max_rss_kb": workflow_resources.get("max_rss_kb"),
         "raptor_workflow_user_seconds": workflow_resources.get("user_seconds"),
         "raptor_workflow_system_seconds": workflow_resources.get("system_seconds"),
+        "raptor_workflow_output_fasta_bytes": workflow_metrics.get("output_fasta_bytes"),
+        "raptor_workflow_output_dir_bytes": workflow_metrics.get(
+            "output_dir_footprint", {}
+        ).get("total_bytes"),
+        "raptor_workflow_output_file_count": workflow_metrics.get(
+            "output_dir_footprint", {}
+        ).get("file_count"),
         "workflow_lengths": workflow_metrics.get("lengths"),
         "workflow_n50": workflow_metrics.get("n50"),
         "workflow_component_count": workflow_metrics.get("component_count"),
@@ -1470,6 +1512,13 @@ def summarize_report(report: dict[str, object]) -> dict[str, object]:
         "trinity_max_rss_kb": trinity_resources.get("max_rss_kb"),
         "trinity_user_seconds": trinity_resources.get("user_seconds"),
         "trinity_system_seconds": trinity_resources.get("system_seconds"),
+        "trinity_output_fasta_bytes": trinity_metrics.get("output_fasta_bytes"),
+        "trinity_output_dir_bytes": trinity_metrics.get("output_dir_footprint", {}).get(
+            "total_bytes"
+        ),
+        "trinity_output_file_count": trinity_metrics.get("output_dir_footprint", {}).get(
+            "file_count"
+        ),
         "trinity_lengths": trinity_metrics.get("lengths"),
         "trinity_n50": trinity_metrics.get("n50"),
         "trinity_truth_min_coverage": trinity_metrics.get("truth_recovery", {}).get(

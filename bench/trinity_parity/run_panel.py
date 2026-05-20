@@ -165,6 +165,18 @@ def load_json(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def directory_footprint(path: Path) -> dict[str, object]:
+    file_count = 0
+    total_bytes = 0
+    if not path.exists():
+        return {"exists": False, "file_count": 0, "total_bytes": 0}
+    for child in path.rglob("*"):
+        if child.is_file():
+            file_count += 1
+            total_bytes += child.stat().st_size
+    return {"exists": True, "file_count": file_count, "total_bytes": total_bytes}
+
+
 def fixture_report_path(out_dir: Path, inserts: list[int]) -> Path:
     if len(inserts) == 1:
         return out_dir / "report.json"
@@ -209,6 +221,13 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
         "raptor_workflow_max_rss_kb": workflow_resources.get("max_rss_kb"),
         "raptor_workflow_user_seconds": workflow_resources.get("user_seconds"),
         "raptor_workflow_system_seconds": workflow_resources.get("system_seconds"),
+        "raptor_workflow_output_fasta_bytes": workflow_metrics.get("output_fasta_bytes"),
+        "raptor_workflow_output_dir_bytes": workflow_metrics.get(
+            "output_dir_footprint", {}
+        ).get("total_bytes"),
+        "raptor_workflow_output_file_count": workflow_metrics.get(
+            "output_dir_footprint", {}
+        ).get("file_count"),
         "workflow_lengths": workflow_metrics.get("lengths"),
         "workflow_n50": workflow_metrics.get("n50"),
         "workflow_component_count": workflow_metrics.get("component_count"),
@@ -241,6 +260,13 @@ def summarize_single_fixture_report(payload: dict[str, object]) -> dict[str, obj
         "trinity_max_rss_kb": trinity_resources.get("max_rss_kb"),
         "trinity_user_seconds": trinity_resources.get("user_seconds"),
         "trinity_system_seconds": trinity_resources.get("system_seconds"),
+        "trinity_output_fasta_bytes": trinity_metrics.get("output_fasta_bytes"),
+        "trinity_output_dir_bytes": trinity_metrics.get("output_dir_footprint", {}).get(
+            "total_bytes"
+        ),
+        "trinity_output_file_count": trinity_metrics.get("output_dir_footprint", {}).get(
+            "file_count"
+        ),
         "trinity_lengths": trinity_metrics.get("lengths"),
         "trinity_truth_min_coverage": trinity_metrics.get("truth_recovery", {}).get(
             "min_best_coverage"
@@ -288,6 +314,7 @@ def run_fixture(
     result = run_command(command, ROOT)
     report_path = fixture_report_path(fixture_out, inserts)
     summary = fixture_summary(report_path) if report_path.exists() else None
+    output_footprint = directory_footprint(fixture_out)
     failures = [] if summary is None else list(summary.get("failures", []))
     if result["exit_code"] != 0 and not failures:
         failures.append("fixture runner failed before writing threshold failures")
@@ -299,6 +326,7 @@ def run_fixture(
         "exit_code": result["exit_code"],
         "elapsed_seconds": result["elapsed_seconds"],
         "resource_usage": result["resource_usage"],
+        "output_footprint": output_footprint,
         "report_path": str(report_path),
         "stdout": result["stdout"],
         "stderr": result["stderr"],
